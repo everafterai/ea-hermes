@@ -280,6 +280,16 @@ class OpenAIImageGenProvider(ImageGenProvider):
         aspect_ratio: str = DEFAULT_ASPECT_RATIO,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        refs = kwargs.get("reference_images") or None
+        if refs:
+            return self._image_to_image(prompt, aspect_ratio, refs)
+        return self._text_to_image(prompt, aspect_ratio)
+
+    def _text_to_image(
+        self,
+        prompt: str,
+        aspect_ratio: str,
+    ) -> Dict[str, Any]:
         prompt = (prompt or "").strip()
         aspect = resolve_aspect_ratio(aspect_ratio)
 
@@ -396,6 +406,176 @@ class OpenAIImageGenProvider(ImageGenProvider):
             )
 
         extra: Dict[str, Any] = {"size": size, "quality": meta["quality"]}
+        if revised_prompt:
+            extra["revised_prompt"] = revised_prompt
+
+        return success_response(
+            image=image_ref,
+            model=tier_id,
+            prompt=prompt,
+            aspect_ratio=aspect,
+            provider="openai",
+            extra=extra,
+        )
+
+    def _image_to_image(
+        self,
+        prompt: str,
+        aspect_ratio: str,
+        refs: List[str],
+    ) -> Dict[str, Any]:
+        """Edit/extend ``refs`` according to ``prompt`` via OpenAI's
+        ``images.edit`` endpoint (gpt-image-2 image-to-image)."""
+        prompt = (prompt or "").strip()
+        aspect = resolve_aspect_ratio(aspect_ratio)
+
+        if not prompt:
+            return error_response(
+                error="Prompt is required and must be a non-empty string",
+                error_type="invalid_argument",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        if not os.environ.get("OPENAI_API_KEY"):
+            return error_response(
+                error=(
+                    "OPENAI_API_KEY not set. Run `hermes tools` → Image "
+                    "Generation → OpenAI to configure, or `hermes setup` "
+                    "to add the key."
+                ),
+                error_type="auth_required",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        try:
+            import openai
+        except ImportError:
+            return error_response(
+                error="openai Python package not installed (pip install openai)",
+                error_type="missing_dependency",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        tier_id, meta = _resolve_model()
+        size = _SIZES.get(aspect, _SIZES["square"])
+
+        # ── Normalize references → open file handles ──────────────────
+        try:
+            handles = _normalize_references(refs)
+        except ValueError as exc:
+            msg = str(exc)
+            lowered = msg.lower()
+            # Map message keywords to structured error_type values so the
+            # agent can recover programmatically. Order matters — "fetch
+            # failed" wraps an underlying error string that may itself
+            # contain "not found", so check it first.
+            if "fetch failed" in lowered:
+                error_type = "reference_fetch_failed"
+            elif "too large" in lowered or "exceeds" in lowered:
+                error_type = "reference_too_large"
+            elif "not found" in lowered:
+                error_type = "reference_not_found"
+            else:
+                error_type = "reference_invalid"
+            return error_response(
+                error=msg,
+                error_type=error_type,
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        payload: Dict[str, Any] = {
+            "model": API_MODEL,
+            "prompt": prompt,
+            "size": size,
+            "n": 1,
+            "quality": meta["quality"],
+            "image": [h for h, _ in handles],
+        }
+
+        try:
+            client = openai.OpenAI()
+            response = client.images.edit(**payload)
+        except Exception as exc:
+            logger.debug("OpenAI image edit failed", exc_info=True)
+            return error_response(
+                error=f"OpenAI image edit failed: {exc}",
+                error_type="api_error",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+        finally:
+            for h, _ in handles:
+                try:
+                    h.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # ── Response post-processing ─────────────────────────────────
+        data = getattr(response, "data", None) or []
+        if not data:
+            return error_response(
+                error="OpenAI returned no image data",
+                error_type="empty_response",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        first = data[0]
+        b64 = getattr(first, "b64_json", None)
+        url = getattr(first, "url", None)
+        revised_prompt = getattr(first, "revised_prompt", None)
+
+        if b64:
+            try:
+                saved_path = save_b64_image(b64, prefix=f"openai_{tier_id}_edit")
+            except Exception as exc:
+                return error_response(
+                    error=f"Could not save image to cache: {exc}",
+                    error_type="io_error",
+                    provider="openai",
+                    model=tier_id,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            image_ref = str(saved_path)
+        elif url:
+            try:
+                saved_path = save_url_image(url, prefix=f"openai_{tier_id}_edit")
+            except Exception as exc:
+                logger.warning(
+                    "OpenAI edit image URL %s could not be cached (%s); "
+                    "falling back to bare URL.",
+                    url,
+                    exc,
+                )
+                image_ref = url
+            else:
+                image_ref = str(saved_path)
+        else:
+            return error_response(
+                error="OpenAI edit response contained neither b64_json nor URL",
+                error_type="empty_response",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        extra: Dict[str, Any] = {
+            "size": size,
+            "quality": meta["quality"],
+            "reference_count": len(refs),
+        }
         if revised_prompt:
             extra["revised_prompt"] = revised_prompt
 
