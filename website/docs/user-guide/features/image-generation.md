@@ -84,6 +84,44 @@ Create a square portrait of a wise old owl — use the typography model
 Make me a futuristic cityscape, landscape orientation
 ```
 
+## Reference Images (image-to-image)
+
+The `image_generate` tool accepts an optional `reference_images` parameter — up to **4** entries, each one of:
+
+- a local file path (`/tmp/cat.png`, `~/photos/headshot.jpg`)
+- an `http(s)://` URL
+- a `data:image/<png|jpg|webp|gif>;base64,<...>` URI
+
+When provided, Hermes routes the call through OpenAI's `images.edit` endpoint (gpt-image-2 image-to-image) instead of `images.generate`. Useful for editing an existing image with a natural-language prompt, restyling, or combining multiple references.
+
+```
+Take this headshot and put a tiny pirate hat on it: /tmp/headshot.png
+```
+
+**Provider support (v1):** OpenAI (`gpt-image-2`) only. The FAL backend logs a warning and ignores `reference_images` — it stays text-to-image for now.
+
+**Limits:** Each reference is capped at 25 MB. Bad inputs return a structured `error_type` the agent can react to:
+
+| `error_type` | When |
+|---|---|
+| `too_many_references` | More than 4 entries supplied. |
+| `reference_not_found` | Local path missing or not a regular file. |
+| `reference_too_large` | Entry exceeds the 25 MB cap. |
+| `reference_fetch_failed` | URL download failed (network, HTTP error, wrong content-type). |
+| `reference_invalid` | `data:` URI is malformed or not a recognized image type. |
+
+Example tool call payload:
+
+```json
+{
+  "name": "image_generate",
+  "arguments": {
+    "prompt": "make the cat wear a tiny pirate hat",
+    "reference_images": ["/tmp/cat.png"]
+  }
+}
+```
+
 ## Aspect Ratios
 
 Every model accepts the same three aspect ratios from the agent's perspective. Internally, each model's native size spec is filled in automatically:
