@@ -363,11 +363,13 @@ class TestAspectRatioNormalization:
 
 class TestRegistryIntegration:
 
-    def test_schema_exposes_only_prompt_and_aspect_ratio_to_agent(self, image_tool):
-        """The agent-facing schema must stay tight — model selection is a
-        user-level config choice, not an agent-level arg."""
+    def test_schema_exposes_expected_fields_to_agent(self, image_tool):
+        """The agent-facing schema must stay tight — model selection stays a
+        user-level config choice. ``reference_images`` is the only optional
+        agent-level input besides ``prompt``/``aspect_ratio`` (image-to-image
+        edits via gpt-image-2)."""
         props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
-        assert set(props.keys()) == {"prompt", "aspect_ratio"}
+        assert set(props.keys()) == {"prompt", "aspect_ratio", "reference_images"}
 
     def test_aspect_ratio_enum_is_three_values(self, image_tool):
         enum = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]["aspect_ratio"]["enum"]
@@ -496,3 +498,77 @@ class TestManagedGatewayErrorTranslation:
 
         with pytest.raises(ConnectionError):
             image_tool._submit_fal_request("fal-ai/flux-2-pro", {"prompt": "x"})
+
+
+# ---------------------------------------------------------------------------
+# reference_images — schema + tool-boundary validation
+# ---------------------------------------------------------------------------
+
+
+class TestReferenceImagesSchema:
+    """The ``reference_images`` field opts agents into image-to-image editing
+    via the OpenAI provider (gpt-image-2 → ``client.images.edit``). It is
+    optional, array-of-strings, and documented inline so the agent knows the
+    accepted formats."""
+
+    def test_reference_images_field_present(self, image_tool):
+        props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
+        assert "reference_images" in props
+
+    def test_reference_images_is_optional_array_of_strings(self, image_tool):
+        props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
+        field = props["reference_images"]
+        assert field["type"] == "array"
+        assert field["items"] == {"type": "string"}
+        required = image_tool.IMAGE_GENERATE_SCHEMA["parameters"].get("required", [])
+        assert "reference_images" not in required
+
+    def test_reference_images_description_mentions_formats(self, image_tool):
+        desc = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"][
+            "reference_images"
+        ]["description"]
+        lowered = desc.lower()
+        for keyword in ("file path", "http", "data:"):
+            assert keyword in lowered, f"missing {keyword!r} in description"
+
+
+class TestReferenceImagesValidation:
+    """Tool-boundary validation: the cap check and scalar→list coercion
+    happen in ``image_generate_tool`` *before* the FAL key check fires, so
+    no API credentials are needed for these assertions."""
+
+    def _parse(self, raw):
+        import json
+        return json.loads(raw)
+
+    def test_more_than_4_refs_rejected(self, image_tool):
+        result = self._parse(
+            image_tool.image_generate_tool(
+                prompt="anything",
+                reference_images=["a", "b", "c", "d", "e"],
+            )
+        )
+        assert result["success"] is False
+        assert result["error_type"] == "too_many_references"
+
+    def test_scalar_string_coerced_to_list(self, image_tool):
+        """A single string must be treated as a 1-element list — never
+        rejected on the count check."""
+        result = self._parse(
+            image_tool.image_generate_tool(
+                prompt="anything",
+                reference_images="single.png",
+            )
+        )
+        # Downstream errors (no FAL key, etc.) are fine — but it must NOT
+        # be a count rejection.
+        assert result.get("error_type") != "too_many_references"
+
+    def test_empty_list_treated_as_absent(self, image_tool):
+        result = self._parse(
+            image_tool.image_generate_tool(
+                prompt="anything",
+                reference_images=[],
+            )
+        )
+        assert result.get("error_type") != "too_many_references"

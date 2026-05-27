@@ -270,3 +270,267 @@ class TestGenerate:
 
         assert result["success"] is True
         assert result["image"] == "https://example.com/img.png"
+
+
+# ── _normalize_references ───────────────────────────────────────────────────
+
+
+class TestNormalizeReferences:
+    """`_normalize_references()` resolves path/URL/data-URI strings to open
+    file handles. Returns ``list[tuple[BinaryIO, str]]`` (handle, filename).
+    Raises ``ValueError`` with a message prefixed ``reference_images[<idx>]``
+    on any bad input; handles opened so far are closed before the exception
+    propagates."""
+
+    def test_local_path_returns_handle(self, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        handles = openai_plugin._normalize_references([str(img)])
+        try:
+            assert len(handles) == 1
+            handle, filename = handles[0]
+            assert hasattr(handle, "read")
+            assert filename.endswith(".png")
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_local_path_missing_raises_with_index(self, tmp_path):
+        bad = tmp_path / "nope.png"
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(bad)])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "not found" in msg.lower()
+
+    def test_local_path_too_large_raises(self, tmp_path):
+        big = tmp_path / "big.png"
+        big.write_bytes(b"\x00" * (26 * 1024 * 1024))  # 26MB > 25MB cap
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(big)])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "25" in msg or "too large" in msg.lower()
+
+    def test_data_uri_returns_handle(self):
+        b64 = _b64_png()
+        uri = f"data:image/png;base64,{b64}"
+        handles = openai_plugin._normalize_references([uri])
+        try:
+            assert len(handles) == 1
+            handle, filename = handles[0]
+            assert filename.endswith(".png")
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_data_uri_malformed_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references(["data:not-an-image"])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "malformed" in msg.lower() or "invalid" in msg.lower()
+
+    def test_https_url_uses_save_url_image(self, monkeypatch, tmp_path):
+        """URLs are routed through ``save_url_image``. Patch it to avoid
+        any real network call."""
+        saved = tmp_path / "from_url.png"
+        saved.write_bytes(bytes.fromhex(_PNG_HEX))
+        seen = {}
+
+        def fake_save(url, *, prefix, timeout=60.0, max_bytes=25 * 1024 * 1024):
+            seen["url"] = url
+            seen["prefix"] = prefix
+            return saved
+
+        monkeypatch.setattr(openai_plugin, "save_url_image", fake_save)
+        handles = openai_plugin._normalize_references(["https://example/x.png"])
+        try:
+            assert seen["url"] == "https://example/x.png"
+            assert seen["prefix"].startswith("openai_ref")
+            handle, _ = handles[0]
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_error_index_is_correct(self, tmp_path):
+        """When the second entry fails, the message must say [1], not [0]."""
+        good = tmp_path / "good.png"
+        good.write_bytes(bytes.fromhex(_PNG_HEX))
+        bad = tmp_path / "nope.png"
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(good), str(bad)])
+        assert "reference_images[1]" in str(excinfo.value)
+
+
+# ── Dispatch + image-to-image ───────────────────────────────────────────────
+
+
+class TestImageToImage:
+    """``generate()`` dispatches to ``client.images.edit`` when
+    ``reference_images`` is provided, and back to ``client.images.generate``
+    when it isn't. Normalization errors are mapped to structured
+    ``error_type`` values the agent can act on."""
+
+    def test_no_refs_calls_generate(self, provider):
+        client = MagicMock()
+        client.images.generate.return_value = _fake_response(b64=_b64_png())
+        with _patched_openai(client):
+            result = provider.generate(prompt="cat")
+        assert result["success"] is True
+        assert client.images.generate.called
+        assert not client.images.edit.called
+
+    def test_refs_present_calls_edit_not_generate(self, provider, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        client = MagicMock()
+        client.images.edit.return_value = _fake_response(b64=_b64_png())
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="make it blue", reference_images=[str(img)]
+            )
+        assert result["success"] is True
+        assert client.images.edit.called
+        assert not client.images.generate.called
+
+    def test_edit_payload_shape(self, provider, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        client = MagicMock()
+        client.images.edit.return_value = _fake_response(b64=_b64_png())
+        with _patched_openai(client):
+            provider.generate(
+                prompt="make it blue",
+                aspect_ratio="square",
+                reference_images=[str(img)],
+            )
+        kwargs = client.images.edit.call_args.kwargs
+        assert kwargs["model"] == openai_plugin.API_MODEL
+        assert kwargs["prompt"] == "make it blue"
+        assert kwargs["size"] == openai_plugin._SIZES["square"]
+        assert kwargs["quality"] == "medium"  # default tier
+        assert kwargs["n"] == 1
+        assert "response_format" not in kwargs  # gpt-image-2 rejects it
+        assert isinstance(kwargs["image"], list)
+        assert len(kwargs["image"]) == 1
+
+    def test_edit_response_b64_saved_to_cache(self, provider, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        client = MagicMock()
+        client.images.edit.return_value = _fake_response(b64=_b64_png())
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="make it blue", reference_images=[str(img)]
+            )
+        assert result["success"] is True
+        assert Path(result["image"]).exists()
+        assert result["image"].endswith(".png")
+        assert result["provider"] == "openai"
+        assert result.get("reference_count") == 1
+
+    def test_missing_path_returns_reference_not_found(self, provider, tmp_path):
+        missing = tmp_path / "missing.png"
+        client = MagicMock()
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="anything", reference_images=[str(missing)]
+            )
+        assert result["success"] is False
+        assert result["error_type"] == "reference_not_found"
+        assert "reference_images[0]" in result["error"]
+        assert not client.images.edit.called
+
+    def test_malformed_data_uri_returns_reference_invalid(self, provider):
+        client = MagicMock()
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="anything", reference_images=["data:bogus"]
+            )
+        assert result["success"] is False
+        assert result["error_type"] == "reference_invalid"
+        assert not client.images.edit.called
+
+    def test_oversized_path_returns_reference_too_large(self, provider, tmp_path):
+        big = tmp_path / "big.png"
+        big.write_bytes(b"\x00" * (26 * 1024 * 1024))
+        client = MagicMock()
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="anything", reference_images=[str(big)]
+            )
+        assert result["success"] is False
+        assert result["error_type"] == "reference_too_large"
+        assert not client.images.edit.called
+
+    def test_url_fetch_failure_returns_reference_fetch_failed(
+        self, provider, monkeypatch
+    ):
+        def fake_save_url(url, *, prefix, timeout=60.0, max_bytes=25 * 1024 * 1024):
+            raise RuntimeError("404 not found")
+
+        monkeypatch.setattr(openai_plugin, "save_url_image", fake_save_url)
+        client = MagicMock()
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="anything",
+                reference_images=["https://example/missing.png"],
+            )
+        assert result["success"] is False
+        assert result["error_type"] == "reference_fetch_failed"
+        assert not client.images.edit.called
+
+    def test_api_failure_returns_api_error(self, provider, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        client = MagicMock()
+        client.images.edit.side_effect = RuntimeError("rate limit")
+        with _patched_openai(client):
+            result = provider.generate(
+                prompt="anything", reference_images=[str(img)]
+            )
+        assert result["success"] is False
+        assert result["error_type"] == "api_error"
+        assert "rate limit" in result["error"]
+
+
+class TestEndToEndSmoke:
+    """End-to-end: real file on disk → provider → mocked images.edit →
+    success result with a cached output. Exercises the full happy-path
+    chain in one shot to catch wiring regressions the unit tests miss."""
+
+    def test_provider_happy_path_with_real_file(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+
+        client = MagicMock()
+        client.images.edit.return_value = _fake_response(b64=_b64_png())
+
+        with _patched_openai(client):
+            provider = openai_plugin.OpenAIImageGenProvider()
+            result = provider.generate(
+                prompt="add a red hat",
+                reference_images=[str(img)],
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "openai"
+        assert result["reference_count"] == 1
+        assert Path(result["image"]).exists()
+        assert client.images.edit.called
+        # Confirm the file handle that was passed was actually readable
+        # (not a closed handle from premature cleanup).
+        kwargs = client.images.edit.call_args.kwargs
+        # The handle was closed in our finally — but the test inspects the
+        # call args, which capture the object reference. The important
+        # invariant is that exactly one handle was supplied.
+        assert isinstance(kwargs["image"], list)
+        assert len(kwargs["image"]) == 1

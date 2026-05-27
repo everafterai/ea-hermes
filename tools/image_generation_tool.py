@@ -555,6 +555,7 @@ def image_generate_tool(
     num_images: Optional[int] = None,
     output_format: Optional[str] = None,
     seed: Optional[int] = None,
+    reference_images: Optional[Any] = None,
 ) -> str:
     """Generate an image from a text prompt using the configured FAL model.
 
@@ -566,6 +567,25 @@ def image_generate_tool(
     Returns a JSON string with ``{"success": bool, "image": url | None,
     "error": str, "error_type": str}``.
     """
+    # ── reference_images: normalize + cap check (pre-FAL-key) ─────────────
+    # Coerce a scalar string into a 1-element list (agents sometimes pass a
+    # bare string). Treat an empty list as not provided. Cap at 4 entries so
+    # we reject obviously-broken calls before any provider lookup. This
+    # check runs *before* the FAL key check so it surfaces even when the
+    # FAL backend isn't configured.
+    if reference_images is not None:
+        if isinstance(reference_images, str):
+            reference_images = [reference_images]
+        if not reference_images:
+            reference_images = None
+        elif len(reference_images) > 4:
+            return json.dumps({
+                "success": False,
+                "image": None,
+                "error": "reference_images: at most 4 entries allowed",
+                "error_type": "too_many_references",
+            })
+
     model_id, meta = _resolve_fal_model()
 
     debug_call_data = {
@@ -590,6 +610,13 @@ def image_generate_tool(
     try:
         if not prompt or not isinstance(prompt, str) or len(prompt.strip()) == 0:
             raise ValueError("Prompt is required and must be a non-empty string")
+
+        if reference_images:
+            logger.info(
+                "reference_images supplied but the in-tree FAL backend does "
+                "not support image-to-image in v1; ignoring %d reference(s).",
+                len(reference_images),
+            )
 
         if not (fal_key_is_configured() or _resolve_managed_fal_gateway()):
             raise ValueError(_build_no_backend_setup_message())
@@ -827,7 +854,9 @@ IMAGE_GENERATE_SCHEMA = {
         "backend (FAL, OpenAI, etc.) and model are user-configured and not "
         "selectable by the agent. Returns either a URL or an absolute file "
         "path in the `image` field; display it with markdown "
-        "![description](url-or-path) and the gateway will deliver it."
+        "![description](url-or-path) and the gateway will deliver it. "
+        "Pass `reference_images` to edit or remix existing images instead "
+        "of generating from scratch (OpenAI gpt-image-2 only in v1)."
     ),
     "parameters": {
         "type": "object",
@@ -841,6 +870,18 @@ IMAGE_GENERATE_SCHEMA = {
                 "enum": list(VALID_ASPECT_RATIOS),
                 "description": "The aspect ratio of the generated image. 'landscape' is 16:9 wide, 'portrait' is 16:9 tall, 'square' is 1:1.",
                 "default": DEFAULT_ASPECT_RATIO,
+            },
+            "reference_images": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional. Up to 4 reference images to edit/extend. Each "
+                    "item is a local file path, an http(s):// URL, or a "
+                    "data:image/...;base64,... URI. When provided, the tool "
+                    "performs image-to-image editing instead of text-to-image "
+                    "generation. Only supported by the OpenAI provider "
+                    "(gpt-image-2) at the moment."
+                ),
             },
         },
         "required": ["prompt"],
@@ -887,7 +928,11 @@ def _read_configured_image_provider():
     return None
 
 
-def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
+def _dispatch_to_plugin_provider(
+    prompt: str,
+    aspect_ratio: str,
+    reference_images: Optional[Any] = None,
+):
     """Route the call to a plugin-registered provider when one is selected.
 
     Returns a JSON string on dispatch, or ``None`` to fall through to the
@@ -898,6 +943,10 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     ``plugins/image_gen/fal/`` plugin (the plugin re-enters this module's
     pipeline via ``_it`` indirection so behavior is identical to the
     direct call, just routed through the registry).
+
+    ``reference_images`` is forwarded as a kwarg to ``provider.generate()``
+    when present. Providers that don't recognize it should ignore unknown
+    kwargs (see :class:`agent.image_gen_provider.ImageGenProvider`).
     """
     configured = _read_configured_image_provider()
     if not configured:
@@ -944,6 +993,8 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
         kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
         if configured_model:
             kwargs["model"] = configured_model
+        if reference_images:
+            kwargs["reference_images"] = reference_images
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(
@@ -972,15 +1023,32 @@ def _handle_image_generate(args, **kw):
         return tool_error("prompt is required for image generation")
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
 
+    reference_images = args.get("reference_images")
+    if reference_images is not None:
+        if isinstance(reference_images, str):
+            reference_images = [reference_images]
+        if not reference_images:
+            reference_images = None
+        elif len(reference_images) > 4:
+            return json.dumps({
+                "success": False,
+                "image": None,
+                "error": "reference_images: at most 4 entries allowed",
+                "error_type": "too_many_references",
+            })
+
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
-    dispatched = _dispatch_to_plugin_provider(prompt, aspect_ratio)
+    dispatched = _dispatch_to_plugin_provider(
+        prompt, aspect_ratio, reference_images=reference_images,
+    )
     if dispatched is not None:
         return dispatched
 
     return image_generate_tool(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
+        reference_images=reference_images,
     )
 
 

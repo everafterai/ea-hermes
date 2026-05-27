@@ -23,9 +23,13 @@ Selection precedence (first hit wins):
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from pathlib import Path
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 
 from agent.image_gen_provider import (
     DEFAULT_ASPECT_RATIO,
@@ -118,6 +122,105 @@ def _resolve_model() -> Tuple[str, Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# reference_images normalization (image-to-image input handling)
+# ---------------------------------------------------------------------------
+
+_MAX_REF_BYTES = 25 * 1024 * 1024  # matches save_url_image's cap
+
+_DATA_URI_RE = re.compile(
+    r"^data:image/(?P<ext>png|jpe?g|webp|gif);base64,(?P<payload>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_references(refs: List[str]) -> List[Tuple[BinaryIO, str]]:
+    """Resolve path/URL/data-URI strings to open binary file handles.
+
+    Returns ``list[(handle, filename)]`` — caller is responsible for closing
+    the handles. Raises :class:`ValueError` prefixed with
+    ``reference_images[<index>]: ...`` on any bad entry. Handles opened
+    before the failing entry are closed before the exception propagates.
+
+    Accepted input shapes per entry:
+      * ``data:image/<ext>;base64,<payload>`` — decoded and written to
+        ``$HERMES_HOME/cache/images/openai_ref_<ts>_<uuid>.<ext>``.
+      * ``http://`` / ``https://`` URL — fetched via
+        :func:`save_url_image` (same 25MB cap).
+      * Anything else — treated as a local filesystem path; must exist,
+        be a regular file, and be ≤ 25 MB.
+    """
+    opened: List[Tuple[BinaryIO, str]] = []
+
+    def _cleanup_and_raise(idx: int, msg: str) -> None:
+        for h, _ in opened:
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+        raise ValueError(f"reference_images[{idx}]: {msg}")
+
+    for idx, raw in enumerate(refs):
+        if not isinstance(raw, str) or not raw.strip():
+            _cleanup_and_raise(idx, "must be a non-empty string")
+
+        value = raw.strip()
+
+        # ── data: URI ────────────────────────────────────────────────
+        if value.startswith("data:"):
+            match = _DATA_URI_RE.match(value)
+            if not match:
+                _cleanup_and_raise(idx, "malformed data URI")
+            ext = match.group("ext").lower()
+            if ext == "jpeg":
+                ext = "jpg"
+            try:
+                payload_bytes = base64.b64decode(
+                    match.group("payload"), validate=True
+                )
+            except (binascii.Error, ValueError):
+                _cleanup_and_raise(idx, "malformed data URI (invalid base64)")
+            if len(payload_bytes) > _MAX_REF_BYTES:
+                _cleanup_and_raise(
+                    idx,
+                    f"data URI exceeds {_MAX_REF_BYTES // (1024 * 1024)}MB limit",
+                )
+            saved = save_b64_image(
+                match.group("payload"),
+                prefix="openai_ref",
+                extension=ext,
+            )
+            opened.append((open(saved, "rb"), saved.name))
+            continue
+
+        # ── http(s) URL ──────────────────────────────────────────────
+        if value.startswith(("http://", "https://")):
+            try:
+                saved = save_url_image(value, prefix="openai_ref")
+            except Exception as exc:  # noqa: BLE001
+                _cleanup_and_raise(idx, f"fetch failed: {exc}")
+            opened.append((open(saved, "rb"), saved.name))
+            continue
+
+        # ── local path ──────────────────────────────────────────────
+        path = Path(value).expanduser()
+        try:
+            path = path.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            _cleanup_and_raise(idx, f"could not resolve path ({exc})")
+        if not path.exists() or not path.is_file():
+            _cleanup_and_raise(idx, f"{path} not found")
+        size = path.stat().st_size
+        if size > _MAX_REF_BYTES:
+            _cleanup_and_raise(
+                idx,
+                f"{path} exceeds {_MAX_REF_BYTES // (1024 * 1024)}MB limit",
+            )
+        opened.append((open(path, "rb"), path.name))
+
+    return opened
+
+
+# ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
 
@@ -176,6 +279,16 @@ class OpenAIImageGenProvider(ImageGenProvider):
         prompt: str,
         aspect_ratio: str = DEFAULT_ASPECT_RATIO,
         **kwargs: Any,
+    ) -> Dict[str, Any]:
+        refs = kwargs.get("reference_images") or None
+        if refs:
+            return self._image_to_image(prompt, aspect_ratio, refs)
+        return self._text_to_image(prompt, aspect_ratio)
+
+    def _text_to_image(
+        self,
+        prompt: str,
+        aspect_ratio: str,
     ) -> Dict[str, Any]:
         prompt = (prompt or "").strip()
         aspect = resolve_aspect_ratio(aspect_ratio)
@@ -293,6 +406,176 @@ class OpenAIImageGenProvider(ImageGenProvider):
             )
 
         extra: Dict[str, Any] = {"size": size, "quality": meta["quality"]}
+        if revised_prompt:
+            extra["revised_prompt"] = revised_prompt
+
+        return success_response(
+            image=image_ref,
+            model=tier_id,
+            prompt=prompt,
+            aspect_ratio=aspect,
+            provider="openai",
+            extra=extra,
+        )
+
+    def _image_to_image(
+        self,
+        prompt: str,
+        aspect_ratio: str,
+        refs: List[str],
+    ) -> Dict[str, Any]:
+        """Edit/extend ``refs`` according to ``prompt`` via OpenAI's
+        ``images.edit`` endpoint (gpt-image-2 image-to-image)."""
+        prompt = (prompt or "").strip()
+        aspect = resolve_aspect_ratio(aspect_ratio)
+
+        if not prompt:
+            return error_response(
+                error="Prompt is required and must be a non-empty string",
+                error_type="invalid_argument",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        if not os.environ.get("OPENAI_API_KEY"):
+            return error_response(
+                error=(
+                    "OPENAI_API_KEY not set. Run `hermes tools` → Image "
+                    "Generation → OpenAI to configure, or `hermes setup` "
+                    "to add the key."
+                ),
+                error_type="auth_required",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        try:
+            import openai
+        except ImportError:
+            return error_response(
+                error="openai Python package not installed (pip install openai)",
+                error_type="missing_dependency",
+                provider="openai",
+                aspect_ratio=aspect,
+            )
+
+        tier_id, meta = _resolve_model()
+        size = _SIZES.get(aspect, _SIZES["square"])
+
+        # ── Normalize references → open file handles ──────────────────
+        try:
+            handles = _normalize_references(refs)
+        except ValueError as exc:
+            msg = str(exc)
+            lowered = msg.lower()
+            # Map message keywords to structured error_type values so the
+            # agent can recover programmatically. Order matters — "fetch
+            # failed" wraps an underlying error string that may itself
+            # contain "not found", so check it first.
+            if "fetch failed" in lowered:
+                error_type = "reference_fetch_failed"
+            elif "too large" in lowered or "exceeds" in lowered:
+                error_type = "reference_too_large"
+            elif "not found" in lowered:
+                error_type = "reference_not_found"
+            else:
+                error_type = "reference_invalid"
+            return error_response(
+                error=msg,
+                error_type=error_type,
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        payload: Dict[str, Any] = {
+            "model": API_MODEL,
+            "prompt": prompt,
+            "size": size,
+            "n": 1,
+            "quality": meta["quality"],
+            "image": [h for h, _ in handles],
+        }
+
+        try:
+            client = openai.OpenAI()
+            response = client.images.edit(**payload)
+        except Exception as exc:
+            logger.debug("OpenAI image edit failed", exc_info=True)
+            return error_response(
+                error=f"OpenAI image edit failed: {exc}",
+                error_type="api_error",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+        finally:
+            for h, _ in handles:
+                try:
+                    h.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # ── Response post-processing ─────────────────────────────────
+        data = getattr(response, "data", None) or []
+        if not data:
+            return error_response(
+                error="OpenAI returned no image data",
+                error_type="empty_response",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        first = data[0]
+        b64 = getattr(first, "b64_json", None)
+        url = getattr(first, "url", None)
+        revised_prompt = getattr(first, "revised_prompt", None)
+
+        if b64:
+            try:
+                saved_path = save_b64_image(b64, prefix=f"openai_{tier_id}_edit")
+            except Exception as exc:
+                return error_response(
+                    error=f"Could not save image to cache: {exc}",
+                    error_type="io_error",
+                    provider="openai",
+                    model=tier_id,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            image_ref = str(saved_path)
+        elif url:
+            try:
+                saved_path = save_url_image(url, prefix=f"openai_{tier_id}_edit")
+            except Exception as exc:
+                logger.warning(
+                    "OpenAI edit image URL %s could not be cached (%s); "
+                    "falling back to bare URL.",
+                    url,
+                    exc,
+                )
+                image_ref = url
+            else:
+                image_ref = str(saved_path)
+        else:
+            return error_response(
+                error="OpenAI edit response contained neither b64_json nor URL",
+                error_type="empty_response",
+                provider="openai",
+                model=tier_id,
+                prompt=prompt,
+                aspect_ratio=aspect,
+            )
+
+        extra: Dict[str, Any] = {
+            "size": size,
+            "quality": meta["quality"],
+            "reference_count": len(refs),
+        }
         if revised_prompt:
             extra["revised_prompt"] = revised_prompt
 
