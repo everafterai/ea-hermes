@@ -496,3 +496,41 @@ class TestImageToImage:
         assert result["success"] is False
         assert result["error_type"] == "api_error"
         assert "rate limit" in result["error"]
+
+
+class TestEndToEndSmoke:
+    """End-to-end: real file on disk → provider → mocked images.edit →
+    success result with a cached output. Exercises the full happy-path
+    chain in one shot to catch wiring regressions the unit tests miss."""
+
+    def test_provider_happy_path_with_real_file(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+
+        client = MagicMock()
+        client.images.edit.return_value = _fake_response(b64=_b64_png())
+
+        with _patched_openai(client):
+            provider = openai_plugin.OpenAIImageGenProvider()
+            result = provider.generate(
+                prompt="add a red hat",
+                reference_images=[str(img)],
+            )
+
+        assert result["success"] is True
+        assert result["provider"] == "openai"
+        assert result["reference_count"] == 1
+        assert Path(result["image"]).exists()
+        assert client.images.edit.called
+        # Confirm the file handle that was passed was actually readable
+        # (not a closed handle from premature cleanup).
+        kwargs = client.images.edit.call_args.kwargs
+        # The handle was closed in our finally — but the test inspects the
+        # call args, which capture the object reference. The important
+        # invariant is that exactly one handle was supplied.
+        assert isinstance(kwargs["image"], list)
+        assert len(kwargs["image"]) == 1
