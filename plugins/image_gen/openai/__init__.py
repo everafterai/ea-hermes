@@ -23,9 +23,13 @@ Selection precedence (first hit wins):
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from pathlib import Path
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 
 from agent.image_gen_provider import (
     DEFAULT_ASPECT_RATIO,
@@ -115,6 +119,105 @@ def _resolve_model() -> Tuple[str, Dict[str, Any]]:
         return candidate, _MODELS[candidate]
 
     return DEFAULT_MODEL, _MODELS[DEFAULT_MODEL]
+
+
+# ---------------------------------------------------------------------------
+# reference_images normalization (image-to-image input handling)
+# ---------------------------------------------------------------------------
+
+_MAX_REF_BYTES = 25 * 1024 * 1024  # matches save_url_image's cap
+
+_DATA_URI_RE = re.compile(
+    r"^data:image/(?P<ext>png|jpe?g|webp|gif);base64,(?P<payload>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_references(refs: List[str]) -> List[Tuple[BinaryIO, str]]:
+    """Resolve path/URL/data-URI strings to open binary file handles.
+
+    Returns ``list[(handle, filename)]`` — caller is responsible for closing
+    the handles. Raises :class:`ValueError` prefixed with
+    ``reference_images[<index>]: ...`` on any bad entry. Handles opened
+    before the failing entry are closed before the exception propagates.
+
+    Accepted input shapes per entry:
+      * ``data:image/<ext>;base64,<payload>`` — decoded and written to
+        ``$HERMES_HOME/cache/images/openai_ref_<ts>_<uuid>.<ext>``.
+      * ``http://`` / ``https://`` URL — fetched via
+        :func:`save_url_image` (same 25MB cap).
+      * Anything else — treated as a local filesystem path; must exist,
+        be a regular file, and be ≤ 25 MB.
+    """
+    opened: List[Tuple[BinaryIO, str]] = []
+
+    def _cleanup_and_raise(idx: int, msg: str) -> None:
+        for h, _ in opened:
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
+        raise ValueError(f"reference_images[{idx}]: {msg}")
+
+    for idx, raw in enumerate(refs):
+        if not isinstance(raw, str) or not raw.strip():
+            _cleanup_and_raise(idx, "must be a non-empty string")
+
+        value = raw.strip()
+
+        # ── data: URI ────────────────────────────────────────────────
+        if value.startswith("data:"):
+            match = _DATA_URI_RE.match(value)
+            if not match:
+                _cleanup_and_raise(idx, "malformed data URI")
+            ext = match.group("ext").lower()
+            if ext == "jpeg":
+                ext = "jpg"
+            try:
+                payload_bytes = base64.b64decode(
+                    match.group("payload"), validate=True
+                )
+            except (binascii.Error, ValueError):
+                _cleanup_and_raise(idx, "malformed data URI (invalid base64)")
+            if len(payload_bytes) > _MAX_REF_BYTES:
+                _cleanup_and_raise(
+                    idx,
+                    f"data URI exceeds {_MAX_REF_BYTES // (1024 * 1024)}MB limit",
+                )
+            saved = save_b64_image(
+                match.group("payload"),
+                prefix="openai_ref",
+                extension=ext,
+            )
+            opened.append((open(saved, "rb"), saved.name))
+            continue
+
+        # ── http(s) URL ──────────────────────────────────────────────
+        if value.startswith(("http://", "https://")):
+            try:
+                saved = save_url_image(value, prefix="openai_ref")
+            except Exception as exc:  # noqa: BLE001
+                _cleanup_and_raise(idx, f"fetch failed: {exc}")
+            opened.append((open(saved, "rb"), saved.name))
+            continue
+
+        # ── local path ──────────────────────────────────────────────
+        path = Path(value).expanduser()
+        try:
+            path = path.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            _cleanup_and_raise(idx, f"could not resolve path ({exc})")
+        if not path.exists() or not path.is_file():
+            _cleanup_and_raise(idx, f"{path} not found")
+        size = path.stat().st_size
+        if size > _MAX_REF_BYTES:
+            _cleanup_and_raise(
+                idx,
+                f"{path} exceeds {_MAX_REF_BYTES // (1024 * 1024)}MB limit",
+            )
+        opened.append((open(path, "rb"), path.name))
+
+    return opened
 
 
 # ---------------------------------------------------------------------------

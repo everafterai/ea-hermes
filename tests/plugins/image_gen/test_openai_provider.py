@@ -270,3 +270,97 @@ class TestGenerate:
 
         assert result["success"] is True
         assert result["image"] == "https://example.com/img.png"
+
+
+# ── _normalize_references ───────────────────────────────────────────────────
+
+
+class TestNormalizeReferences:
+    """`_normalize_references()` resolves path/URL/data-URI strings to open
+    file handles. Returns ``list[tuple[BinaryIO, str]]`` (handle, filename).
+    Raises ``ValueError`` with a message prefixed ``reference_images[<idx>]``
+    on any bad input; handles opened so far are closed before the exception
+    propagates."""
+
+    def test_local_path_returns_handle(self, tmp_path):
+        img = tmp_path / "ref.png"
+        img.write_bytes(bytes.fromhex(_PNG_HEX))
+        handles = openai_plugin._normalize_references([str(img)])
+        try:
+            assert len(handles) == 1
+            handle, filename = handles[0]
+            assert hasattr(handle, "read")
+            assert filename.endswith(".png")
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_local_path_missing_raises_with_index(self, tmp_path):
+        bad = tmp_path / "nope.png"
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(bad)])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "not found" in msg.lower()
+
+    def test_local_path_too_large_raises(self, tmp_path):
+        big = tmp_path / "big.png"
+        big.write_bytes(b"\x00" * (26 * 1024 * 1024))  # 26MB > 25MB cap
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(big)])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "25" in msg or "too large" in msg.lower()
+
+    def test_data_uri_returns_handle(self):
+        b64 = _b64_png()
+        uri = f"data:image/png;base64,{b64}"
+        handles = openai_plugin._normalize_references([uri])
+        try:
+            assert len(handles) == 1
+            handle, filename = handles[0]
+            assert filename.endswith(".png")
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_data_uri_malformed_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references(["data:not-an-image"])
+        msg = str(excinfo.value)
+        assert "reference_images[0]" in msg
+        assert "malformed" in msg.lower() or "invalid" in msg.lower()
+
+    def test_https_url_uses_save_url_image(self, monkeypatch, tmp_path):
+        """URLs are routed through ``save_url_image``. Patch it to avoid
+        any real network call."""
+        saved = tmp_path / "from_url.png"
+        saved.write_bytes(bytes.fromhex(_PNG_HEX))
+        seen = {}
+
+        def fake_save(url, *, prefix, timeout=60.0, max_bytes=25 * 1024 * 1024):
+            seen["url"] = url
+            seen["prefix"] = prefix
+            return saved
+
+        monkeypatch.setattr(openai_plugin, "save_url_image", fake_save)
+        handles = openai_plugin._normalize_references(["https://example/x.png"])
+        try:
+            assert seen["url"] == "https://example/x.png"
+            assert seen["prefix"].startswith("openai_ref")
+            handle, _ = handles[0]
+            assert handle.read(8).startswith(b"\x89PNG")
+        finally:
+            for h, _ in handles:
+                h.close()
+
+    def test_error_index_is_correct(self, tmp_path):
+        """When the second entry fails, the message must say [1], not [0]."""
+        good = tmp_path / "good.png"
+        good.write_bytes(bytes.fromhex(_PNG_HEX))
+        bad = tmp_path / "nope.png"
+        with pytest.raises(ValueError) as excinfo:
+            openai_plugin._normalize_references([str(good), str(bad)])
+        assert "reference_images[1]" in str(excinfo.value)
