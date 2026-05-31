@@ -318,16 +318,16 @@ def filter_enabled_toolsets(source, enabled_toolsets, gateway_config=None):
     try:
         cfg = gateway_config if gateway_config is not None else _load_config_cached()
         if cfg is None:
-            return base
+            return sorted(base)
         policy = policy_for_source(cfg, source)
         if not policy.enabled:
-            return base
+            return sorted(base)
         user_id = getattr(source, "user_id", None)
         allowed = policy.allowed_toolsets(user_id, frozenset(base))
         return sorted(allowed)
     except Exception as err:  # pragma: no cover - defensive
         logger.debug("tool_access filter error: %s", err)
-        return base
+        return sorted(base)
 
 
 __all__ = [
