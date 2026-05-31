@@ -281,4 +281,4 @@ async def test_rbac_active_unauthorized_dm_skips_pairing_offer(monkeypatch):
     # The plain "ask an admin" message must have been sent instead.
     adapter.send.assert_awaited_once()
     sent_text = adapter.send.await_args.args[1]
-    assert "role" in sent_text.lower()
+    assert sent_text == "You're not authorized here. Ask an admin to assign you a role."

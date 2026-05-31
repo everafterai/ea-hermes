@@ -6438,31 +6438,6 @@ class GatewayRunner:
         if not user_id:
             return False
 
-        # RBAC: when tool-access roles are configured for this platform, role
-        # assignment is the sole authorization source. A user with a role may
-        # interact; a user with no role is denied — overriding the env
-        # allowlist, any allow-all flag, and DM pairing.
-        try:
-            from gateway.tool_access import policy_for_source, _load_config_cached
-            _rbac_policy = policy_for_source(_load_config_cached(), source)
-            if _rbac_policy.enabled:
-                _env_var = {
-                    Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
-                    Platform.DISCORD: "DISCORD_ALLOWED_USERS",
-                    Platform.SLACK: "SLACK_ALLOWED_USERS",
-                }.get(source.platform, "")
-                if _env_var and os.getenv(_env_var, "").strip():
-                    if not getattr(self, "_warned_rbac_overrides_env", False):
-                        logger.info(
-                            "tool_access: RBAC roles are active for %s; %s is ignored.",
-                            source.platform.value if source.platform else "?",
-                            _env_var,
-                        )
-                        self._warned_rbac_overrides_env = True
-                return _rbac_policy.is_authorized(user_id)
-        except Exception as _rbac_err:
-            logger.debug("tool_access auth-gate error: %s", _rbac_err)
-
         platform_env_map = {
             Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
             Platform.DISCORD: "DISCORD_ALLOWED_USERS",
@@ -6482,6 +6457,27 @@ class GatewayRunner:
             Platform.QQBOT: "QQ_ALLOWED_USERS",
             Platform.YUANBAO: "YUANBAO_ALLOWED_USERS",
         }
+
+        # RBAC: when tool-access roles are configured for this platform, role
+        # assignment is the sole authorization source. A user with a role may
+        # interact; a user with no role is denied — overriding the env
+        # allowlist, any allow-all flag, and DM pairing.
+        try:
+            from gateway.tool_access import policy_for_source, _load_config_cached
+            _rbac_policy = policy_for_source(_load_config_cached(), source)
+            if _rbac_policy.enabled:
+                _env_var = platform_env_map.get(source.platform, "")
+                if _env_var and os.getenv(_env_var, "").strip():
+                    if not getattr(self, "_warned_rbac_overrides_env", False):
+                        logger.info(
+                            "tool_access: RBAC roles are active for %s; %s is ignored.",
+                            source.platform.value if source.platform else "?",
+                            _env_var,
+                        )
+                        self._warned_rbac_overrides_env = True
+                return _rbac_policy.is_authorized(user_id)
+        except Exception as _rbac_err:
+            logger.debug("tool_access auth-gate error: %s", _rbac_err)
         platform_group_user_env_map = {
             Platform.TELEGRAM: "TELEGRAM_GROUP_ALLOWED_USERS",
         }
@@ -6810,8 +6806,8 @@ class GatewayRunner:
             # plain "ask an admin" message instead.
             _rbac_active_for_dm = False
             try:
-                from gateway.tool_access import policy_for_source as _ps, _load_config_cached as _lcc
-                _rbac_active_for_dm = _ps(_lcc(), source).enabled
+                from gateway.tool_access import policy_for_source, _load_config_cached
+                _rbac_active_for_dm = policy_for_source(_load_config_cached(), source).enabled
             except Exception:
                 pass
             if source.chat_type == "dm" and _rbac_active_for_dm:
