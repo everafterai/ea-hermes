@@ -11,7 +11,7 @@ from gateway.tool_access import (
     policy_from_extra,
     policy_for_source,
 )
-from gateway.config import GatewayConfig, Platform, PlatformConfig
+from gateway.config import GatewayConfig, Platform, PlatformConfig, load_gateway_config
 from gateway.session import SessionSource
 
 
@@ -132,3 +132,30 @@ class TestPolicyForSource:
         cfg = GatewayConfig()
         src = SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="U_A")
         assert policy_for_source(cfg, src).enabled is False
+
+
+class TestConfigBridge:
+    def test_roles_and_user_roles_reach_slack_extra(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "slack:\n"
+            "  enabled: true\n"
+            "  roles:\n"
+            "    limited:\n"
+            "      toolsets:\n"
+            "        - web\n"
+            "  user_roles:\n"
+            "    U_A: limited\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+
+        assert config.platforms[Platform.SLACK].extra["roles"] == {
+            "limited": {"toolsets": ["web"]}
+        }
+        assert config.platforms[Platform.SLACK].extra["user_roles"] == {"U_A": "limited"}
