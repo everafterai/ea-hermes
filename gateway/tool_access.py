@@ -212,9 +212,96 @@ def policy_for_source(gateway_config: Any, source: Any) -> ToolAccessPolicy:
     return policy_from_extra(_platform_extra(platform_config))
 
 
+# ---------------------------------------------------------------------------
+# Dispatch-backstop helper. Reads identity from session contextvars, resolves
+# the policy for that platform (cached on config mtime), maps the tool to its
+# toolset via the registry, and returns a denial message or None.
+# ---------------------------------------------------------------------------
+
+_config_cache: Dict[str, Any] = {"fp": None, "config": None}
+
+
+def _current_identity():
+    """Return (user_id, platform_name) from session contextvars, or (None, None)."""
+    try:
+        from gateway.session_context import get_session_env
+        uid = get_session_env("HERMES_SESSION_USER_ID", "") or None
+        plat = get_session_env("HERMES_SESSION_PLATFORM", "") or None
+        return uid, plat
+    except Exception:
+        return None, None
+
+
+def _toolset_for_tool(tool_name: str) -> Optional[str]:
+    try:
+        from tools.registry import registry
+        return registry.get_toolset_for_tool(tool_name)
+    except Exception:
+        return None
+
+
+def _load_config_cached():
+    """Load gateway config, memoized on config.yaml mtime."""
+    try:
+        from gateway.config import load_gateway_config, get_hermes_home
+        cfg_file = get_hermes_home() / "config.yaml"
+        try:
+            st = cfg_file.stat()
+            fp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            fp = None
+        if fp != _config_cache["fp"] or _config_cache["config"] is None:
+            _config_cache["config"] = load_gateway_config()
+            _config_cache["fp"] = fp
+        return _config_cache["config"]
+    except Exception:
+        return None
+
+
+def _policy_for_current_platform(platform_name: str) -> Optional[ToolAccessPolicy]:
+    config = _load_config_cached()
+    if config is None:
+        return None
+    try:
+        from gateway.config import Platform
+        platform = Platform(platform_name)
+    except Exception:
+        return None
+    platforms = getattr(config, "platforms", {}) or {}
+    return policy_from_extra(_platform_extra(platforms.get(platform)))
+
+
+def denial_for_current_tool(tool_name: str) -> Optional[str]:
+    """Return a denial message if the current user may not use ``tool_name``,
+    else None. Fail-open on any internal error (RBAC is a backstop; the
+    toolset filter is the primary control)."""
+    try:
+        user_id, platform_name = _current_identity()
+        if not user_id or not platform_name:
+            return None  # CLI / system / cron context — no gating
+        policy = _policy_for_current_platform(platform_name)
+        if policy is None or not policy.enabled:
+            return None
+        toolset = _toolset_for_tool(tool_name)
+        if policy.can_use_tool(user_id, toolset):
+            return None
+        logger.info(
+            "tool_access: denied tool '%s' (toolset '%s') for %s on %s",
+            tool_name, toolset, user_id, platform_name,
+        )
+        return (
+            f"⛔ You are not permitted to use '{tool_name}' here. "
+            "Ask an admin to adjust your role if you need this capability."
+        )
+    except Exception as err:  # pragma: no cover - defensive
+        logger.debug("tool_access backstop error: %s", err)
+        return None
+
+
 __all__ = [
     "BUILTIN_ROLES",
     "ToolAccessPolicy",
     "policy_from_extra",
     "policy_for_source",
+    "denial_for_current_tool",
 ]

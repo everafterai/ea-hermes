@@ -798,6 +798,16 @@ def handle_function_call(
             if block_message is not None:
                 return json.dumps({"error": block_message}, ensure_ascii=False)
 
+        # RBAC backstop: enforce per-user tool access even on paths that skip
+        # the pre_tool_call hook (delegated sub-tasks, sandbox). Fail-open.
+        try:
+            from gateway.tool_access import denial_for_current_tool
+            rbac_denial = denial_for_current_tool(function_name)
+            if rbac_denial is not None:
+                return json.dumps({"error": rbac_denial}, ensure_ascii=False)
+        except Exception as _rbac_err:
+            logger.debug("tool_access backstop import error: %s", _rbac_err)
+
         # ACP/Zed edit approval runs before any file mutation.  The requester
         # is bound via ContextVar only for ACP sessions, so CLI/gateway paths
         # are unaffected when it is unset.
