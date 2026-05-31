@@ -19,13 +19,6 @@ ALL_TOOLSETS = frozenset(
     {"terminal", "file", "web", "browser", "vision", "memory",
      "delegation", "session_search", "mcp-github", "mcp-jira"}
 )
-TOOL_MAP = {
-    "run_shell": "terminal",
-    "write_file": "file",
-    "web_search": "web",
-    "describe_image": "vision",
-    "gh_issue": "mcp-github",
-}
 
 
 class TestPolicyFromExtra:
@@ -92,6 +85,23 @@ class TestToolsetResolution:
              "user_roles": {"U_A": "readonly"}}
         )
         assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset({"web"})
+
+    def test_scalar_string_toolsets(self):
+        # A bare YAML string like `toolsets: web, vision` should be treated as
+        # comma-separated rather than silently dropped.
+        p = policy_from_extra(
+            {"roles": {"r": {"toolsets": "web, vision"}},
+             "user_roles": {"U_A": "r"}}
+        )
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset({"web", "vision"})
+
+    def test_toolset_match_is_case_insensitive(self):
+        # A caller passing "WEB" should match a role granting ["web"].
+        p = policy_from_extra(
+            {"roles": {"r": {"toolsets": ["web"]}},
+             "user_roles": {"U_A": "r"}}
+        )
+        assert p.can_use_tool("U_A", "WEB") is True
 
 
 class TestFailClosed:

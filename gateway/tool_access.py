@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import types
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
@@ -77,7 +78,18 @@ def _coerce_roles(raw: Any) -> Dict[str, FrozenSet[str]]:
             toolsets = body.get("toolsets")
         elif isinstance(body, (list, tuple)):
             toolsets = body
-        items = toolsets if isinstance(toolsets, (list, tuple, set, frozenset)) else []
+        if isinstance(toolsets, str):
+            items = [s for s in (s.strip() for s in toolsets.split(",")) if s]
+        elif isinstance(toolsets, (list, tuple, set, frozenset)):
+            items = toolsets
+        elif toolsets is not None:
+            logger.warning(
+                "tool_access: unexpected toolsets type %s for role '%s' — ignoring",
+                type(toolsets).__name__, role_name,
+            )
+            items = []
+        else:
+            items = []
         resolved[role_name] = frozenset(
             _coerce_str(t).lower() for t in items if _coerce_str(t)
         )
@@ -86,6 +98,7 @@ def _coerce_roles(raw: Any) -> Dict[str, FrozenSet[str]]:
 
 def _granted(role_toolsets: FrozenSet[str], toolset: str) -> bool:
     """True if ``toolset`` is granted by ``role_toolsets`` (exact, ``*``, glob)."""
+    toolset = toolset.lower()
     if "*" in role_toolsets:
         return True
     if toolset in role_toolsets:
@@ -113,29 +126,36 @@ class ToolAccessPolicy:
             return None
         return self.user_roles.get(str(user_id))
 
-    def is_authorized(self, user_id: Optional[str]) -> bool:
-        if not self.enabled:
-            return True  # defer to legacy auth
+    def _resolved_grant(self, user_id: Optional[str]) -> Optional[FrozenSet[str]]:
+        """Return the grant set for *user_id*, or None if access should be denied.
+
+        Logs an ERROR once when the user's assigned role name is not defined in
+        ``self.roles``, so every entry point gets consistent logging.
+        """
         role = self.role_for(user_id)
         if role is None:
-            return False
+            return None
         if role not in self.roles:
             logger.error(
                 "tool_access: user %s assigned undefined role '%s' — denying",
                 user_id, role,
             )
-            return False
-        return True
+            return None
+        return self.roles[role]
+
+    def is_authorized(self, user_id: Optional[str]) -> bool:
+        if not self.enabled:
+            return True  # defer to legacy auth
+        return self._resolved_grant(user_id) is not None
 
     def allowed_toolsets(
         self, user_id: Optional[str], all_toolsets: FrozenSet[str]
     ) -> FrozenSet[str]:
         if not self.enabled:
             return frozenset(all_toolsets)
-        role = self.role_for(user_id)
-        if role is None or role not in self.roles:
+        grant = self._resolved_grant(user_id)
+        if grant is None:
             return frozenset()
-        grant = self.roles[role]
         return frozenset(t for t in all_toolsets if _granted(grant, t))
 
     def can_use_tool(
@@ -143,12 +163,10 @@ class ToolAccessPolicy:
     ) -> bool:
         if not self.enabled:
             return True
-        role = self.role_for(user_id)
-        if role is None or role not in self.roles:
+        grant = self._resolved_grant(user_id)
+        if grant is None or not toolset:
             return False
-        if not toolset:
-            return False
-        return _granted(self.roles[role], toolset)
+        return _granted(grant, toolset)
 
 
 def policy_from_extra(extra: Any) -> ToolAccessPolicy:
@@ -159,8 +177,8 @@ def policy_from_extra(extra: Any) -> ToolAccessPolicy:
     roles = _coerce_roles(extra.get("roles"))
     return ToolAccessPolicy(
         enabled=bool(user_roles),
-        user_roles=user_roles,
-        roles=roles,
+        user_roles=types.MappingProxyType(user_roles),
+        roles=types.MappingProxyType(roles),
     )
 
 
@@ -170,6 +188,7 @@ def _platform_extra(platform_config: Any) -> dict:
     extra = getattr(platform_config, "extra", None)
     if isinstance(extra, dict):
         return extra
+    # Some test harnesses pass dicts directly.
     if isinstance(platform_config, dict):
         return platform_config
     return {}
@@ -178,7 +197,11 @@ def _platform_extra(platform_config: Any) -> dict:
 def policy_for_source(gateway_config: Any, source: Any) -> ToolAccessPolicy:
     """Resolve the policy for a SessionSource's platform."""
     if gateway_config is None or source is None:
-        return ToolAccessPolicy(enabled=False, user_roles={}, roles=dict(BUILTIN_ROLES))
+        return ToolAccessPolicy(
+            enabled=False,
+            user_roles=types.MappingProxyType({}),
+            roles=types.MappingProxyType(dict(BUILTIN_ROLES)),
+        )
     platforms = getattr(gateway_config, "platforms", None)
     platform_config = None
     if platforms is not None:
