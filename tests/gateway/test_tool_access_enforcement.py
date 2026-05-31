@@ -67,3 +67,39 @@ def test_handle_function_call_blocks_forbidden_tool(monkeypatch):
         "run_shell", {"command": "ls"}, skip_pre_tool_call_hook=True
     )
     assert "not permitted" in out
+
+
+def test_disabled_policy_allows(monkeypatch):
+    # When RBAC is disabled for the platform, the backstop must not gate.
+    class _Disabled:
+        enabled = False
+
+        def can_use_tool(self, user_id, toolset):  # pragma: no cover
+            raise AssertionError("can_use_tool should not be consulted when disabled")
+
+    monkeypatch.setattr(
+        "gateway.tool_access._current_identity", lambda: ("U_A", "slack")
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._policy_for_current_platform",
+        lambda platform: _Disabled(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._toolset_for_tool", lambda name: "terminal"
+    )
+    assert denial_for_current_tool("run_shell") is None
+
+
+def test_unregistered_tool_allowed(monkeypatch):
+    # toolset=None (tool not in registry) → fail open, not deny.
+    monkeypatch.setattr(
+        "gateway.tool_access._current_identity", lambda: ("U_A", "slack")
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._policy_for_current_platform",
+        lambda platform: _FakePolicy(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._toolset_for_tool", lambda name: None
+    )
+    assert denial_for_current_tool("some_unknown_tool") is None

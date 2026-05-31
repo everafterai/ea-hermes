@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import threading
 import types
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
@@ -219,6 +220,7 @@ def policy_for_source(gateway_config: Any, source: Any) -> ToolAccessPolicy:
 # ---------------------------------------------------------------------------
 
 _config_cache: Dict[str, Any] = {"fp": None, "config": None}
+_config_cache_lock = threading.Lock()
 
 
 def _current_identity():
@@ -228,7 +230,8 @@ def _current_identity():
         uid = get_session_env("HERMES_SESSION_USER_ID", "") or None
         plat = get_session_env("HERMES_SESSION_PLATFORM", "") or None
         return uid, plat
-    except Exception:
+    except Exception as err:
+        logger.debug("tool_access: _current_identity failed: %s", err)
         return None, None
 
 
@@ -236,7 +239,8 @@ def _toolset_for_tool(tool_name: str) -> Optional[str]:
     try:
         from tools.registry import registry
         return registry.get_toolset_for_tool(tool_name)
-    except Exception:
+    except Exception as err:
+        logger.debug("tool_access: _toolset_for_tool failed: %s", err)
         return None
 
 
@@ -250,10 +254,11 @@ def _load_config_cached():
             fp = (st.st_mtime_ns, st.st_size)
         except OSError:
             fp = None
-        if fp != _config_cache["fp"] or _config_cache["config"] is None:
-            _config_cache["config"] = load_gateway_config()
-            _config_cache["fp"] = fp
-        return _config_cache["config"]
+        with _config_cache_lock:
+            if fp != _config_cache["fp"] or _config_cache["config"] is None:
+                _config_cache["config"] = load_gateway_config()
+                _config_cache["fp"] = fp
+            return _config_cache["config"]
     except Exception:
         return None
 
@@ -283,6 +288,8 @@ def denial_for_current_tool(tool_name: str) -> Optional[str]:
         if policy is None or not policy.enabled:
             return None
         toolset = _toolset_for_tool(tool_name)
+        if toolset is None:
+            return None  # tool not in registry → not gated by toolset RBAC
         if policy.can_use_tool(user_id, toolset):
             return None
         logger.info(
