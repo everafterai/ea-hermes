@@ -103,3 +103,54 @@ def test_unregistered_tool_allowed(monkeypatch):
         "gateway.tool_access._toolset_for_tool", lambda name: None
     )
     assert denial_for_current_tool("some_unknown_tool") is None
+
+
+from gateway.tool_access import filter_enabled_toolsets
+
+
+class _RolePolicy:
+    enabled = True
+
+    def allowed_toolsets(self, user_id, all_toolsets):
+        return frozenset({"web", "vision"}) & frozenset(all_toolsets)
+
+
+def test_filter_intersects_with_role(monkeypatch):
+    monkeypatch.setattr(
+        "gateway.tool_access.policy_for_source",
+        lambda cfg, src: _RolePolicy(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._load_config_cached", lambda: object(),
+    )
+
+    class _Src:
+        user_id = "U_A"
+
+    result = filter_enabled_toolsets(
+        source=_Src(),
+        enabled_toolsets=["web", "vision", "terminal", "file"],
+    )
+    assert sorted(result) == ["vision", "web"]
+
+
+def test_filter_noop_when_disabled(monkeypatch):
+    class _Disabled:
+        enabled = False
+
+    monkeypatch.setattr(
+        "gateway.tool_access.policy_for_source",
+        lambda cfg, src: _Disabled(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._load_config_cached", lambda: object(),
+    )
+
+    class _Src:
+        user_id = "U_A"
+
+    result = filter_enabled_toolsets(
+        source=_Src(),
+        enabled_toolsets=["web", "terminal"],
+    )
+    assert sorted(result) == ["terminal", "web"]

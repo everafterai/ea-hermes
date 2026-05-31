@@ -305,10 +305,36 @@ def denial_for_current_tool(tool_name: str) -> Optional[str]:
         return None
 
 
+def filter_enabled_toolsets(source, enabled_toolsets, gateway_config=None):
+    """Intersect ``enabled_toolsets`` with the source user's role grant.
+
+    Returns the input (as a sorted list) unchanged when RBAC is disabled for
+    the platform. Resolves the typed gateway config itself when not provided.
+    Fail-open: on any error returns the input list so a resolution failure
+    can't silently strip a user's tools (the dispatch backstop remains the
+    hard control).
+    """
+    base = list(enabled_toolsets or [])
+    try:
+        cfg = gateway_config if gateway_config is not None else _load_config_cached()
+        if cfg is None:
+            return base
+        policy = policy_for_source(cfg, source)
+        if not policy.enabled:
+            return base
+        user_id = getattr(source, "user_id", None)
+        allowed = policy.allowed_toolsets(user_id, frozenset(base))
+        return sorted(allowed)
+    except Exception as err:  # pragma: no cover - defensive
+        logger.debug("tool_access filter error: %s", err)
+        return base
+
+
 __all__ = [
     "BUILTIN_ROLES",
     "ToolAccessPolicy",
     "policy_from_extra",
     "policy_for_source",
     "denial_for_current_tool",
+    "filter_enabled_toolsets",
 ]
