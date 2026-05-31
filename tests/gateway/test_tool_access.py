@@ -1,0 +1,124 @@
+"""Unit tests for gateway.tool_access — per-user tool RBAC.
+
+Tests the pure policy resolver (no gateway plumbing). Integration tests that
+exercise the enforcement sites live in test_tool_access_enforcement.py.
+"""
+from __future__ import annotations
+
+from gateway.tool_access import (
+    BUILTIN_ROLES,
+    ToolAccessPolicy,
+    policy_from_extra,
+    policy_for_source,
+)
+from gateway.config import GatewayConfig, Platform, PlatformConfig
+from gateway.session import SessionSource
+
+
+ALL_TOOLSETS = frozenset(
+    {"terminal", "file", "web", "browser", "vision", "memory",
+     "delegation", "session_search", "mcp-github", "mcp-jira"}
+)
+TOOL_MAP = {
+    "run_shell": "terminal",
+    "write_file": "file",
+    "web_search": "web",
+    "describe_image": "vision",
+    "gh_issue": "mcp-github",
+}
+
+
+class TestPolicyFromExtra:
+    def test_empty_extra_is_disabled(self):
+        p = policy_from_extra({})
+        assert p.enabled is False
+
+    def test_disabled_policy_authorizes_anyone(self):
+        # When RBAC is off, callers fall back to legacy auth; the policy
+        # must not deny. is_authorized short-circuits True so the gate defers.
+        p = policy_from_extra({})
+        assert p.is_authorized("U_ANYONE") is True
+        assert p.allowed_toolsets("U_ANYONE", ALL_TOOLSETS) == ALL_TOOLSETS
+
+    def test_user_roles_activates_policy(self):
+        p = policy_from_extra({"user_roles": {"U_A": "admin"}})
+        assert p.enabled is True
+
+    def test_builtin_roles_available_without_roles_block(self):
+        p = policy_from_extra({"user_roles": {"U_A": "readonly"}})
+        assert p.role_for("U_A") == "readonly"
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset(BUILTIN_ROLES["readonly"]) & ALL_TOOLSETS
+
+    def test_id_and_role_coercion(self):
+        # YAML may load int IDs and pad whitespace.
+        p = policy_from_extra({"user_roles": {123: " admin ", "U_B ": "Operator"}})
+        assert p.role_for("123") == "admin"
+        assert p.role_for("U_B") == "operator"
+
+
+class TestToolsetResolution:
+    def test_admin_wildcard_grants_everything(self):
+        p = policy_from_extra({"user_roles": {"U_A": "admin"}})
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == ALL_TOOLSETS
+        assert p.can_use_tool("U_A", "terminal") is True
+
+    def test_chat_only_grants_nothing(self):
+        p = policy_from_extra({"user_roles": {"U_A": "chat_only"}})
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset()
+        assert p.can_use_tool("U_A", "terminal") is False
+        assert p.is_authorized("U_A") is True  # may still chat
+
+    def test_explicit_toolset_list(self):
+        p = policy_from_extra(
+            {"roles": {"limited": {"toolsets": ["web", "vision"]}},
+             "user_roles": {"U_A": "limited"}}
+        )
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset({"web", "vision"})
+        assert p.can_use_tool("U_A", "web") is True
+        assert p.can_use_tool("U_A", "terminal") is False
+
+    def test_mcp_glob(self):
+        p = policy_from_extra(
+            {"roles": {"mcpuser": {"toolsets": ["mcp-*"]}},
+             "user_roles": {"U_A": "mcpuser"}}
+        )
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset({"mcp-github", "mcp-jira"})
+        assert p.can_use_tool("U_A", "mcp-github") is True
+        assert p.can_use_tool("U_A", "terminal") is False
+
+    def test_custom_role_overrides_builtin(self):
+        p = policy_from_extra(
+            {"roles": {"readonly": {"toolsets": ["web"]}},
+             "user_roles": {"U_A": "readonly"}}
+        )
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset({"web"})
+
+
+class TestFailClosed:
+    def test_unassigned_user_denied(self):
+        p = policy_from_extra({"user_roles": {"U_A": "admin"}})
+        assert p.is_authorized("U_STRANGER") is False
+        assert p.allowed_toolsets("U_STRANGER", ALL_TOOLSETS) == frozenset()
+        assert p.can_use_tool("U_STRANGER", "web") is False
+
+    def test_undefined_role_denied(self):
+        p = policy_from_extra({"user_roles": {"U_A": "ghost"}})
+        assert p.is_authorized("U_A") is False
+        assert p.allowed_toolsets("U_A", ALL_TOOLSETS) == frozenset()
+
+
+class TestPolicyForSource:
+    def test_resolves_slack_extra(self):
+        cfg = GatewayConfig()
+        cfg.platforms[Platform.SLACK] = PlatformConfig(
+            extra={"user_roles": {"U_A": "operator"}}
+        )
+        src = SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="U_A")
+        p = policy_for_source(cfg, src)
+        assert p.enabled is True
+        assert p.role_for("U_A") == "operator"
+
+    def test_missing_platform_is_disabled(self):
+        cfg = GatewayConfig()
+        src = SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="U_A")
+        assert policy_for_source(cfg, src).enabled is False
