@@ -282,3 +282,50 @@ async def test_rbac_active_unauthorized_dm_skips_pairing_offer(monkeypatch):
     adapter.send.assert_awaited_once()
     sent_text = adapter.send.await_args.args[1]
     assert sent_text == "You're not authorized here. Ask an admin to assign you a role."
+
+
+def test_contextvar_propagation_backstop_fires(monkeypatch):
+    """Contextvar-propagation guarantee: identity set via set_session_vars is
+    visible to denial_for_current_tool (and therefore to the handle_function_call
+    backstop) in the same thread/task context, including delegated-executor paths
+    that inherit the calling context's ContextVar snapshot.
+
+    Uses web_search (toolset='web'), which is registered by tools.web_tools.
+    chat_only grants zero toolsets, so web_search is denied for U_A.
+    """
+    import tools.web_tools  # noqa: F401 — side-effect: registers web_search → 'web'
+    import model_tools
+    from gateway.config import GatewayConfig, Platform, PlatformConfig
+    from gateway.session_context import clear_session_vars, set_session_vars
+
+    # Build a GatewayConfig that activates RBAC for Slack and assigns U_A the
+    # chat_only role (zero toolsets → any real tool is denied).
+    cfg = GatewayConfig(
+        platforms={
+            Platform.SLACK: PlatformConfig(
+                extra={"user_roles": {"U_A": "chat_only"}},
+            )
+        }
+    )
+    monkeypatch.setattr("gateway.tool_access._load_config_cached", lambda: cfg)
+
+    # Set session identity via the public API — this is the propagation path
+    # used by the gateway before dispatching to the agent/executor.
+    tokens = set_session_vars(
+        platform="slack",
+        user_id="U_A",
+        chat_id="C_TEST",
+    )
+    try:
+        # web_search is a real registered tool (toolset='web').
+        # chat_only grants no toolsets, so the backstop must deny it.
+        out = model_tools.handle_function_call(
+            "web_search",
+            {"query": "test"},
+            skip_pre_tool_call_hook=True,
+        )
+        assert "not permitted" in out, (
+            f"Expected backstop denial ('not permitted') but got: {out!r}"
+        )
+    finally:
+        clear_session_vars(tokens)
