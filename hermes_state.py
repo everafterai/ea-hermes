@@ -758,17 +758,21 @@ class SessionDB:
         system_prompt: str = None,
         user_id: str = None,
         parent_session_id: str = None,
+        chat_id: str = None,
+        chat_type: str = None,
     ) -> None:
         """Shared INSERT OR IGNORE for session rows."""
         def _do(conn):
             conn.execute(
-                """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
-                   system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT OR IGNORE INTO sessions (id, source, user_id, chat_id, chat_type,
+                   model, model_config, system_prompt, parent_session_id, started_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
                     user_id,
+                    chat_id,
+                    chat_type,
                     model,
                     json.dumps(model_config) if model_config else None,
                     system_prompt,

@@ -91,3 +91,20 @@ def test_build_visibility_where_unknown_kind_fails_closed():
     frag, params = build_visibility_where({"kind": "bogus"}, alias="s")
     assert frag == "0 = 1"
     assert params == []
+
+
+def test_create_session_persists_scope(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s1", source="slack", user_id="U1", chat_id="C7", chat_type="group")
+    row = db.get_session("s1")
+    assert row["chat_id"] == "C7"
+    assert row["chat_type"] == "group"
+    assert row["user_id"] == "U1"
+
+
+def test_create_session_scope_defaults_none(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s2", source="cli")
+    row = db.get_session("s2")
+    assert row["chat_id"] is None
+    assert row["chat_type"] is None
