@@ -74,24 +74,23 @@ class TestHandleToolsRbacJson:
                 f"but got roles: {info['builtin_roles']}"
             )
 
-    def test_floor_toolsets_granted_to_more_roles_than_terminal(self, capsys):
+    def test_floor_toolsets_granted_to_all_builtin_roles(self, capsys):
+        from gateway.tool_access import BUILTIN_ROLES
         from hermes_cli.tools_list import handle_tools_rbac
 
         handle_tools_rbac(_make_args(use_json=True))
         captured = capsys.readouterr()
         data = json.loads(captured.out)
 
-        # clarify and todo are FLOOR_TOOLSETS — granted to every valid-role user.
-        # terminal is operator-only (not in readonly / chat_only).
-        # Therefore floor toolsets must have at least as many granting roles.
-        floor_toolsets = ("clarify", "todo")
-        terminal_roles = set(data.get("terminal", {}).get("builtin_roles", []))
-        for floor_ts in floor_toolsets:
+        # clarify and todo are FLOOR_TOOLSETS — granted to every built-in role.
+        # The granting roles must equal exactly the full set of built-in role names.
+        expected_roles = set(BUILTIN_ROLES.keys())
+        for floor_ts in ("clarify", "todo"):
             if floor_ts in data:
                 floor_roles = set(data[floor_ts]["builtin_roles"])
-                assert len(floor_roles) >= len(terminal_roles), (
-                    f"Floor toolset '{floor_ts}' has {len(floor_roles)} granting roles "
-                    f"but 'terminal' has {len(terminal_roles)}; expected floor >= terminal"
+                assert floor_roles == expected_roles, (
+                    f"Floor toolset '{floor_ts}' should be granted by all built-in roles "
+                    f"{expected_roles}, but got: {floor_roles}"
                 )
 
     def test_tools_list_non_empty_for_known_toolsets(self, capsys):

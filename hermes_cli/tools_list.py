@@ -20,7 +20,6 @@ This command is read-only: it never mutates configuration or registry state.
 from __future__ import annotations
 
 import json
-import sys
 from typing import Dict, List
 
 
@@ -33,9 +32,7 @@ def _compute_role_grants() -> Dict[str, List[str]]:
     role regardless of the explicit toolset list.
     """
     from gateway.tool_access import BUILTIN_ROLES, FLOOR_TOOLSETS, _granted
-    from tools.registry import discover_builtin_tools, registry
-
-    discover_builtin_tools()
+    from tools.registry import registry
 
     toolset_names = registry.get_registered_toolset_names()
     result: Dict[str, List[str]] = {}
@@ -77,7 +74,6 @@ def handle_tools_rbac(args) -> int:
     print(f"\nRegistered toolsets: {len(data)}  |  Total tools: {total_tools}\n")
 
     col_ts = max((len(ts) for ts in data), default=10)
-    col_roles = 40
     header = (
         f"{'Toolset':<{col_ts}}  "
         f"{'Tools':>5}  "
