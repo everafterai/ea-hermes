@@ -852,6 +852,10 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["allow_admin_from"] = platform_cfg["allow_admin_from"]
                 if "user_allowed_commands" in platform_cfg:
                     bridged["user_allowed_commands"] = platform_cfg["user_allowed_commands"]
+                if "roles" in platform_cfg:
+                    bridged["roles"] = platform_cfg["roles"]
+                if "user_roles" in platform_cfg:
+                    bridged["user_roles"] = platform_cfg["user_roles"]
                 if "group_policy" in platform_cfg:
                     bridged["group_policy"] = platform_cfg["group_policy"]
                 if "group_allow_from" in platform_cfg:

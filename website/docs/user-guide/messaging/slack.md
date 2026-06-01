@@ -593,6 +593,33 @@ Notes:
 - The skill is loaded only at session start (new session or after auto-reset). If you change the binding, run `/new` or wait for the session to auto-reset for it to take effect.
 - Combine with `channel_prompts` for per-channel tone/constraints on top of the skill's instructions.
 
+## Tool RBAC (per-user tool access)
+
+Assign each Slack user a role that controls which tool categories the agent may use on their behalf. Configured under the Slack platform's `extra:` block in `~/.hermes/config.yaml`.
+
+```yaml
+platforms:
+  slack:
+    enabled: true
+    extra:
+      user_roles:            # presence activates RBAC; this is the auth source
+        U_ALICE: admin
+        U_BOB:   operator
+        U_CAROL: readonly
+        U_DAVE:  chat_only
+      roles:                 # optional — customize or add to the built-ins
+        operator: { toolsets: [terminal, file, web, browser, vision, memory, delegation] }
+```
+
+- **Built-in roles:** `admin` (all tools), `operator` (terminal, file, web, browser, vision, memory, delegation), `readonly` (web, vision, session_search, memory), `chat_only` (chat only — no tools).
+- **Floor toolsets:** All assigned users (including `chat_only`) can always use the `clarify` and `todo` toolsets so the agent can ask follow-up questions and track its work; users with no role assigned get nothing.
+- A user with **no assigned role is denied entirely**, including chat ("deny until assigned"). This is intentional: `user_roles` is the sole authorization source once RBAC is active.
+- When `user_roles` is present, **`SLACK_ALLOWED_USERS` is ignored** — manage access via roles and you can remove the env var.
+- **Toolset names:** `terminal`, `file`, `web`, `browser`, `vision`, `memory`, `delegation`, `code_execution`, `image_gen`, `session_search`, `mcp-*` (glob), or `"*"` for all toolsets.
+- RBAC activates **only when `user_roles` is present** in the config. Without it, existing behavior (the `SLACK_ALLOWED_USERS` allowlist) is completely unchanged — no migration needed.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |

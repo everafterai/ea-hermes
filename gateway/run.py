@@ -6457,6 +6457,27 @@ class GatewayRunner:
             Platform.QQBOT: "QQ_ALLOWED_USERS",
             Platform.YUANBAO: "YUANBAO_ALLOWED_USERS",
         }
+
+        # RBAC: when tool-access roles are configured for this platform, role
+        # assignment is the sole authorization source. A user with a role may
+        # interact; a user with no role is denied — overriding the env
+        # allowlist, any allow-all flag, and DM pairing.
+        try:
+            from gateway.tool_access import policy_for_source, _load_config_cached
+            _rbac_policy = policy_for_source(_load_config_cached(), source)
+            if _rbac_policy.enabled:
+                _env_var = platform_env_map.get(source.platform, "")
+                if _env_var and os.getenv(_env_var, "").strip():
+                    if not getattr(self, "_warned_rbac_overrides_env", False):
+                        logger.info(
+                            "tool_access: RBAC roles are active for %s; %s is ignored.",
+                            source.platform.value if source.platform else "?",
+                            _env_var,
+                        )
+                        self._warned_rbac_overrides_env = True
+                return _rbac_policy.is_authorized(user_id)
+        except Exception as _rbac_err:
+            logger.debug("tool_access auth-gate error: %s", _rbac_err)
         platform_group_user_env_map = {
             Platform.TELEGRAM: "TELEGRAM_GROUP_ALLOWED_USERS",
         }
@@ -6780,7 +6801,23 @@ class GatewayRunner:
         elif not self._is_user_authorized(source):
             logger.warning("Unauthorized user: %s (%s) on %s", source.user_id, source.user_name, source.platform.value)
             # In DMs: offer pairing code. In groups: silently ignore.
-            if source.chat_type == "dm" and self._get_unauthorized_dm_behavior(source.platform) == "pair":
+            # RBAC guard: when roles are active for this platform, skip pairing
+            # entirely — a roleless user must not be offered a code; they get a
+            # plain "ask an admin" message instead.
+            _rbac_active_for_dm = False
+            try:
+                from gateway.tool_access import policy_for_source, _load_config_cached
+                _rbac_active_for_dm = policy_for_source(_load_config_cached(), source).enabled
+            except Exception:
+                pass
+            if source.chat_type == "dm" and _rbac_active_for_dm:
+                adapter = self.adapters.get(source.platform)
+                if adapter:
+                    await adapter.send(
+                        source.chat_id,
+                        "You're not authorized here. Ask an admin to assign you a role.",
+                    )
+            elif source.chat_type == "dm" and self._get_unauthorized_dm_behavior(source.platform) == "pair":
                 platform_name = source.platform.value if source.platform else "unknown"
                 # Rate-limit ALL pairing responses (code or rejection) to
                 # prevent spamming the user with repeated messages when
@@ -11720,6 +11757,8 @@ class GatewayRunner:
 
             from hermes_cli.tools_config import _get_platform_tools
             enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+            from gateway.tool_access import filter_enabled_toolsets
+            enabled_toolsets = filter_enabled_toolsets(source, enabled_toolsets)
             agent_cfg = user_config.get("agent") or {}
             disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
 
@@ -15843,6 +15882,8 @@ class GatewayRunner:
 
         from hermes_cli.tools_config import _get_platform_tools
         enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+        from gateway.tool_access import filter_enabled_toolsets
+        enabled_toolsets = filter_enabled_toolsets(source, enabled_toolsets)
         agent_cfg_local = user_config.get("agent") or {}
         disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
