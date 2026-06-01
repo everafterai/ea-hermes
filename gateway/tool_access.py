@@ -47,6 +47,13 @@ BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
     "chat_only": frozenset(),
 }
 
+# Toolsets every VALID-role user gets regardless of their role's grant, so
+# even a restricted (e.g. chat_only) user's agent can still ask clarifying
+# questions and track its work. Mirrors slash_access._ALWAYS_ALLOWED_FOR_USERS.
+# Note: this does NOT apply to users with no role / an undefined role — they
+# get nothing (deny-until-assigned).
+FLOOR_TOOLSETS: FrozenSet[str] = frozenset({"clarify", "todo"})
+
 
 def _coerce_str(value: Any) -> str:
     return str(value).strip()
@@ -157,7 +164,9 @@ class ToolAccessPolicy:
         grant = self._resolved_grant(user_id)
         if grant is None:
             return frozenset()
-        return frozenset(t for t in all_toolsets if _granted(grant, t))
+        return frozenset(
+            t for t in all_toolsets if _granted(grant, t) or t in FLOOR_TOOLSETS
+        )
 
     def can_use_tool(
         self, user_id: Optional[str], toolset: Optional[str]
@@ -167,7 +176,7 @@ class ToolAccessPolicy:
         grant = self._resolved_grant(user_id)
         if grant is None or not toolset:
             return False
-        return _granted(grant, toolset)
+        return _granted(grant, toolset) or toolset in FLOOR_TOOLSETS
 
 
 def policy_from_extra(extra: Any) -> ToolAccessPolicy:
@@ -332,6 +341,7 @@ def filter_enabled_toolsets(source, enabled_toolsets, gateway_config=None):
 
 __all__ = [
     "BUILTIN_ROLES",
+    "FLOOR_TOOLSETS",
     "ToolAccessPolicy",
     "policy_from_extra",
     "policy_for_source",

@@ -159,3 +159,44 @@ class TestConfigBridge:
             "limited": {"toolsets": ["web"]}
         }
         assert config.platforms[Platform.SLACK].extra["user_roles"] == {"U_A": "limited"}
+
+
+class TestFloorToolsets:
+    def test_chat_only_gets_floor_but_no_other_tools(self):
+        p = policy_from_extra({"user_roles": {"U_A": "chat_only"}})
+        allowed = p.allowed_toolsets("U_A", ALL_TOOLSETS | {"clarify", "todo"})
+        assert "clarify" in allowed
+        assert "todo" in allowed
+        assert "terminal" not in allowed
+        assert p.can_use_tool("U_A", "clarify") is True
+        assert p.can_use_tool("U_A", "todo") is True
+        assert p.can_use_tool("U_A", "terminal") is False
+        # chat_only is still authorized to interact
+        assert p.is_authorized("U_A") is True
+
+    def test_floor_added_to_restricted_role(self):
+        p = policy_from_extra(
+            {"roles": {"limited": {"toolsets": ["web"]}},
+             "user_roles": {"U_A": "limited"}}
+        )
+        assert p.can_use_tool("U_A", "web") is True
+        assert p.can_use_tool("U_A", "clarify") is True  # floor
+        assert p.can_use_tool("U_A", "terminal") is False
+
+    def test_floor_does_not_rescue_roleless_user(self):
+        p = policy_from_extra({"user_roles": {"U_A": "chat_only"}})
+        # A user with no role assignment gets nothing — not even the floor.
+        assert p.can_use_tool("U_STRANGER", "clarify") is False
+        assert p.allowed_toolsets("U_STRANGER", {"clarify", "todo", "web"}) == frozenset()
+        assert p.is_authorized("U_STRANGER") is False
+
+    def test_floor_does_not_rescue_undefined_role(self):
+        p = policy_from_extra({"user_roles": {"U_A": "ghost"}})
+        assert p.can_use_tool("U_A", "clarify") is False
+        assert p.allowed_toolsets("U_A", {"clarify", "todo"}) == frozenset()
+
+    def test_floor_noop_when_disabled(self):
+        # When RBAC is off, everything is allowed anyway; floor changes nothing.
+        p = policy_from_extra({})
+        assert p.can_use_tool("U_A", "clarify") is True
+        assert p.can_use_tool("U_A", "terminal") is True

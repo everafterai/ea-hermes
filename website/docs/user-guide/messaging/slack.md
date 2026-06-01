@@ -612,6 +612,7 @@ platforms:
 ```
 
 - **Built-in roles:** `admin` (all tools), `operator` (terminal, file, web, browser, vision, memory, delegation), `readonly` (web, vision, session_search, memory), `chat_only` (chat only — no tools).
+- **Floor toolsets:** All assigned users (including `chat_only`) can always use the `clarify` and `todo` toolsets so the agent can ask follow-up questions and track its work; users with no role assigned get nothing.
 - A user with **no assigned role is denied entirely**, including chat ("deny until assigned"). This is intentional: `user_roles` is the sole authorization source once RBAC is active.
 - When `user_roles` is present, **`SLACK_ALLOWED_USERS` is ignored** — manage access via roles and you can remove the env var.
 - **Toolset names:** `terminal`, `file`, `web`, `browser`, `vision`, `memory`, `delegation`, `code_execution`, `image_gen`, `session_search`, `mcp-*` (glob), or `"*"` for all toolsets.
