@@ -33,6 +33,33 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from gateway.session_context import get_session_env
+from hermes_state import SHARED_CHAT_TYPES
+
+
+def resolve_search_scope():
+    """Resolve the current request's visibility scope from session contextvars.
+
+    Returns:
+        None                     -> admin/unscoped (local CLI/cron: no platform identity)
+        {"kind": "channel", ...} -> shared channel: (platform, chat_id)
+        {"kind": "user", ...}    -> private/DM: (platform, user_id)
+        {"kind": "none"}         -> fail-closed (gateway identity present but unresolvable)
+    """
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "")
+    if not platform:
+        # No gateway identity -> local CLI / cron operator is admin.
+        return None
+    chat_type = get_session_env("HERMES_SESSION_CHAT_TYPE", "")
+    chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "")
+    user_id = get_session_env("HERMES_SESSION_USER_ID", "")
+    if chat_type in SHARED_CHAT_TYPES and chat_id:
+        return {"kind": "channel", "platform": platform, "chat_id": chat_id}
+    if user_id:
+        return {"kind": "user", "platform": platform, "user_id": user_id}
+    return {"kind": "none"}
+
+
 # Sources that are excluded from session browsing/searching by default.
 # Third-party integrations tag their sessions with HERMES_SESSION_SOURCE=tool
 # so they don't clutter the user's session history.
