@@ -153,3 +153,41 @@ def test_cjk_like_scope_isolation(tmp_path, monkeypatch):
     finally:
         clear_session_vars(tokens)
     assert "s_alice" not in {r["session_id"] for r in json.loads(out_bob)["results"]}
+
+
+def test_browse_only_lists_own_scope(tmp_path, monkeypatch):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_mine", source="slack", user_id="U1", chat_id="D1", chat_type="dm")
+    db.append_message("s_mine", role="user", content="mine")
+    db.create_session("s_theirs", source="slack", user_id="U2", chat_id="D2", chat_type="dm")
+    db.append_message("s_theirs", role="user", content="theirs")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="D1", user_id="U1")
+    try:
+        out = session_search(db=db)  # no query -> browse
+    finally:
+        clear_session_vars(tokens)
+    sids = {r["session_id"] for r in json.loads(out)["results"]}
+    assert "s_mine" in sids
+    assert "s_theirs" not in sids
+
+
+def test_browse_channel_lists_channel_sessions(tmp_path, monkeypatch):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_c1a", source="slack", user_id="U1", chat_id="C1", chat_type="group")
+    db.append_message("s_c1a", role="user", content="c1 a")
+    db.create_session("s_c1b", source="slack", user_id="U2", chat_id="C1", chat_type="group")
+    db.append_message("s_c1b", role="user", content="c1 b")
+    db.create_session("s_c2", source="slack", user_id="U3", chat_id="C2", chat_type="group")
+    db.append_message("s_c2", role="user", content="c2")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="group", chat_id="C1", user_id="U2")
+    try:
+        out = session_search(db=db, current_session_id="s_c1b")
+    finally:
+        clear_session_vars(tokens)
+    sids = {r["session_id"] for r in json.loads(out)["results"]}
+    assert "s_c1a" in sids
+    assert "s_c2" not in sids

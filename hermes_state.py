@@ -1240,6 +1240,7 @@ class SessionDB:
         include_children: bool = False,
         project_compression_tips: bool = True,
         order_by_last_active: bool = False,
+        scope=None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -1292,6 +1293,11 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+
+        scope_frag, scope_params = build_visibility_where(scope, alias="s")
+        if scope_frag:
+            where_clauses.append(scope_frag)
+            params.extend(scope_params)
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         if order_by_last_active:

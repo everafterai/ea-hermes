@@ -134,13 +134,14 @@ def _shape_message(m: Dict[str, Any], anchor_id: Optional[int] = None) -> Dict[s
     return {k: v for k, v in entry.items() if v is not None or k in ("content",)}
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str:
+def _list_recent_sessions(db, limit: int, current_session_id: str = None, scope=None) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
         sessions = db.list_sessions_rich(
             limit=limit + 5,
             exclude_sources=list(_HIDDEN_SESSION_SOURCES),
             order_by_last_active=True,
+            scope=scope,
         )  # fetch extra so we can skip current
 
         current_root = _resolve_to_parent(db, current_session_id) if current_session_id else None
@@ -459,7 +460,7 @@ def session_search(
 
     # Browse shape: no query → recent sessions.
     if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id)
+        return _list_recent_sessions(db, limit, current_session_id, scope=scope)
 
     # Parse role_filter
     role_list: Optional[List[str]] = None
