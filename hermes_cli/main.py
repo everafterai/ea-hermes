@@ -12931,6 +12931,10 @@ Examples:
         help="Platform to apply to (default: cli)",
     )
 
+    # hermes tools rbac [--json] — list toolsets with built-in role coverage
+    from hermes_cli.tools_list import register_tools_rbac_subcommand as _reg_tools_rbac
+    _reg_tools_rbac(tools_sub)
+
     def cmd_tools(args):
         action = getattr(args, "tools_action", None)
         if action in {"list", "disable", "enable"}:
