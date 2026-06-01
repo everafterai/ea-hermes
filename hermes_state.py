@@ -786,6 +786,24 @@ class SessionDB:
         """Create a new session record. Returns the session_id."""
         self._insert_session_row(session_id, source, **kwargs)
         return session_id
+
+    def backfill_session_scope(self, rows):
+        """Fill chat_id/chat_type on existing session rows where they are NULL.
+
+        ``rows`` is an iterable of dicts: {"session_id", "chat_id", "chat_type"}.
+        Only NULL columns are updated via COALESCE — never clobbers populated
+        scope. Idempotent and safe to call repeatedly.
+        """
+        def _do(conn):
+            for r in rows:
+                conn.execute(
+                    "UPDATE sessions SET "
+                    "chat_id = COALESCE(chat_id, ?), "
+                    "chat_type = COALESCE(chat_type, ?) "
+                    "WHERE id = ?",
+                    (r.get("chat_id"), r.get("chat_type"), r["session_id"]),
+                )
+        self._execute_write(_do)
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended.
 

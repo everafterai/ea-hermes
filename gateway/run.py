@@ -4110,6 +4110,16 @@ class GatewayRunner:
             except Exception as e:
                 logger.warning("Session suspension on startup failed: %s", e)
 
+        # One-time backfill of chat_id/chat_type onto legacy SQLite session
+        # rows from in-memory session origins (sessions.json).  Keeps legacy
+        # channel/DM history visible to the correct scope under session_search
+        # user-isolation (fail-closed on NULL scope).  Idempotent: only fills
+        # NULL columns, safe to run on every startup.
+        try:
+            self.session_store.reconcile_db_scope()
+        except Exception as e:
+            logger.debug("Session scope reconcile on startup failed: %s", e)
+
         # Stuck-loop detection (#7536): if a session has been active across
         # 3+ consecutive restarts, it's probably stuck in a loop (the same
         # history keeps causing the agent to hang).  Auto-suspend it so the

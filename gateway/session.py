@@ -717,7 +717,30 @@ class SessionStore:
                 print(f"[gateway] Warning: Failed to load sessions: {e}")
 
         self._loaded = True
-    
+
+    def reconcile_db_scope(self):
+        """One-time backfill of chat_id/chat_type onto SQLite session rows from
+        in-memory session origins (sessions.json). Safe to call repeatedly:
+        backfill_session_scope only fills NULLs."""
+        if not self._db:
+            return
+        self._ensure_loaded()
+        rows = []
+        for entry in self._entries.values():
+            origin = getattr(entry, "origin", None)
+            if origin is None:
+                continue
+            rows.append({
+                "session_id": entry.session_id,
+                "chat_id": getattr(origin, "chat_id", None),
+                "chat_type": getattr(origin, "chat_type", None),
+            })
+        if rows:
+            try:
+                self._db.backfill_session_scope(rows)
+            except Exception as e:
+                logger.debug("session scope backfill failed: %s", e)
+
     def _save(self) -> None:
         """Save sessions index to disk (kept for session key -> ID mapping)."""
         import tempfile

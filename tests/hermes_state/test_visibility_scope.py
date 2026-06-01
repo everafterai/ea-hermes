@@ -108,3 +108,27 @@ def test_create_session_scope_defaults_none(tmp_path):
     row = db.get_session("s2")
     assert row["chat_id"] is None
     assert row["chat_type"] is None
+
+
+def test_backfill_session_scope(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_old", source="slack")  # legacy row: chat_id/chat_type NULL
+    db._conn.commit()
+    db.backfill_session_scope([
+        {"session_id": "s_old", "chat_id": "C5", "chat_type": "group"},
+    ])
+    row = db.get_session("s_old")
+    assert row["chat_id"] == "C5"
+    assert row["chat_type"] == "group"
+
+
+def test_backfill_does_not_clobber_existing(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_new", source="slack", chat_id="C1", chat_type="group")
+    db._conn.commit()
+    db.backfill_session_scope([
+        {"session_id": "s_new", "chat_id": "WRONG", "chat_type": "dm"},
+    ])
+    row = db.get_session("s_new")
+    assert row["chat_id"] == "C1"  # untouched; only NULLs are filled
+    assert row["chat_type"] == "group"
