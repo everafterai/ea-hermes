@@ -804,6 +804,7 @@ class SessionDB:
                     (r.get("chat_id"), r.get("chat_type"), r["session_id"]),
                 )
         self._execute_write(_do)
+
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended.
 
