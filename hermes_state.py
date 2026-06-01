@@ -186,7 +186,7 @@ def _log_wal_fallback_once(db_label: str, exc: Exception) -> None:
 SHARED_CHAT_TYPES = ("group", "channel")
 
 
-def build_visibility_where(scope, alias="s"):
+def build_visibility_where(scope: Optional[Dict[str, Any]], alias: str = "s") -> Tuple[str, List[Any]]:
     """Build a SQL WHERE fragment + params restricting `sessions` rows to `scope`.
 
     scope is one of:
@@ -211,7 +211,7 @@ def build_visibility_where(scope, alias="s"):
     return "0 = 1", []
 
 
-def session_row_visible(row, scope):
+def session_row_visible(row: Dict[str, Any], scope: Optional[Dict[str, Any]]) -> bool:
     """Python mirror of build_visibility_where for a single session row dict.
 
     Used by the scroll path, which gates on a single session, not a query.

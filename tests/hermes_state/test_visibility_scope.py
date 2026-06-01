@@ -77,3 +77,17 @@ def test_schema_has_scope_columns(tmp_path):
     cols = {r[1] for r in db._conn.execute("PRAGMA table_info(sessions)").fetchall()}
     assert "chat_id" in cols
     assert "chat_type" in cols
+
+
+def test_session_row_visible_dm_excluded_under_channel_scope():
+    scope = {"kind": "channel", "platform": "slack", "chat_id": "C123"}
+    # A DM row in the same platform must not be visible under a channel scope.
+    assert not session_row_visible(
+        {"source": "slack", "chat_id": "C123", "chat_type": "dm", "user_id": "U1"}, scope
+    )
+
+
+def test_build_visibility_where_unknown_kind_fails_closed():
+    frag, params = build_visibility_where({"kind": "bogus"}, alias="s")
+    assert frag == "0 = 1"
+    assert params == []
