@@ -184,6 +184,7 @@ def _scroll(
     around_message_id: int,
     window: int = 5,
     current_session_id: str = None,
+    scope=None,
 ) -> str:
     """Scroll shape: return a window of messages centered on an anchor.
 
@@ -226,6 +227,11 @@ def _scroll(
         logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
         session_meta = {}
     if not session_meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+
+    from hermes_state import session_row_visible
+    if not session_row_visible(session_meta, scope):
+        # Do not disclose the existence of out-of-scope sessions.
         return tool_error(f"session_id not found: {session_id}", success=False)
 
     # Fetch the window
@@ -448,6 +454,7 @@ def session_search(
             around_message_id=around_message_id,
             window=window,
             current_session_id=current_session_id,
+            scope=scope,
         )
 
     # Limit clamp [1, 10]

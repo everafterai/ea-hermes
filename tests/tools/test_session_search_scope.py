@@ -191,3 +191,45 @@ def test_browse_channel_lists_channel_sessions(tmp_path, monkeypatch):
     sids = {r["session_id"] for r in json.loads(out)["results"]}
     assert "s_c1a" in sids
     assert "s_c2" not in sids
+
+
+def test_scroll_rejects_other_user_session(tmp_path, monkeypatch):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.append_message("s_alice", role="user", content="alice private note")
+    db.append_message("s_alice", role="assistant", content="ok")
+    db._conn.commit()
+    # Grab a real message id in Alice's session to scroll around.
+    mid = db._conn.execute(
+        "SELECT id FROM messages WHERE session_id='s_alice' ORDER BY id LIMIT 1"
+    ).fetchone()[0]
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="D_BOB", user_id="U_BOB")
+    try:
+        out = session_search(session_id="s_alice", around_message_id=mid, db=db)
+    finally:
+        clear_session_vars(tokens)
+    result = json.loads(out)
+    assert result["success"] is False
+    # Out-of-scope sessions must be indistinguishable from non-existent ones.
+    assert "not found" in result.get("error", "").lower()
+
+
+def test_scroll_allows_same_channel_session(tmp_path, monkeypatch):
+    db = SessionDB(tmp_path / "state.db")
+    # Alice's session lives in channel C1; Bob is also in C1 -> allowed.
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="C1", chat_type="group")
+    db.append_message("s_alice", role="user", content="channel message one")
+    db.append_message("s_alice", role="assistant", content="channel reply")
+    db._conn.commit()
+    mid = db._conn.execute(
+        "SELECT id FROM messages WHERE session_id='s_alice' ORDER BY id LIMIT 1"
+    ).fetchone()[0]
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="group", chat_id="C1", user_id="U_BOB")
+    try:
+        out = session_search(session_id="s_alice", around_message_id=mid, db=db, current_session_id="s_bob_other")
+    finally:
+        clear_session_vars(tokens)
+    result = json.loads(out)
+    assert result["success"] is True
