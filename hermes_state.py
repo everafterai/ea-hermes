@@ -2182,6 +2182,7 @@ class SessionDB:
         limit: int = 20,
         offset: int = 0,
         sort: str = None,
+        scope=None,
     ) -> List[Dict[str, Any]]:
         """
         Full-text search across session messages using FTS5.
@@ -2248,6 +2249,12 @@ class SessionDB:
             role_placeholders = ",".join("?" for _ in role_filter)
             where_clauses.append(f"m.role IN ({role_placeholders})")
             params.extend(role_filter)
+
+        # Identity scope (cross-user isolation). Applies to the main FTS5 path.
+        _scope_frag, _scope_params = build_visibility_where(scope, alias="s")
+        if _scope_frag:
+            where_clauses.append(_scope_frag)
+            params.extend(_scope_params)
 
         where_sql = " AND ".join(where_clauses)
         params.extend([limit, offset])
@@ -2321,6 +2328,10 @@ class SessionDB:
                 if role_filter:
                     tri_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
                     tri_params.extend(role_filter)
+                _tri_scope_frag, _tri_scope_params = build_visibility_where(scope, alias="s")
+                if _tri_scope_frag:
+                    tri_where.append(_tri_scope_frag)
+                    tri_params.extend(_tri_scope_params)
                 tri_sql = f"""
                     SELECT
                         m.id,
@@ -2376,6 +2387,10 @@ class SessionDB:
                 if role_filter:
                     like_where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
                     like_params.extend(role_filter)
+                _like_scope_frag, _like_scope_params = build_visibility_where(scope, alias="s")
+                if _like_scope_frag:
+                    like_where.append(_like_scope_frag)
+                    like_params.extend(_like_scope_params)
                 like_sql = f"""
                     SELECT m.id, m.session_id, m.role,
                            substr(m.content,

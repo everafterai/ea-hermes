@@ -308,6 +308,7 @@ def _discover(
     limit: int,
     sort: Optional[str],
     current_session_id: str = None,
+    scope=None,
 ) -> str:
     """Discovery shape: FTS5 + anchored window + bookends per hit. Single call."""
     role_list = role_filter if role_filter else ["user", "assistant"]
@@ -320,6 +321,7 @@ def _discover(
             limit=50,  # widen so dedup-by-lineage can find distinct sessions
             offset=0,
             sort=sort,
+            scope=scope,
         )
     except Exception as e:
         logging.error("FTS5 search failed: %s", e, exc_info=True)
@@ -433,6 +435,10 @@ def session_search(
             from hermes_state import format_session_db_unavailable
             return tool_error(format_session_db_unavailable(), success=False)
 
+    # Resolve the requester's visibility scope once. Reused by discovery
+    # (and, in later tasks, browse/scroll) to isolate cross-user data.
+    scope = resolve_search_scope()
+
     # Scroll shape takes precedence — explicit anchor beats any query.
     if (isinstance(session_id, str) and session_id.strip()) and around_message_id is not None:
         return _scroll(
@@ -474,6 +480,7 @@ def session_search(
         limit=limit,
         sort=sort_norm,
         current_session_id=current_session_id,
+        scope=scope,
     )
 
 
