@@ -37,7 +37,7 @@ from gateway.session_context import get_session_env
 from hermes_state import SHARED_CHAT_TYPES
 
 
-def resolve_search_scope():
+def resolve_search_scope() -> Optional[Dict[str, str]]:
     """Resolve the current request's visibility scope from session contextvars.
 
     Returns:

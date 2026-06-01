@@ -38,3 +38,15 @@ def test_scope_fail_closed_when_identity_unresolvable(monkeypatch):
     finally:
         clear_session_vars(tokens)
     assert scope == {"kind": "none"}
+
+
+def test_scope_channel_wins_when_user_id_also_present(monkeypatch):
+    # A shared channel with a user_id present must still scope to the CHANNEL,
+    # not the user — this is the Slack "whole channel is shared" rule.
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="group", chat_id="C123", user_id="U_PRESENT")
+    try:
+        scope = resolve_search_scope()
+    finally:
+        clear_session_vars(tokens)
+    assert scope == {"kind": "channel", "platform": "slack", "chat_id": "C123"}
