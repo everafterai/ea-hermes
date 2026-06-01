@@ -182,6 +182,57 @@ def _log_wal_fallback_once(db_label: str, exc: Exception) -> None:
         exc,
     )
 
+
+SHARED_CHAT_TYPES = ("group", "channel")
+
+
+def build_visibility_where(scope, alias="s"):
+    """Build a SQL WHERE fragment + params restricting `sessions` rows to `scope`.
+
+    scope is one of:
+      None                     -> admin/unscoped: ("", []) (no restriction)
+      {"kind": "channel", ...} -> same (platform, chat_id), any user/thread
+      {"kind": "user", ...}    -> same (platform, user_id)
+      {"kind": "none"}         -> fail-closed: ("0 = 1", [])
+    """
+    if scope is None:
+        return "", []
+    kind = scope.get("kind")
+    if kind == "channel":
+        placeholders = ",".join("?" for _ in SHARED_CHAT_TYPES)
+        frag = (
+            f"({alias}.source = ? AND {alias}.chat_id = ? "
+            f"AND {alias}.chat_type IN ({placeholders}))"
+        )
+        return frag, [scope["platform"], scope["chat_id"], *SHARED_CHAT_TYPES]
+    if kind == "user":
+        frag = f"({alias}.source = ? AND {alias}.user_id = ?)"
+        return frag, [scope["platform"], scope["user_id"]]
+    return "0 = 1", []
+
+
+def session_row_visible(row, scope):
+    """Python mirror of build_visibility_where for a single session row dict.
+
+    Used by the scroll path, which gates on a single session, not a query.
+    """
+    if scope is None:
+        return True
+    kind = scope.get("kind")
+    if kind == "channel":
+        return (
+            row.get("source") == scope["platform"]
+            and row.get("chat_id") == scope["chat_id"]
+            and row.get("chat_type") in SHARED_CHAT_TYPES
+        )
+    if kind == "user":
+        return (
+            row.get("source") == scope["platform"]
+            and row.get("user_id") == scope["user_id"]
+        )
+    return False
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
@@ -191,6 +242,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     user_id TEXT,
+    chat_id TEXT,
+    chat_type TEXT,
     model TEXT,
     model_config TEXT,
     system_prompt TEXT,
