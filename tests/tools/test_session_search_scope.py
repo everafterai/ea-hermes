@@ -111,3 +111,45 @@ def test_admin_search_sees_all(tmp_path, monkeypatch):
     out = session_search(query="bluebird", db=db)
     sids = {r["session_id"] for r in json.loads(out)["results"]}
     assert "s_alice" in sids and "s_bob" in sids
+
+
+def test_cjk_trigram_scope_isolation(tmp_path, monkeypatch):
+    # 3+ CJK chars -> trigram path. Verify the scope filter applies there.
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.append_message("s_alice", role="user", content="我的秘密项目代号是蓝鸟计划")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_TYPE", raising=False)
+    # Admin (no identity) must FIND it -> proves the CJK query routes & matches.
+    out_admin = session_search(query="秘密项目", db=db)
+    assert "s_alice" in {r["session_id"] for r in json.loads(out_admin)["results"]}
+    # Bob, in his own DM, must NOT see Alice's session.
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="D_BOB", user_id="U_BOB")
+    try:
+        out_bob = session_search(query="秘密项目", db=db)
+    finally:
+        clear_session_vars(tokens)
+    assert "s_alice" not in {r["session_id"] for r in json.loads(out_bob)["results"]}
+
+
+def test_cjk_like_scope_isolation(tmp_path, monkeypatch):
+    # 1-2 CJK chars -> LIKE fallback path. Verify the scope filter applies there.
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.append_message("s_alice", role="user", content="项目代号是蓝鸟")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_TYPE", raising=False)
+    out_admin = session_search(query="蓝鸟", db=db)
+    assert "s_alice" in {r["session_id"] for r in json.loads(out_admin)["results"]}
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="D_BOB", user_id="U_BOB")
+    try:
+        out_bob = session_search(query="蓝鸟", db=db)
+    finally:
+        clear_session_vars(tokens)
+    assert "s_alice" not in {r["session_id"] for r in json.loads(out_bob)["results"]}
