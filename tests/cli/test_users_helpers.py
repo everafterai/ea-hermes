@@ -119,3 +119,38 @@ def test_delete_last_user_deactivates():
 def test_delete_missing_raises():
     with pytest.raises(UsersError):
         apply_delete({"user_roles": {}}, "U1")
+
+
+# --- robustness: allow_admin_from stored as CSV string / scalar ---
+
+def test_demote_with_csv_allow_admin_from_does_not_corrupt():
+    extra = {"user_roles": {"U1": "admin"}, "allow_admin_from": "U1, U2"}
+    apply_update(extra, "U1", role="operator", name=None)
+    assert extra["allow_admin_from"] == ["U2"]  # not split into characters
+
+
+def test_promote_with_csv_allow_admin_from():
+    extra = {"user_roles": {"U1": "operator"}, "allow_admin_from": "U2"}
+    apply_update(extra, "U1", role="admin", name=None)
+    assert set(extra["allow_admin_from"]) == {"U1", "U2"}
+
+
+def test_delete_with_csv_allow_admin_from():
+    extra = {"user_roles": {"U1": "admin", "U2": "operator"}, "allow_admin_from": "U1,U2"}
+    apply_delete(extra, "U1")
+    assert "U1" not in extra["allow_admin_from"]
+
+
+# --- role canonicalization (case-insensitive in, lowercased stored) ---
+
+def test_role_is_case_insensitive_and_stored_lowercased():
+    extra = {}
+    apply_add(extra, "U1", "ADMIN", name=None)
+    assert extra["user_roles"]["U1"] == "admin"
+    assert "U1" in extra["allow_admin_from"]
+
+
+def test_custom_role_exact_config_name_accepted():
+    extra = {"roles": {"Auditor": {"toolsets": ["web"]}}}
+    apply_add(extra, "U1", "Auditor", name=None)
+    assert extra["user_roles"]["U1"] == "auditor"  # stored canonical

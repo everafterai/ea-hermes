@@ -51,12 +51,22 @@ def valid_roles(extra: Dict[str, Any]) -> Set[str]:
     return roles
 
 
-def _validate_role(extra: Dict[str, Any], role: str) -> None:
+def _canonical_role(extra: Dict[str, Any], role: str) -> str:
+    """Validate ``role`` and return its canonical (lowercased) form.
+
+    The gateway lowercases role names when resolving grants
+    (``gateway.tool_access._coerce_roles``), so the value stored in
+    ``user_roles`` MUST be lowercased or the role→toolset lookup misses and the
+    user is denied. We therefore canonicalize on the way in. Matching is
+    case-insensitive, so ``ADMIN`` and a config-defined ``Auditor`` both work.
+    """
+    canon = str(role).strip().lower()
     allowed = valid_roles(extra)
-    if role not in allowed:
+    if canon not in allowed:
         raise UsersError(
             f"unknown role {role!r}; valid roles: {', '.join(sorted(allowed))}"
         )
+    return canon
 
 
 def _user_roles(extra: Dict[str, Any]) -> Dict[str, Any]:
@@ -67,8 +77,41 @@ def _user_names(extra: Dict[str, Any]) -> Dict[str, Any]:
     return extra.setdefault("user_names", {})
 
 
-def _allow_admin_from(extra: Dict[str, Any]) -> List[Any]:
-    return extra.setdefault("allow_admin_from", [])
+def _coerce_admin_list(raw: Any) -> List[str]:
+    """Normalize an ``allow_admin_from`` value into an ordered, de-duped list.
+
+    Hand-edited configs may store it as a list, a comma-separated string, or a
+    bare scalar (mirroring ``gateway.slash_access._coerce_id_list``). Coercing
+    to a list here keeps the mutation helpers from corrupting a CSV string
+    (e.g. iterating its characters on removal).
+    """
+    if raw is None:
+        items: List[Any] = []
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        items = list(raw)
+    elif isinstance(raw, str):
+        items = [s for s in raw.split(",")]
+    else:
+        items = [raw]
+    out: List[str] = []
+    seen: Set[str] = set()
+    for it in items:
+        s = str(it).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _allow_admin_from(extra: Dict[str, Any]) -> List[str]:
+    """Return ``allow_admin_from`` as a normalized list, writing it back in place.
+
+    Always materializes a list so callers (admin-sync, delete) can mutate it
+    safely regardless of how the value was stored in the YAML file.
+    """
+    coerced = _coerce_admin_list(extra.get("allow_admin_from"))
+    extra["allow_admin_from"] = coerced
+    return coerced
 
 
 def _sync_admin(extra: Dict[str, Any], user_id: str, role: str) -> Tuple[bool, bool]:
@@ -97,7 +140,7 @@ def apply_add(
     name: Optional[str],
 ) -> MutationResult:
     """Add a brand-new user with ``role`` (and optional ``name``)."""
-    _validate_role(extra, role)
+    role = _canonical_role(extra, role)
     user_roles = _user_roles(extra)
     if user_id in user_roles:
         raise UsersError(
@@ -129,7 +172,7 @@ def apply_update(
         raise UsersError("nothing to update; pass a role and/or --name")
     result = MutationResult()
     if role is not None:
-        _validate_role(extra, role)
+        role = _canonical_role(extra, role)
         user_roles[user_id] = role
         added, removed = _sync_admin(extra, user_id, role)
         result.admin_added = added
@@ -149,9 +192,10 @@ def apply_delete(extra: Dict[str, Any], user_id: str) -> MutationResult:
     names = extra.get("user_names")
     if isinstance(names, dict) and user_id in names:
         del names[user_id]
-    allow = extra.get("allow_admin_from")
-    if isinstance(allow, list) and user_id in allow:
-        extra["allow_admin_from"] = [u for u in allow if u != user_id]
-        result.admin_removed = True
+    if "allow_admin_from" in extra:
+        allow = _allow_admin_from(extra)  # coerces CSV/scalar -> list in place
+        if user_id in allow:
+            extra["allow_admin_from"] = [u for u in allow if u != user_id]
+            result.admin_removed = True
     result.rbac_deactivated = len(user_roles) == 0
     return result
