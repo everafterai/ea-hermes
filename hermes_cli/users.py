@@ -17,8 +17,12 @@ concerns belong to the I/O / wiring layers (Tasks B/C).
 
 from __future__ import annotations
 
+import json
+import os
+import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gateway.tool_access import BUILTIN_ROLES
 
@@ -199,3 +203,253 @@ def apply_delete(extra: Dict[str, Any], user_id: str) -> MutationResult:
             result.admin_removed = True
     result.rbac_deactivated = len(user_roles) == 0
     return result
+
+
+# =============================================================================
+# I/O layer — load config.yaml, mutate slack.extra, write back atomically.
+# =============================================================================
+#
+# Everything above is pure (mutates an in-memory dict). The helpers below add
+# the file I/O and the argparse handlers. The pure helpers stay untouched: the
+# handlers partially-apply them and hand them to ``_mutate_slack_extra`` as a
+# mutator callback.
+
+
+_NO_SLACK_MSG = (
+    "No `slack:` platform configured in {path}; "
+    "add Slack config before managing users."
+)
+
+
+def _mutate_slack_extra(mutator: Callable[[Dict[str, Any]], MutationResult]) -> MutationResult:
+    """Round-trip ``config.yaml`` through ``mutator`` while preserving comments.
+
+    Loads ``config.yaml`` with ruamel's round-trip loader, navigates to (or
+    creates) ``slack.extra``, hands that mapping to ``mutator`` (one of the
+    ``apply_*`` helpers, partially applied), then writes the whole document
+    back atomically using the same temp-file + fsync + atomic-replace pattern
+    as ``hermes_cli.utils.atomic_roundtrip_yaml_update``.
+
+    Raises :class:`UsersError` if there is no ``slack:`` platform configured —
+    we never fabricate a Slack block, because writing ``user_roles`` under a
+    non-existent platform would silently do nothing useful (and could confuse
+    the operator into thinking RBAC is active when no Slack platform reads it).
+    """
+    from ruamel.yaml import YAML
+    from ruamel.yaml.comments import CommentedMap
+
+    from hermes_cli.config import get_config_path
+    from utils import (
+        atomic_replace,
+        _preserve_file_mode,
+        _restore_file_mode,
+    )
+
+    path = get_config_path()
+    if not path.exists():
+        raise UsersError(_NO_SLACK_MSG.format(path=path))
+
+    yaml_rt = YAML(typ="rt")
+    yaml_rt.preserve_quotes = True
+    yaml_rt.allow_unicode = True
+    yaml_rt.default_flow_style = False
+    yaml_rt.indent(mapping=2, sequence=4, offset=2)
+
+    with path.open("r", encoding="utf-8") as f:
+        config = yaml_rt.load(f) or CommentedMap()
+
+    if (
+        not isinstance(config, dict)
+        or "slack" not in config
+        or config.get("slack") is None
+    ):
+        raise UsersError(_NO_SLACK_MSG.format(path=path))
+
+    slack = config["slack"]
+    extra = slack.get("extra")
+    if extra is None:
+        extra = CommentedMap()
+        slack["extra"] = extra
+
+    result = mutator(extra)
+
+    original_mode = _preserve_file_mode(path)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.stem}_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml_rt.dump(config, f)
+            f.flush()
+            os.fsync(f.fileno())
+        real_path = atomic_replace(tmp_path, path)
+        _restore_file_mode(real_path, original_mode)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    return result
+
+
+def _read_slack_extra() -> Dict[str, Any]:
+    """Return ``slack.extra`` from the on-disk config (or ``{}`` if absent)."""
+    from hermes_cli.config import read_raw_config
+
+    cfg = read_raw_config()
+    slack = cfg.get("slack") or {}
+    return slack.get("extra") or {}
+
+
+# =============================================================================
+# argparse handlers — take an args namespace, return an int exit code.
+# Printing lives ONLY here; the pure helpers never print.
+# =============================================================================
+
+
+def handle_users_list(args) -> int:
+    """List Slack RBAC users (table by default, JSON with ``--json``)."""
+    extra = _read_slack_extra()
+    user_roles = extra.get("user_roles") or {}
+    user_names = extra.get("user_names") or {}
+    allow = _coerce_admin_list(extra.get("allow_admin_from"))
+    allow_set = set(allow)
+    rbac_active = bool(user_roles)
+
+    rows = []
+    for user_id in sorted(user_roles):
+        rows.append(
+            {
+                "user_id": user_id,
+                "name": user_names.get(user_id) or "",
+                "role": user_roles.get(user_id) or "",
+                "admin": user_id in allow_set,
+            }
+        )
+
+    if getattr(args, "json", False):
+        payload = {
+            "rbac_active": rbac_active,
+            "users": rows,
+            "allow_admin_from": list(allow),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if rbac_active:
+        print(
+            "Slack RBAC is ACTIVE — only listed users may use Slack."
+        )
+    else:
+        print(
+            "Slack RBAC is INACTIVE — no user_roles set; Slack access is open."
+        )
+
+    if not rows:
+        print("No Slack users configured.")
+        return 0
+
+    id_w = max(len("USER_ID"), *(len(r["user_id"]) for r in rows))
+    name_w = max(len("NAME"), *(len(r["name"]) for r in rows))
+    role_w = max(len("ROLE"), *(len(r["role"]) for r in rows))
+    header = (
+        f"{'USER_ID':<{id_w}}  {'NAME':<{name_w}}  "
+        f"{'ROLE':<{role_w}}  ADMIN"
+    )
+    print(header)
+    for r in rows:
+        admin_mark = "✓" if r["admin"] else ""
+        print(
+            f"{r['user_id']:<{id_w}}  {r['name']:<{name_w}}  "
+            f"{r['role']:<{role_w}}  {admin_mark}"
+        )
+    return 0
+
+
+def handle_users_add(args) -> int:
+    """Add a new Slack RBAC user."""
+    name = getattr(args, "name", None)
+    try:
+        result = _mutate_slack_extra(
+            lambda extra: apply_add(extra, args.user_id, args.role, name)
+        )
+    except UsersError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    detail = f"Added Slack user {args.user_id} with role {args.role.lower()}"
+    if name:
+        detail += f" (name: {name})"
+    print(detail + ".")
+
+    if result.rbac_activated:
+        print(
+            "\n⚠️  WARNING: Slack RBAC is now ACTIVE. Any Slack user NOT in "
+            "user_roles will be DENIED access.\n"
+            "    Add more users with: hermes users add <user_id> <role> [--name NAME]"
+        )
+    if result.admin_added:
+        print(
+            f"Granted slash-admin to {args.user_id} (added to allow_admin_from)."
+        )
+    return 0
+
+
+def handle_users_update(args) -> int:
+    """Update an existing Slack RBAC user's role and/or name."""
+    role = getattr(args, "role", None)
+    name = getattr(args, "name", None)
+    try:
+        result = _mutate_slack_extra(
+            lambda extra: apply_update(extra, args.user_id, role, name)
+        )
+    except UsersError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    parts = []
+    if role is not None:
+        parts.append(f"role={role.lower()}")
+    if name is not None:
+        parts.append(f"name={name}")
+    print(f"Updated Slack user {args.user_id} ({', '.join(parts)}).")
+
+    if result.admin_added:
+        print(
+            f"Granted slash-admin to {args.user_id} (added to allow_admin_from)."
+        )
+    if result.admin_removed:
+        print(
+            f"Revoked slash-admin from {args.user_id} "
+            "(removed from allow_admin_from)."
+        )
+    return 0
+
+
+def handle_users_delete(args) -> int:
+    """Remove a Slack RBAC user from roles, names, and allow_admin_from."""
+    try:
+        result = _mutate_slack_extra(
+            lambda extra: apply_delete(extra, args.user_id)
+        )
+    except UsersError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Removed Slack user {args.user_id}.")
+
+    if result.admin_removed:
+        print(
+            f"Revoked slash-admin from {args.user_id} "
+            "(removed from allow_admin_from)."
+        )
+    if result.rbac_deactivated:
+        print(
+            "\nNotice: Slack RBAC is now INACTIVE — no users remain in "
+            "user_roles, so Slack access is open again."
+        )
+    return 0
