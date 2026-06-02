@@ -206,8 +206,12 @@ def build_visibility_where(scope: Optional[Dict[str, Any]], alias: str = "s") ->
         )
         return frag, [scope["platform"], scope["chat_id"], *SHARED_CHAT_TYPES]
     if kind == "user":
-        frag = f"({alias}.source = ? AND {alias}.user_id = ?)"
-        return frag, [scope["platform"], scope["user_id"]]
+        placeholders = ",".join("?" for _ in SHARED_CHAT_TYPES)
+        frag = (
+            f"({alias}.source = ? AND {alias}.user_id = ? "
+            f"AND ({alias}.chat_type IS NULL OR {alias}.chat_type NOT IN ({placeholders})))"
+        )
+        return frag, [scope["platform"], scope["user_id"], *SHARED_CHAT_TYPES]
     return "0 = 1", []
 
 
@@ -229,6 +233,7 @@ def session_row_visible(row: Dict[str, Any], scope: Optional[Dict[str, Any]]) ->
         return (
             row.get("source") == scope["platform"]
             and row.get("user_id") == scope["user_id"]
+            and row.get("chat_type") not in SHARED_CHAT_TYPES
         )
     return False
 

@@ -21,8 +21,24 @@ def test_build_visibility_where_user():
     frag, params = build_visibility_where(
         {"kind": "user", "platform": "telegram", "user_id": "U9"}, alias="s"
     )
-    assert frag == "(s.source = ? AND s.user_id = ?)"
-    assert params == ["telegram", "U9"]
+    assert frag == "(s.source = ? AND s.user_id = ? AND (s.chat_type IS NULL OR s.chat_type NOT IN (?,?)))"
+    assert params == ["telegram", "U9", "group", "channel"]
+
+
+def test_session_row_visible_user_scope_excludes_own_channel():
+    scope = {"kind": "user", "platform": "slack", "user_id": "U1"}
+    # Same user's DM session -> visible
+    assert session_row_visible(
+        {"source": "slack", "chat_id": "D1", "chat_type": "dm", "user_id": "U1"}, scope
+    )
+    # Same user's CHANNEL session -> NOT visible from DM scope (strict partition)
+    assert not session_row_visible(
+        {"source": "slack", "chat_id": "C1", "chat_type": "group", "user_id": "U1"}, scope
+    )
+    # Legacy NULL chat_type owned by the user -> still visible (treated as non-channel)
+    assert session_row_visible(
+        {"source": "slack", "chat_id": None, "chat_type": None, "user_id": "U1"}, scope
+    )
 
 
 def test_build_visibility_where_admin_is_no_clause():
