@@ -237,23 +237,26 @@ def test_create_folder_requires_name():
 # --------------------------------------------------------------------------- #
 
 
-def test_register_wires_four_tools():
+def test_register_wires_all_tools_under_correct_toolsets():
     import plugins.google_drive_sa as plugin
 
-    names = []
+    by_toolset: dict[str, set] = {}
 
     class _Ctx:
         def register_tool(self, **kw):
-            names.append(kw["name"])
-            assert kw["toolset"] == "google_drive"
             assert callable(kw["check_fn"])
+            by_toolset.setdefault(kw["toolset"], set()).add(kw["name"])
 
     plugin.register(_Ctx())
-    assert set(names) == {
-        "drive_list_files",
-        "drive_read_file",
-        "drive_upload",
-        "drive_create_folder",
+    assert by_toolset["google_drive"] == {
+        "drive_list_files", "drive_read_file", "drive_upload", "drive_create_folder",
+    }
+    assert by_toolset["google_sheets"] == {
+        "sheets_get_values", "sheets_update_values", "sheets_append_values",
+        "sheets_clear", "sheets_create",
+    }
+    assert by_toolset["google_docs"] == {
+        "docs_get", "docs_insert_text", "docs_replace_text", "docs_create",
     }
 
 
@@ -274,7 +277,214 @@ def test_check_available_optimistic_when_deps_absent(monkeypatch):
     assert gd_client.check_available() is True
 
 
-def test_toolset_is_default_off():
+def test_toolsets_are_default_off():
     from hermes_cli.tools_config import _DEFAULT_OFF_TOOLSETS
 
-    assert "google_drive" in _DEFAULT_OFF_TOOLSETS
+    assert {"google_drive", "google_sheets", "google_docs"} <= _DEFAULT_OFF_TOOLSETS
+
+
+# --------------------------------------------------------------------------- #
+# Sheets
+# --------------------------------------------------------------------------- #
+
+from plugins.google_drive_sa import sheets_tools as sh  # noqa: E402
+
+
+class _FakeValues:
+    def __init__(self):
+        self.calls = {}
+
+    def get(self, **kw):
+        self.calls["get"] = kw
+        return _FakeRequest({"range": kw["range"], "values": [["a", "1"], ["b", "2"]]})
+
+    def update(self, **kw):
+        self.calls["update"] = kw
+        return _FakeRequest({"updatedRange": kw["range"], "updatedCells": 4})
+
+    def append(self, **kw):
+        self.calls["append"] = kw
+        return _FakeRequest({"updates": {"updatedRange": "S!A3", "updatedRows": 1}})
+
+    def clear(self, **kw):
+        self.calls["clear"] = kw
+        return _FakeRequest({"clearedRange": kw["range"]})
+
+
+class _FakeSheets:
+    def __init__(self):
+        self._values = _FakeValues()
+
+    def values(self):
+        return self._values
+
+
+class _FakeSheetsService:
+    def __init__(self):
+        self._s = _FakeSheets()
+
+    def spreadsheets(self):
+        return self._s
+
+
+@pytest.fixture
+def fake_sheets(monkeypatch):
+    svc = _FakeSheetsService()
+    monkeypatch.setattr(sh.client, "get_sheets_service", lambda: svc)
+    return svc
+
+
+def test_sheets_get_values(fake_sheets):
+    out = json.loads(sh._handle_sheets_get_values({"spreadsheet_id": "s1", "range": "S!A1:B2"}))
+    assert out["rows"] == 2
+    assert out["values"] == [["a", "1"], ["b", "2"]]
+
+
+def test_sheets_update_coerces_flat_row(fake_sheets):
+    out = json.loads(
+        sh._handle_sheets_update_values(
+            {"spreadsheet_id": "s1", "range": "S!A1", "values": ["x", "y"]}
+        )
+    )
+    assert out["success"] is True
+    # Flat row wrapped into a 2D body.
+    assert fake_sheets.spreadsheets().values().calls["update"]["body"]["values"] == [["x", "y"]]
+    assert fake_sheets.spreadsheets().values().calls["update"]["valueInputOption"] == "USER_ENTERED"
+
+
+def test_sheets_update_accepts_json_string(fake_sheets):
+    sh._handle_sheets_update_values(
+        {"spreadsheet_id": "s1", "range": "S!A1", "values": '[[1,2],[3,4]]'}
+    )
+    assert fake_sheets.spreadsheets().values().calls["update"]["body"]["values"] == [[1, 2], [3, 4]]
+
+
+def test_sheets_append(fake_sheets):
+    out = json.loads(
+        sh._handle_sheets_append_values(
+            {"spreadsheet_id": "s1", "range": "S!A1", "values": [["z"]], "value_input_option": "RAW"}
+        )
+    )
+    assert out["updated_rows"] == 1
+    call = fake_sheets.spreadsheets().values().calls["append"]
+    assert call["insertDataOption"] == "INSERT_ROWS"
+    assert call["valueInputOption"] == "RAW"
+
+
+def test_sheets_clear(fake_sheets):
+    out = json.loads(sh._handle_sheets_clear({"spreadsheet_id": "s1", "range": "S!A1:B2"}))
+    assert out["cleared_range"] == "S!A1:B2"
+
+
+def test_sheets_update_requires_ids():
+    out = json.loads(sh._handle_sheets_update_values({"values": [[1]]}))
+    assert "error" in out
+
+
+def test_sheets_create_uses_drive(fake_service):
+    out = json.loads(sh._handle_sheets_create({"title": "Budget", "folder_id": "P"}))
+    assert out["success"] is True
+    body = fake_service.files().calls["create"]["body"]
+    assert body["mimeType"] == "application/vnd.google-apps.spreadsheet"
+    assert body["parents"] == ["P"]
+
+
+# --------------------------------------------------------------------------- #
+# Docs
+# --------------------------------------------------------------------------- #
+
+from plugins.google_drive_sa import docs_tools as dc  # noqa: E402
+
+
+class _FakeDocuments:
+    def __init__(self, doc):
+        self._doc = doc
+        self.calls = {}
+
+    def get(self, **kw):
+        self.calls["get"] = kw
+        return _FakeRequest(self._doc)
+
+    def batchUpdate(self, **kw):
+        self.calls["batchUpdate"] = kw
+        return _FakeRequest({"replies": [{"replaceAllText": {"occurrencesChanged": 3}}]})
+
+
+class _FakeDocsService:
+    def __init__(self, doc):
+        self._d = _FakeDocuments(doc)
+
+    def documents(self):
+        return self._d
+
+
+_SAMPLE_DOC = {
+    "title": "Notes",
+    "body": {
+        "content": [
+            {"endIndex": 1, "sectionBreak": {}},
+            {
+                "endIndex": 13,
+                "paragraph": {"elements": [{"textRun": {"content": "hello world\n"}}]},
+            },
+        ]
+    },
+}
+
+
+@pytest.fixture
+def fake_docs(monkeypatch):
+    svc = _FakeDocsService(_SAMPLE_DOC)
+    monkeypatch.setattr(dc.client, "get_docs_service", lambda: svc)
+    return svc
+
+
+def test_docs_get_extracts_text(fake_docs):
+    out = json.loads(dc._handle_docs_get({"document_id": "d1"}))
+    assert out["title"] == "Notes"
+    assert out["content"] == "hello world\n"
+
+
+def test_docs_insert_appends_at_computed_end(fake_docs):
+    out = json.loads(dc._handle_docs_insert_text({"document_id": "d1", "text": "!"}))
+    assert out["success"] is True
+    # endIndex of last element is 13 → insert just before final newline at 12.
+    req = fake_docs.documents().calls["batchUpdate"]["body"]["requests"][0]
+    assert req["insertText"]["location"]["index"] == 12
+    assert req["insertText"]["text"] == "!"
+
+
+def test_docs_insert_at_start(fake_docs):
+    dc._handle_docs_insert_text({"document_id": "d1", "text": "X", "location": "start"})
+    req = fake_docs.documents().calls["batchUpdate"]["body"]["requests"][0]
+    assert req["insertText"]["location"]["index"] == 1
+
+
+def test_docs_insert_explicit_index(fake_docs):
+    dc._handle_docs_insert_text({"document_id": "d1", "text": "X", "index": 5})
+    req = fake_docs.documents().calls["batchUpdate"]["body"]["requests"][0]
+    assert req["insertText"]["location"]["index"] == 5
+
+
+def test_docs_insert_requires_text(fake_docs):
+    out = json.loads(dc._handle_docs_insert_text({"document_id": "d1", "text": ""}))
+    assert "error" in out
+
+
+def test_docs_replace_text(fake_docs):
+    out = json.loads(
+        dc._handle_docs_replace_text(
+            {"document_id": "d1", "find": "hello", "replace": "hi", "match_case": True}
+        )
+    )
+    assert out["occurrences_changed"] == 3
+    req = fake_docs.documents().calls["batchUpdate"]["body"]["requests"][0]
+    assert req["replaceAllText"]["containsText"]["matchCase"] is True
+
+
+def test_docs_create_uses_drive(fake_service):
+    out = json.loads(dc._handle_docs_create({"title": "Spec"}))
+    assert out["success"] is True
+    assert fake_service.files().calls["create"]["body"]["mimeType"] == (
+        "application/vnd.google-apps.document"
+    )

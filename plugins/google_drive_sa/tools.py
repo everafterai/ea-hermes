@@ -60,6 +60,30 @@ def _str(args: dict, key: str, default: str = "") -> str:
     return str(val).strip() if val is not None else default
 
 
+def create_drive_file(
+    name: str,
+    mime_type: str,
+    folder_id: str = "",
+    fields: str = "id, name, mimeType, parents, webViewLink",
+) -> dict:
+    """Create an (empty) Drive file of *mime_type*, optionally in *folder_id*.
+
+    Used by drive_create_folder and the Docs/Sheets ``*_create`` tools — the
+    Drive API is the only create path that can drop a new Google-native file
+    straight into a *shared* folder (the Docs/Sheets ``create`` endpoints
+    always land in the SA's own My Drive root).
+    """
+    body: dict[str, Any] = {"name": name, "mimeType": mime_type}
+    if folder_id:
+        body["parents"] = [folder_id]
+    return (
+        client.get_service()
+        .files()
+        .create(body=body, fields=fields, supportsAllDrives=True)
+        .execute()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # drive_list_files
 # --------------------------------------------------------------------------- #

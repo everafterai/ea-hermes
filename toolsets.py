@@ -324,6 +324,23 @@ TOOLSETS = {
         "includes": []
     },
 
+    "google_sheets": {
+        "description": "Google Sheets editing via a service account / ADC — read, update, append, clear values, create",
+        "tools": [
+            "sheets_get_values", "sheets_update_values", "sheets_append_values",
+            "sheets_clear", "sheets_create",
+        ],
+        "includes": []
+    },
+
+    "google_docs": {
+        "description": "Google Docs editing via a service account / ADC — read, insert/replace text, create",
+        "tools": [
+            "docs_get", "docs_insert_text", "docs_replace_text", "docs_create",
+        ],
+        "includes": []
+    },
+
 
     # Scenario-specific toolsets
     

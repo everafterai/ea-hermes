@@ -27,14 +27,20 @@ import threading
 from typing import Any
 
 # Full-drive scope is required to see folders *shared with* the SA (drive.file
-# only sees files the app itself created). Override via env for least-privilege
-# deployments that only need read.
-_DEFAULT_SCOPES = ("https://www.googleapis.com/auth/drive",)
+# only sees files the app itself created). Sheets/Docs structured editing each
+# need their own scope. Override via env for least-privilege deployments.
+# NOTE: scopes are only *requested* on the token — actual access still comes
+# from sharing the file with the SA's email (Editor for writes).
+_DEFAULT_SCOPES = (
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/documents",
+)
 
 _LAZY_FEATURE = "plugin.google_drive_sa"
 
 _lock = threading.Lock()
-_service: Any = None
+_services: dict[tuple[str, str], Any] = {}
 _avail: bool | None = None
 
 
@@ -83,20 +89,38 @@ def _load_credentials() -> Any:
     return creds
 
 
-def get_service() -> Any:
-    """Return a cached Drive v3 service, installing deps + building on first call."""
-    global _service
-    if _service is not None:
-        return _service
+def _get_service(api: str, version: str) -> Any:
+    """Return a cached googleapiclient service, installing deps + building once."""
+    key = (api, version)
+    svc = _services.get(key)
+    if svc is not None:
+        return svc
     with _lock:
-        if _service is not None:
-            return _service
+        svc = _services.get(key)
+        if svc is not None:
+            return svc
         _ensure_deps()
         from googleapiclient.discovery import build
 
         creds = _load_credentials()
-        _service = build("drive", "v3", credentials=creds, cache_discovery=False)
-        return _service
+        svc = build(api, version, credentials=creds, cache_discovery=False)
+        _services[key] = svc
+        return svc
+
+
+def get_service() -> Any:
+    """Cached Drive v3 service."""
+    return _get_service("drive", "v3")
+
+
+def get_sheets_service() -> Any:
+    """Cached Sheets v4 service."""
+    return _get_service("sheets", "v4")
+
+
+def get_docs_service() -> Any:
+    """Cached Docs v1 service."""
+    return _get_service("docs", "v1")
 
 
 def check_available() -> bool:
@@ -123,8 +147,8 @@ def check_available() -> bool:
 
 
 def reset_cache() -> None:
-    """Drop cached service/availability (used by tests and after re-auth)."""
-    global _service, _avail
+    """Drop cached services/availability (used by tests and after re-auth)."""
+    global _avail
     with _lock:
-        _service = None
+        _services.clear()
         _avail = None
