@@ -12951,9 +12951,17 @@ class GatewayRunner:
         ):
             name = name[1:-1].strip()
 
+        from hermes_state import build_scope, session_row_visible
+        _resume_scope = build_scope(
+            source.platform.value if source.platform else "",
+            source.chat_type,
+            source.chat_id,
+            source.user_id,
+        )
+
         def _list_titled_sessions() -> list[dict]:
             user_source = source.platform.value if source.platform else None
-            sessions = self._session_db.list_sessions_rich(source=user_source, limit=10)
+            sessions = self._session_db.list_sessions_rich(source=user_source, limit=10, scope=_resume_scope)
             return [s for s in sessions if s.get("title")][:10]
 
         if not name:
@@ -12996,6 +13004,13 @@ class GatewayRunner:
             else:
                 target_id = self._session_db.resolve_session_by_title(name)
         if not target_id:
+            return t("gateway.resume.not_found", name=name)
+        # Identity gate: a user may only resume a session visible to their scope.
+        # Gate the user-identified session (not the continuation tip, which may be
+        # a NULL-scoped child of the same lineage). Out-of-scope is reported as
+        # "not found" — no existence disclosure.
+        _target_row = self._session_db.get_session(target_id)
+        if not session_row_visible(_target_row or {}, _resume_scope):
             return t("gateway.resume.not_found", name=name)
         # Compression creates child continuations that hold the live transcript.
         # Follow that chain so gateway /resume matches CLI behavior (#15000).

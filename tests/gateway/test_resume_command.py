@@ -25,6 +25,13 @@ def _make_event(text="/resume", platform=Platform.TELEGRAM,
     return MessageEvent(text=text, source=source)
 
 
+# Identity that the default _make_event() source carries. /resume is now scoped
+# to the requester's identity, so resumable sessions must be seeded as owned by
+# this identity (a telegram DM) to be visible to the requester. Sessions seeded
+# WITHOUT these fields are NULL-identity and intentionally invisible.
+_OWNER_IDENTITY = {"user_id": "12345", "chat_id": "67890", "chat_type": "dm"}
+
+
 def _session_key_for_event(event):
     """Get the session key that build_session_key produces for an event."""
     return build_session_key(event.source)
@@ -77,8 +84,8 @@ class TestHandleResumeCommand:
         """With no argument, lists recently titled sessions."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("sess_001", "telegram")
-        db.create_session("sess_002", "telegram")
+        db.create_session("sess_001", "telegram", **_OWNER_IDENTITY)
+        db.create_session("sess_002", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("sess_001", "Research")
         db.set_session_title("sess_002", "Coding")
 
@@ -112,11 +119,11 @@ class TestHandleResumeCommand:
         """Numeric argument resumes the indexed titled session from the list."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("sess_001", "telegram")
-        db.create_session("sess_002", "telegram")
+        db.create_session("sess_001", "telegram", **_OWNER_IDENTITY)
+        db.create_session("sess_002", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("sess_001", "Research")
         db.set_session_title("sess_002", "Coding")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume 2")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -134,9 +141,9 @@ class TestHandleResumeCommand:
         """Out-of-range numeric arguments show a helpful error."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("sess_001", "telegram")
+        db.create_session("sess_001", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("sess_001", "Research")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume 9")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -153,9 +160,9 @@ class TestHandleResumeCommand:
         """Resolves a title and switches to that session."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("old_session_abc", "telegram")
+        db.create_session("old_session_abc", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("old_session_abc", "My Project")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume My Project")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -188,7 +195,7 @@ class TestHandleResumeCommand:
         """Returns friendly message when already on the requested session."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("current_session_001", "Active Project")
 
         event = _make_event(text="/resume Active Project")
@@ -203,11 +210,11 @@ class TestHandleResumeCommand:
         """Asking for 'My Project' when 'My Project #2' exists gets the latest."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("sess_v1", "telegram")
+        db.create_session("sess_v1", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("sess_v1", "My Project")
-        db.create_session("sess_v2", "telegram")
+        db.create_session("sess_v2", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("sess_v2", "My Project #2")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume My Project")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -226,12 +233,14 @@ class TestHandleResumeCommand:
         from hermes_state import SessionDB
 
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("compressed_root", "telegram")
+        db.create_session("compressed_root", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("compressed_root", "Compressed Work")
         db.end_session("compressed_root", "compression")
+        # Child continuation deliberately left NULL-identity: the resume gate is
+        # on the user-identified root, not the continuation tip it follows to.
         db.create_session("compressed_child", "telegram", parent_session_id="compressed_root")
         db.append_message("compressed_child", "user", "hello from continuation")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume Compressed Work")
         runner = _make_runner(
@@ -259,9 +268,9 @@ class TestHandleResumeCommand:
         """Switching sessions clears any cached running agent."""
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("old_session", "telegram")
+        db.create_session("old_session", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("old_session", "Old Work")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume Old Work")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -285,9 +294,9 @@ class TestHandleResumeCommand:
         import threading
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("old_session", "telegram")
+        db.create_session("old_session", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("old_session", "Old Work")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume Old Work")
         runner = _make_runner(session_db=db, current_session_id="current_session_001",
@@ -312,9 +321,9 @@ class TestHandleResumeCommand:
         """
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("abc123", "telegram")
+        db.create_session("abc123", "telegram", **_OWNER_IDENTITY)
         db.set_session_title("abc123", "Bracketed")
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         for raw in ("<abc123>", "[abc123]", '"abc123"', "'abc123'"):
             event = _make_event(text=f"/resume {raw}")
@@ -341,9 +350,9 @@ class TestHandleResumeCommand:
         """
         from hermes_state import SessionDB
         db = SessionDB(db_path=tmp_path / "state.db")
-        db.create_session("unnamed_session_xyz", "telegram")
+        db.create_session("unnamed_session_xyz", "telegram", **_OWNER_IDENTITY)
         # Deliberately no title set — this session can ONLY be resolved by ID.
-        db.create_session("current_session_001", "telegram")
+        db.create_session("current_session_001", "telegram", **_OWNER_IDENTITY)
 
         event = _make_event(text="/resume unnamed_session_xyz")
         runner = _make_runner(

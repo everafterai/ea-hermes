@@ -4,6 +4,7 @@ from hermes_state import (
     build_visibility_where,
     session_row_visible,
     SHARED_CHAT_TYPES,
+    build_scope,
 )
 
 
@@ -181,3 +182,19 @@ def test_backfill_does_not_clobber_existing(tmp_path):
     row = db.get_session("s_new")
     assert row["chat_id"] == "C1"  # untouched; only NULLs are filled
     assert row["chat_type"] == "group"
+
+
+def test_build_scope_channel():
+    assert build_scope("slack", "group", "C1", "U1") == {"kind": "channel", "platform": "slack", "chat_id": "C1"}
+
+
+def test_build_scope_user_for_dm():
+    assert build_scope("telegram", "dm", "D1", "U9") == {"kind": "user", "platform": "telegram", "user_id": "U9"}
+
+
+def test_build_scope_admin_when_no_platform():
+    assert build_scope("", "dm", "", "") is None
+
+
+def test_build_scope_fail_closed():
+    assert build_scope("slack", "group", "", "") == {"kind": "none"}

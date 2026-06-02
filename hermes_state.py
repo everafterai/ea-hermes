@@ -186,6 +186,27 @@ def _log_wal_fallback_once(db_label: str, exc: Exception) -> None:
 SHARED_CHAT_TYPES = ("group", "channel")
 
 
+def build_scope(platform, chat_type, chat_id, user_id):
+    """Resolve a visibility scope dict from raw identity fields.
+
+    Single source of truth for the scoping rule, consumed by
+    build_visibility_where / session_row_visible.
+
+    Returns:
+        None                     -> admin/unscoped (no platform identity)
+        {"kind": "channel", ...} -> shared channel: (platform, chat_id)
+        {"kind": "user", ...}    -> private/DM: (platform, user_id)
+        {"kind": "none"}         -> fail-closed (platform present, identity unresolvable)
+    """
+    if not platform:
+        return None
+    if chat_type in SHARED_CHAT_TYPES and chat_id:
+        return {"kind": "channel", "platform": platform, "chat_id": chat_id}
+    if user_id:
+        return {"kind": "user", "platform": platform, "user_id": user_id}
+    return {"kind": "none"}
+
+
 def build_visibility_where(scope: Optional[Dict[str, Any]], alias: str = "s") -> Tuple[str, List[Any]]:
     """Build a SQL WHERE fragment + params restricting `sessions` rows to `scope`.
 

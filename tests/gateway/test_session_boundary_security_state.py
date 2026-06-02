@@ -89,6 +89,25 @@ def _make_resume_runner():
     runner._session_db = MagicMock()
     runner._session_db.resolve_session_by_title.return_value = "resumed-session"
     runner._session_db.get_session_title.return_value = "Resumed Work"
+
+    # /resume is now identity-scoped: the handler's gate calls
+    # get_session(target_id) and checks session_row_visible against the
+    # requester's scope (telegram DM, user u1). Return a row owned by that
+    # identity for the resolved target; the title lookup ("Resumed Work")
+    # must miss so resolution falls through to resolve_session_by_title.
+    def _get_session(sid):
+        if sid == "resumed-session":
+            return {
+                "id": "resumed-session",
+                "source": "telegram",
+                "user_id": "u1",
+                "chat_id": "c1",
+                "chat_type": "dm",
+            }
+        return None
+
+    runner._session_db.get_session.side_effect = _get_session
+    runner._session_db.resolve_resume_session_id.side_effect = lambda sid: sid
     return runner, session_key
 
 

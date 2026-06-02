@@ -34,30 +34,21 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from gateway.session_context import get_session_env
-from hermes_state import SHARED_CHAT_TYPES
+from hermes_state import SHARED_CHAT_TYPES, build_scope
 
 
 def resolve_search_scope() -> Optional[Dict[str, str]]:
     """Resolve the current request's visibility scope from session contextvars.
 
-    Returns:
-        None                     -> admin/unscoped (local CLI/cron: no platform identity)
-        {"kind": "channel", ...} -> shared channel: (platform, chat_id)
-        {"kind": "user", ...}    -> private/DM: (platform, user_id)
-        {"kind": "none"}         -> fail-closed (gateway identity present but unresolvable)
+    Returns None (admin), a channel/user scope dict, or {"kind":"none"} (fail-closed).
+    See hermes_state.build_scope for the rule.
     """
-    platform = get_session_env("HERMES_SESSION_PLATFORM", "")
-    if not platform:
-        # No gateway identity -> local CLI / cron operator is admin.
-        return None
-    chat_type = get_session_env("HERMES_SESSION_CHAT_TYPE", "")
-    chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "")
-    user_id = get_session_env("HERMES_SESSION_USER_ID", "")
-    if chat_type in SHARED_CHAT_TYPES and chat_id:
-        return {"kind": "channel", "platform": platform, "chat_id": chat_id}
-    if user_id:
-        return {"kind": "user", "platform": platform, "user_id": user_id}
-    return {"kind": "none"}
+    return build_scope(
+        get_session_env("HERMES_SESSION_PLATFORM", ""),
+        get_session_env("HERMES_SESSION_CHAT_TYPE", ""),
+        get_session_env("HERMES_SESSION_CHAT_ID", ""),
+        get_session_env("HERMES_SESSION_USER_ID", ""),
+    )
 
 
 # Sources that are excluded from session browsing/searching by default.
