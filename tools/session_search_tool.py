@@ -34,7 +34,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from gateway.session_context import get_session_env
-from hermes_state import SHARED_CHAT_TYPES, build_scope
+from hermes_state import build_scope
 
 
 def resolve_search_scope() -> Optional[Dict[str, str]]:

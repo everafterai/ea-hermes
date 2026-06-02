@@ -186,7 +186,12 @@ def _log_wal_fallback_once(db_label: str, exc: Exception) -> None:
 SHARED_CHAT_TYPES = ("group", "channel")
 
 
-def build_scope(platform, chat_type, chat_id, user_id):
+def build_scope(
+    platform: str,
+    chat_type: Optional[str],
+    chat_id: Optional[str],
+    user_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
     """Resolve a visibility scope dict from raw identity fields.
 
     Single source of truth for the scoping rule, consumed by
