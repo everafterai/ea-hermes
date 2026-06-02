@@ -1,11 +1,15 @@
 """Tests for the ``hermes users`` I/O layer + argparse handlers (Task B).
 
 These exercise the file-touching layer in ``hermes_cli/users.py``:
-``handle_users_{list,add,update,delete}`` plus ``_mutate_slack_extra`` /
-``_read_slack_extra``. They point Hermes at a temporary HERMES_HOME (via the
+``handle_users_{list,add,update,delete}`` plus ``_mutate_slack`` /
+``_read_slack``. They point Hermes at a temporary HERMES_HOME (via the
 ``monkeypatch.setenv("HERMES_HOME", ...)`` mechanism the rest of the suite
 uses) seeded with a ``config.yaml`` that contains a *commented* ``slack:``
 block, so we can assert comment preservation across writes.
+
+User data (user_roles/user_names/allow_admin_from) lives directly under the
+top-level ``slack:`` block — that's where the gateway reads it (it bridges
+those keys into the runtime ``extra``), NOT under ``slack.extra``.
 """
 
 import types
@@ -19,8 +23,7 @@ CONFIG_WITH_SLACK = """\
 slack:
   # IMPORTANT: keep this comment — it proves comment preservation.
   bot_token: xoxb-test
-  extra:
-    foo: bar
+  require_mention: true
 """
 
 CONFIG_NO_SLACK = """\
@@ -63,11 +66,11 @@ def _write_config(home, text):
     return path
 
 
-def _load_extra(home):
-    """yaml.safe_load the on-disk config and return slack.extra (or {})."""
+def _load_slack(home):
+    """yaml.safe_load the on-disk config and return the top-level slack block."""
     path = home / "config.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return (data.get("slack") or {}).get("extra") or {}
+    return data.get("slack") or {}
 
 
 def _ns(**kwargs):
@@ -85,7 +88,7 @@ def test_add_writes_user_roles_and_preserves_comment(hermes_home, capsys):
     rc = handle_users_add(_ns(user_id="U1", role="operator", name=None))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert extra["user_roles"]["U1"] == "operator"
 
     # The pre-existing comment survives the round-trip write.
@@ -100,7 +103,7 @@ def test_add_with_name_writes_user_names(hermes_home, capsys):
     rc = handle_users_add(_ns(user_id="U1", role="operator", name="Alice"))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert extra["user_names"]["U1"] == "Alice"
 
 
@@ -111,7 +114,7 @@ def test_add_admin_lands_in_allow_admin_from(hermes_home, capsys):
     rc = handle_users_add(_ns(user_id="U1", role="admin", name=None))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert "U1" in extra["allow_admin_from"]
     out = capsys.readouterr().out
     assert "slash-admin" in out
@@ -146,7 +149,7 @@ def test_update_demote_admin_removes_from_allow_admin_from(hermes_home, capsys):
     rc = handle_users_update(_ns(user_id="U1", role="operator", name=None))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert extra["user_roles"]["U1"] == "operator"
     assert "U1" not in extra.get("allow_admin_from", [])
     out = capsys.readouterr().out
@@ -163,7 +166,7 @@ def test_update_name_only(hermes_home, capsys):
     rc = handle_users_update(_ns(user_id="U1", role=None, name="Bob"))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert extra["user_names"]["U1"] == "Bob"
     assert extra["user_roles"]["U1"] == "operator"
 
@@ -181,7 +184,7 @@ def test_delete_removes_everywhere_and_deactivates(hermes_home, capsys):
     rc = handle_users_delete(_ns(user_id="U1"))
     assert rc == 0
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert "U1" not in (extra.get("user_roles") or {})
     assert "U1" not in (extra.get("user_names") or {})
     assert "U1" not in (extra.get("allow_admin_from") or [])
@@ -320,10 +323,9 @@ def test_add_invalid_role_returns_1(hermes_home, capsys):
 CONFIG_BAD_USER_ROLES = """\
 slack:
   bot_token: xoxb-test
-  extra:
-    user_roles:
-      - U1
-      - U2
+  user_roles:
+    - U1
+    - U2
 """
 
 
@@ -343,3 +345,42 @@ def test_add_malformed_user_roles_degrades_gracefully(hermes_home, capsys):
     rc = handle_users_add(_ns(user_id="U3", role="operator", name=None))
     assert rc == 1
     assert "not a mapping" in capsys.readouterr().err
+
+
+# --- regression: user data lives TOP-LEVEL under slack:, not slack.extra ----
+# The gateway bridges slack.user_roles / allow_admin_from / roles into the
+# runtime extra (gateway/config.py), so the canonical hand-edit location is
+# directly under `slack:`. An earlier version of this CLI wrongly used
+# slack.extra and could not see real-world configs.
+
+CONFIG_REAL_SHAPE = """\
+slack:
+  require_mention: true
+  user_roles:
+    U01SFDDP154: admin
+"""
+
+
+def test_list_reads_top_level_user_roles(hermes_home, capsys):
+    import json as _json
+    from hermes_cli.users import handle_users_list
+
+    _write_config(hermes_home, CONFIG_REAL_SHAPE)
+    rc = handle_users_list(_ns(json=True))
+    assert rc == 0
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["rbac_active"] is True
+    assert "U01SFDDP154" in {u["user_id"] for u in payload["users"]}
+
+
+def test_add_writes_top_level_not_extra(hermes_home, capsys):
+    from hermes_cli.users import handle_users_add
+
+    _write_config(hermes_home, CONFIG_WITH_SLACK)
+    rc = handle_users_add(_ns(user_id="U9", role="operator", name=None))
+    assert rc == 0
+    data = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    # Written under the top-level slack block...
+    assert data["slack"]["user_roles"]["U9"] == "operator"
+    # ...and NOT under a nested slack.extra.
+    assert "user_roles" not in (data["slack"].get("extra") or {})

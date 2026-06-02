@@ -1,7 +1,10 @@
 """Pure mutation helpers for the ``hermes users`` CLI.
 
 This module is the logic layer for managing Slack RBAC users that live under
-``slack.extra`` in ``~/.hermes/config.yaml``:
+the top-level ``slack:`` platform block in ``~/.hermes/config.yaml`` (the
+gateway config loader bridges these keys into the platform's runtime ``extra``
+— see ``gateway/config.py`` — so the canonical hand-edit location is directly
+under ``slack:``, NOT under ``slack.extra``):
 
   - ``user_roles``      — map ``{user_id: role}``; its presence ACTIVATES RBAC.
   - ``user_names``      — optional map ``{user_id: human_name}``.
@@ -78,13 +81,13 @@ def _as_map(val: Any, key: str) -> Optional[Dict[str, Any]]:
 
     Returns ``None`` when absent, the dict when it's a mapping, and raises
     :class:`UsersError` when it's some other type — so a hand-corrupted
-    ``slack.extra.<key>`` surfaces as a clean error instead of a traceback.
+    ``slack.<key>`` surfaces as a clean error instead of a traceback.
     """
     if val is None:
         return None
     if not isinstance(val, dict):
         raise UsersError(
-            f"`slack.extra.{key}` in config.yaml is not a mapping "
+            f"`slack.{key}` in config.yaml is not a mapping "
             f"({type(val).__name__}); fix it by hand before using `hermes users`."
         )
     return val
@@ -231,13 +234,15 @@ def apply_delete(extra: Dict[str, Any], user_id: str) -> MutationResult:
 
 
 # =============================================================================
-# I/O layer — load config.yaml, mutate slack.extra, write back atomically.
+# I/O layer — load config.yaml, mutate the top-level slack block, write back.
 # =============================================================================
 #
 # Everything above is pure (mutates an in-memory dict). The helpers below add
 # the file I/O and the argparse handlers. The pure helpers stay untouched: the
-# handlers partially-apply them and hand them to ``_mutate_slack_extra`` as a
-# mutator callback.
+# handlers partially-apply them and hand them to ``_mutate_slack`` as a
+# mutator callback. The mutated mapping is the ``slack:`` block itself, because
+# the gateway reads user_roles/allow_admin_from/roles from there (top-level),
+# bridging them into the runtime ``extra`` at load time.
 
 
 _NO_SLACK_MSG = (
@@ -246,14 +251,19 @@ _NO_SLACK_MSG = (
 )
 
 
-def _mutate_slack_extra(mutator: Callable[[Dict[str, Any]], MutationResult]) -> MutationResult:
+def _mutate_slack(mutator: Callable[[Dict[str, Any]], MutationResult]) -> MutationResult:
     """Round-trip ``config.yaml`` through ``mutator`` while preserving comments.
 
-    Loads ``config.yaml`` with ruamel's round-trip loader, navigates to (or
-    creates) ``slack.extra``, hands that mapping to ``mutator`` (one of the
-    ``apply_*`` helpers, partially applied), then writes the whole document
-    back atomically using the same temp-file + fsync + atomic-replace pattern
-    as ``utils.atomic_roundtrip_yaml_update``.
+    Loads ``config.yaml`` with ruamel's round-trip loader, hands the top-level
+    ``slack:`` block to ``mutator`` (one of the ``apply_*`` helpers, partially
+    applied), then writes the whole document back atomically using the same
+    temp-file + fsync + atomic-replace pattern as
+    ``utils.atomic_roundtrip_yaml_update``.
+
+    The mutated mapping is the ``slack:`` block itself (NOT ``slack.extra``):
+    the gateway config loader bridges top-level ``slack.user_roles`` /
+    ``allow_admin_from`` / ``roles`` into the platform's runtime ``extra``, so
+    that is the canonical hand-edit location.
 
     Raises :class:`UsersError` if there is no ``slack:`` platform configured —
     we never fabricate a Slack block, because writing ``user_roles`` under a
@@ -291,12 +301,8 @@ def _mutate_slack_extra(mutator: Callable[[Dict[str, Any]], MutationResult]) -> 
         raise UsersError(_NO_SLACK_MSG.format(path=path))
 
     slack = config["slack"]
-    extra = slack.get("extra")
-    if extra is None:
-        extra = CommentedMap()
-        slack["extra"] = extra
 
-    result = mutator(extra)
+    result = mutator(slack)
 
     original_mode = _preserve_file_mode(path)
     fd, tmp_path = tempfile.mkstemp(
@@ -321,13 +327,12 @@ def _mutate_slack_extra(mutator: Callable[[Dict[str, Any]], MutationResult]) -> 
     return result
 
 
-def _read_slack_extra() -> Dict[str, Any]:
-    """Return ``slack.extra`` from the on-disk config (or ``{}`` if absent)."""
+def _read_slack() -> Dict[str, Any]:
+    """Return the top-level ``slack:`` block from the on-disk config (or ``{}``)."""
     from hermes_cli.config import read_raw_config
 
     cfg = read_raw_config()
-    slack = cfg.get("slack") or {}
-    return slack.get("extra") or {}
+    return cfg.get("slack") or {}
 
 
 # =============================================================================
@@ -338,7 +343,7 @@ def _read_slack_extra() -> Dict[str, Any]:
 
 def handle_users_list(args) -> int:
     """List Slack RBAC users (table by default, JSON with ``--json``)."""
-    extra = _read_slack_extra()
+    extra = _read_slack()
     try:
         user_roles = _as_map(extra.get("user_roles"), "user_roles") or {}
         user_names = _as_map(extra.get("user_names"), "user_names") or {}
@@ -403,7 +408,7 @@ def handle_users_add(args) -> int:
     """Add a new Slack RBAC user."""
     name = getattr(args, "name", None)
     try:
-        result = _mutate_slack_extra(
+        result = _mutate_slack(
             lambda extra: apply_add(extra, args.user_id, args.role, name)
         )
     except UsersError as e:
@@ -433,7 +438,7 @@ def handle_users_update(args) -> int:
     role = getattr(args, "role", None)
     name = getattr(args, "name", None)
     try:
-        result = _mutate_slack_extra(
+        result = _mutate_slack(
             lambda extra: apply_update(extra, args.user_id, role, name)
         )
     except UsersError as e:
@@ -462,7 +467,7 @@ def handle_users_update(args) -> int:
 def handle_users_delete(args) -> int:
     """Remove a Slack RBAC user from roles, names, and allow_admin_from."""
     try:
-        result = _mutate_slack_extra(
+        result = _mutate_slack(
             lambda extra: apply_delete(extra, args.user_id)
         )
     except UsersError as e:

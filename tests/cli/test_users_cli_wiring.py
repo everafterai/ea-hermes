@@ -39,8 +39,7 @@ CONFIG_WITH_SLACK = """\
 # Hermes config — managed by hand for this test.
 slack:
   bot_token: xoxb-test
-  extra:
-    foo: bar
+  require_mention: true
 """
 
 
@@ -67,10 +66,10 @@ def _write_config(home, text):
     return path
 
 
-def _load_extra(home):
+def _load_slack(home):
     path = home / "config.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return (data.get("slack") or {}).get("extra") or {}
+    return data.get("slack") or {}
 
 
 # --- parsing ---------------------------------------------------------------
@@ -129,7 +128,7 @@ def test_add_dispatch_writes_user_to_disk(hermes_home, capsys):
     rc = args.func(args)  # success path returns the (zero) rc, no SystemExit
     assert not rc
 
-    extra = _load_extra(hermes_home)
+    extra = _load_slack(hermes_home)
     assert extra["user_roles"]["U1"] == "operator"
     assert extra["user_names"]["U1"] == "Alice"
 
