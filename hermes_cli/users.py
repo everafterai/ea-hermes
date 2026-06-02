@@ -482,3 +482,80 @@ def handle_users_delete(args) -> int:
             "user_roles, so Slack access is open again."
         )
     return 0
+
+
+# =============================================================================
+# argparse wiring — register the `users` command group on the top-level CLI.
+# =============================================================================
+
+
+def _exit_on_failure(handler: Callable[[Any], int]) -> Callable[[Any], Optional[int]]:
+    """Wrap a ``handle_users_*`` handler so a non-zero rc becomes the exit code.
+
+    ``hermes_cli.main.main`` dispatches via ``args.func(args)`` and IGNORES the
+    return value (it does not ``sys.exit`` on it). Our handlers return an int
+    exit code, so without this adapter ``hermes users add <dupe>`` would print
+    its error but still exit 0. The adapter raises ``SystemExit(rc)`` when the
+    handler returns a truthy (non-zero) rc, and returns the rc otherwise. This
+    is scoped to the ``users`` group only — global dispatch behavior for every
+    other command is unchanged.
+
+    The wrapped handler is exposed via ``__wrapped_handler__`` so tests can
+    assert each subparser routes to the genuine Task-B handler.
+    """
+
+    def _run(args) -> Optional[int]:
+        rc = handler(args)
+        if rc:
+            raise SystemExit(rc)
+        return rc
+
+    _run.__wrapped_handler__ = handler  # type: ignore[attr-defined]
+    return _run
+
+
+def register_users_subcommands(subparsers) -> None:
+    """Register the `users` command group on the top-level CLI subparsers."""
+    users_parser = subparsers.add_parser(
+        "users",
+        help="Manage Slack RBAC users (roles, optional names, slash-admin sync)",
+        description=(
+            "Add, update, list, or delete Slack users in ~/.hermes/config.yaml "
+            "(slack.extra.user_roles). Promoting a user to the 'admin' role also "
+            "adds them to slack.extra.allow_admin_from; changing them to a "
+            "non-admin role or deleting them removes that grant.\n\n"
+            "Roles: admin, operator, readonly, chat_only (plus any custom roles "
+            "defined under slack.extra.roles).\n\n"
+            "NOTE: setting the first user activates Slack RBAC — after that, any "
+            "Slack user NOT listed is denied."
+        ),
+    )
+    users_sub = users_parser.add_subparsers(dest="users_action")
+
+    p_list = users_sub.add_parser("list", help="List Slack users and their roles")
+    p_list.add_argument("--json", action="store_true", default=False,
+                        help="Print machine-readable JSON instead of a table")
+    p_list.set_defaults(func=_exit_on_failure(handle_users_list))
+
+    p_add = users_sub.add_parser("add", help="Add a Slack user with a role")
+    p_add.add_argument("user_id", help="Slack user id, e.g. U0123ABCD")
+    p_add.add_argument("role", help="admin | operator | readonly | chat_only | <custom>")
+    p_add.add_argument("--name", default=None, help="Optional human name (for auditing)")
+    p_add.set_defaults(func=_exit_on_failure(handle_users_add))
+
+    p_update = users_sub.add_parser("update", help="Change a Slack user's role and/or name")
+    p_update.add_argument("user_id")
+    p_update.add_argument("role", nargs="?", default=None,
+                          help="New role (omit to change only --name)")
+    p_update.add_argument("--name", default=None, help="New human name")
+    p_update.set_defaults(func=_exit_on_failure(handle_users_update))
+
+    p_delete = users_sub.add_parser("delete", help="Remove a Slack user")
+    p_delete.add_argument("user_id")
+    p_delete.set_defaults(func=_exit_on_failure(handle_users_delete))
+
+    # `hermes users` with no action -> print help, non-zero exit.
+    def _users_help(_args) -> int:
+        users_parser.print_help()
+        return 1
+    users_parser.set_defaults(func=_exit_on_failure(_users_help))

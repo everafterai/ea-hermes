@@ -12950,6 +12950,12 @@ Examples:
     tools_parser.set_defaults(func=cmd_tools)
 
     # =========================================================================
+    # users command — manage Slack RBAC users (slack.extra.user_roles)
+    # =========================================================================
+    from hermes_cli.users import register_users_subcommands
+    register_users_subcommands(subparsers)
+
+    # =========================================================================
     # computer-use command — manage Computer Use (cua-driver) on macOS
     # =========================================================================
     computer_use_parser = subparsers.add_parser(
