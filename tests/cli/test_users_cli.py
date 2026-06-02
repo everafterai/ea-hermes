@@ -313,3 +313,33 @@ def test_add_invalid_role_returns_1(hermes_home, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "unknown role" in err
+
+
+# --- malformed config degrades gracefully (no traceback) -------------------
+
+CONFIG_BAD_USER_ROLES = """\
+slack:
+  bot_token: xoxb-test
+  extra:
+    user_roles:
+      - U1
+      - U2
+"""
+
+
+def test_list_malformed_user_roles_degrades_gracefully(hermes_home, capsys):
+    from hermes_cli.users import handle_users_list
+
+    _write_config(hermes_home, CONFIG_BAD_USER_ROLES)
+    rc = handle_users_list(_ns(json=False))
+    assert rc == 1
+    assert "not a mapping" in capsys.readouterr().err
+
+
+def test_add_malformed_user_roles_degrades_gracefully(hermes_home, capsys):
+    from hermes_cli.users import handle_users_add
+
+    _write_config(hermes_home, CONFIG_BAD_USER_ROLES)
+    rc = handle_users_add(_ns(user_id="U3", role="operator", name=None))
+    assert rc == 1
+    assert "not a mapping" in capsys.readouterr().err

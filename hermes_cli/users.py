@@ -73,12 +73,37 @@ def _canonical_role(extra: Dict[str, Any], role: str) -> str:
     return canon
 
 
+def _as_map(val: Any, key: str) -> Optional[Dict[str, Any]]:
+    """Validate that a config value is a mapping (or absent).
+
+    Returns ``None`` when absent, the dict when it's a mapping, and raises
+    :class:`UsersError` when it's some other type — so a hand-corrupted
+    ``slack.extra.<key>`` surfaces as a clean error instead of a traceback.
+    """
+    if val is None:
+        return None
+    if not isinstance(val, dict):
+        raise UsersError(
+            f"`slack.extra.{key}` in config.yaml is not a mapping "
+            f"({type(val).__name__}); fix it by hand before using `hermes users`."
+        )
+    return val
+
+
 def _user_roles(extra: Dict[str, Any]) -> Dict[str, Any]:
-    return extra.setdefault("user_roles", {})
+    existing = _as_map(extra.get("user_roles"), "user_roles")
+    if existing is None:
+        existing = {}
+        extra["user_roles"] = existing
+    return existing
 
 
 def _user_names(extra: Dict[str, Any]) -> Dict[str, Any]:
-    return extra.setdefault("user_names", {})
+    existing = _as_map(extra.get("user_names"), "user_names")
+    if existing is None:
+        existing = {}
+        extra["user_names"] = existing
+    return existing
 
 
 def _coerce_admin_list(raw: Any) -> List[str]:
@@ -228,7 +253,7 @@ def _mutate_slack_extra(mutator: Callable[[Dict[str, Any]], MutationResult]) -> 
     creates) ``slack.extra``, hands that mapping to ``mutator`` (one of the
     ``apply_*`` helpers, partially applied), then writes the whole document
     back atomically using the same temp-file + fsync + atomic-replace pattern
-    as ``hermes_cli.utils.atomic_roundtrip_yaml_update``.
+    as ``utils.atomic_roundtrip_yaml_update``.
 
     Raises :class:`UsersError` if there is no ``slack:`` platform configured —
     we never fabricate a Slack block, because writing ``user_roles`` under a
@@ -314,8 +339,12 @@ def _read_slack_extra() -> Dict[str, Any]:
 def handle_users_list(args) -> int:
     """List Slack RBAC users (table by default, JSON with ``--json``)."""
     extra = _read_slack_extra()
-    user_roles = extra.get("user_roles") or {}
-    user_names = extra.get("user_names") or {}
+    try:
+        user_roles = _as_map(extra.get("user_roles"), "user_roles") or {}
+        user_names = _as_map(extra.get("user_names"), "user_names") or {}
+    except UsersError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     allow = _coerce_admin_list(extra.get("allow_admin_from"))
     allow_set = set(allow)
     rbac_active = bool(user_roles)
