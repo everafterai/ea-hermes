@@ -191,8 +191,10 @@ def build_visibility_where(scope: Optional[Dict[str, Any]], alias: str = "s") ->
 
     scope is one of:
       None                     -> admin/unscoped: ("", []) (no restriction)
-      {"kind": "channel", ...} -> same (platform, chat_id), any user/thread
-      {"kind": "user", ...}    -> same (platform, user_id)
+      {"kind": "channel", ...} -> same (platform, chat_id) AND a shared chat_type
+      {"kind": "user", ...}    -> same (platform, user_id) AND a non-channel
+                                  chat_type (strict surface partition: a DM scope
+                                  never sees channel sessions, even the user's own)
       {"kind": "none"}         -> fail-closed: ("0 = 1", [])
     """
     if scope is None:
@@ -207,6 +209,11 @@ def build_visibility_where(scope: Optional[Dict[str, Any]], alias: str = "s") ->
         return frag, [scope["platform"], scope["chat_id"], *SHARED_CHAT_TYPES]
     if kind == "user":
         placeholders = ",".join("?" for _ in SHARED_CHAT_TYPES)
+        # Strict surface partition: a DM scope excludes channel-type rows so a
+        # user's own channel sessions don't bleed into their private view.
+        # The explicit `chat_type IS NULL` is REQUIRED — do NOT collapse this to
+        # a bare `chat_type NOT IN (...)`: in SQL, `NULL NOT IN (...)` is NULL
+        # (not TRUE), which would silently hide legacy/DM rows with NULL chat_type.
         frag = (
             f"({alias}.source = ? AND {alias}.user_id = ? "
             f"AND ({alias}.chat_type IS NULL OR {alias}.chat_type NOT IN ({placeholders})))"
@@ -230,6 +237,8 @@ def session_row_visible(row: Dict[str, Any], scope: Optional[Dict[str, Any]]) ->
             and row.get("chat_type") in SHARED_CHAT_TYPES
         )
     if kind == "user":
+        # Mirror of the SQL user branch: strict partition excludes channel-type
+        # rows; None (legacy/DM) is not in SHARED_CHAT_TYPES so it stays visible.
         return (
             row.get("source") == scope["platform"]
             and row.get("user_id") == scope["user_id"]
