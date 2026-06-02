@@ -526,11 +526,11 @@ def register_users_subcommands(subparsers) -> None:
         help="Manage Slack RBAC users (roles, optional names, slash-admin sync)",
         description=(
             "Add, update, list, or delete Slack users in ~/.hermes/config.yaml "
-            "(slack.extra.user_roles). Promoting a user to the 'admin' role also "
-            "adds them to slack.extra.allow_admin_from; changing them to a "
-            "non-admin role or deleting them removes that grant.\n\n"
+            "(slack.user_roles). Promoting a user to the 'admin' role also adds "
+            "them to slack.allow_admin_from; changing them to a non-admin role "
+            "or deleting them removes that grant.\n\n"
             "Roles: admin, operator, readonly, chat_only (plus any custom roles "
-            "defined under slack.extra.roles).\n\n"
+            "defined under slack.roles).\n\n"
             "NOTE: setting the first user activates Slack RBAC — after that, any "
             "Slack user NOT listed is denied."
         ),
