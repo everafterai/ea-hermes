@@ -4,12 +4,12 @@ These verify that ``register_users_subcommands`` attaches a ``users`` group with
 ``list/add/update/delete`` subparsers that parse correctly and dispatch to the
 Task-B handlers (through a thin exit-code adapter).
 
-The full top-level CLI parser is constructed inline inside ``hermes_cli.main.main``
-(~thousands of lines) and is not factored into a reusable ``build_parser()``.
-Rather than reconstruct that, we exercise ``register_users_subcommands`` against a
-fresh ``argparse.ArgumentParser`` + subparsers — the exact object main.py hands it
-(``subparsers`` from ``build_top_level_parser``). This keeps the test focused and
-low-risk while covering parsing, dispatch, and exit-code propagation.
+The ``users`` group is registered inside ``hermes_cli.main.main`` (after
+``build_top_level_parser`` returns), so we exercise ``register_users_subcommands``
+directly against a fresh ``argparse.ArgumentParser`` + subparsers — the same
+subparsers-action type main.py hands it. The registration is self-contained, so
+this seam faithfully covers parsing, dispatch, and exit-code propagation without
+reconstructing the full top-level parser.
 """
 
 import argparse
