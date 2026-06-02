@@ -220,6 +220,25 @@ async def test_branch_preserves_persisted_assistant_metadata():
     assert assistant_kwargs["codex_message_items"] == [{"id": "m1", "type": "message"}]
 
 
+@pytest.mark.asyncio
+async def test_branch_session_inherits_source_identity():
+    """The branched session row must carry the source's user/channel identity.
+
+    Fail-closed session_search scoping makes a NULL-identity row invisible to
+    its owner, so /branch must stamp user_id/chat_id/chat_type from the source.
+    The source fixture is a Telegram DM with user_id=u1, chat_id=c1, type=dm.
+    """
+    runner, _session_key = _make_branch_runner()
+
+    result = await runner._handle_branch_command(_make_event("/branch"))
+
+    assert "Branched to" in result
+    create_kwargs = runner._session_db.create_session.call_args.kwargs
+    assert create_kwargs["user_id"] == "u1"
+    assert create_kwargs["chat_id"] == "c1"
+    assert create_kwargs["chat_type"] == "dm"
+
+
 def test_clear_session_boundary_security_state_is_scoped():
     """The helper must wipe only the target session's approval/yolo state.
 

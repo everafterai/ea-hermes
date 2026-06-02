@@ -388,12 +388,16 @@ def compress_context(
             except Exception:
                 os.environ["HERMES_SESSION_ID"] = agent.session_id
             agent._session_db_created = False
+            _parent_row = agent._session_db.get_session(old_session_id) or {}
             agent._session_db.create_session(
                 session_id=agent.session_id,
                 source=agent.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
                 model=agent.model,
                 model_config=agent._session_init_model_config,
                 parent_session_id=old_session_id,
+                user_id=_parent_row.get("user_id"),
+                chat_id=_parent_row.get("chat_id"),
+                chat_type=_parent_row.get("chat_type"),
             )
             agent._session_db_created = True
             # Auto-number the title for the continuation session

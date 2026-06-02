@@ -13085,6 +13085,9 @@ class GatewayRunner:
                 source=source.platform.value if source.platform else "gateway",
                 model=(self.config.get("model", {}) or {}).get("default") if isinstance(self.config, dict) else None,
                 parent_session_id=parent_session_id,
+                user_id=source.user_id,
+                chat_id=source.chat_id,
+                chat_type=source.chat_type,
             )
         except Exception as e:
             logger.error("Failed to create branch session: %s", e)

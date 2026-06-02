@@ -138,6 +138,39 @@ def test_backfill_session_scope(tmp_path):
     assert row["chat_type"] == "group"
 
 
+def test_continuation_inherits_parent_scope(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("parent", source="slack", user_id="U1", chat_id="C1", chat_type="group")
+    db._conn.commit()
+    parent = db.get_session("parent")
+    # Mirror the compression/branch inheritance pattern:
+    db.create_session(
+        "child", source="slack", parent_session_id="parent",
+        user_id=parent.get("user_id"), chat_id=parent.get("chat_id"), chat_type=parent.get("chat_type"),
+    )
+    child = db.get_session("child")
+    assert child["user_id"] == "U1"
+    assert child["chat_id"] == "C1"
+    assert child["chat_type"] == "group"
+
+
+def test_continuation_inherits_missing_parent_as_none(tmp_path):
+    # Compression's `get_session(old) or {}` fallback: a missing parent row
+    # yields {}, so .get(...) returns None for all three identity fields —
+    # same as the pre-fix behavior (no regression).
+    db = SessionDB(tmp_path / "state.db")
+    parent = db.get_session("ghost") or {}
+    assert parent == {}
+    db.create_session(
+        "child", source="slack",
+        user_id=parent.get("user_id"), chat_id=parent.get("chat_id"), chat_type=parent.get("chat_type"),
+    )
+    child = db.get_session("child")
+    assert child["user_id"] is None
+    assert child["chat_id"] is None
+    assert child["chat_type"] is None
+
+
 def test_backfill_does_not_clobber_existing(tmp_path):
     db = SessionDB(tmp_path / "state.db")
     db.create_session("s_new", source="slack", chat_id="C1", chat_type="group")
