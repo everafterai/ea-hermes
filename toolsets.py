@@ -316,6 +316,14 @@ TOOLSETS = {
         "includes": []
     },
 
+    "google_drive": {
+        "description": "Google Drive access via a service account / ADC — list/search, read, upload, create folder",
+        "tools": [
+            "drive_list_files", "drive_read_file", "drive_upload", "drive_create_folder",
+        ],
+        "includes": []
+    },
+
 
     # Scenario-specific toolsets
     

@@ -165,6 +165,15 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     ),
     "skill.youtube": ("youtube-transcript-api==1.2.4",),
 
+    # ─── Plugins ───────────────────────────────────────────────────────────
+    # Google Drive service-account plugin (plugins/google_drive_sa). google-auth
+    # ships transitively with google-api-python-client; google-auth-httplib2 is
+    # the transport build() needs. Same pins as skill.google_workspace.
+    "plugin.google_drive_sa": (
+        "google-api-python-client==2.194.0",
+        "google-auth-httplib2==0.3.1",
+    ),
+
     # ─── Tools ─────────────────────────────────────────────────────────────
     # ACP adapter (VS Code / Zed / JetBrains integration)
     "tool.acp": ("agent-client-protocol==0.9.0",),

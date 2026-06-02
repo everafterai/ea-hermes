@@ -1,0 +1,10 @@
+name: google_drive_sa
+version: 1.0.0
+description: "Google Drive access for the agent using a service account via Application Default Credentials (ADC). 4 tools (list/search, read, upload, create folder). Authenticates as the VM's attached service account (google.auth.default) — no per-user OAuth. Share Drive folders with the SA's email to grant access. Tools gate on ADC being resolvable; toolset `google_drive` is default-off (enable via `hermes tools`)."
+author: EverAfter
+kind: backend
+provides_tools:
+  - drive_list_files
+  - drive_read_file
+  - drive_upload
+  - drive_create_folder
