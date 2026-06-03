@@ -74,6 +74,27 @@ from utils import base_url_host_matches, env_var_enabled
 logger = logging.getLogger(__name__)
 
 
+def _called_terminal_turn_end(assistant_message: Any, silent_completion_ok: bool) -> bool:
+    """Return True when the turn should end silently via the ``turn_end`` tool.
+
+    The agent calls ``turn_end`` as its final action (e.g. after ``slack_react``)
+    to finish a turn with no text — used in quiet channels where a reaction is
+    the entire response. Ending the turn on this *tool call* avoids producing an
+    empty text response, so the loop's empty-response recovery (nudge / retry /
+    fallback) is never reached.
+
+    Only honored when *silent_completion_ok* is set (quiet channels); elsewhere
+    ``turn_end`` is a benign no-op ack and the turn continues normally.
+    """
+    if not silent_completion_ok:
+        return False
+    for tc in (getattr(assistant_message, "tool_calls", None) or []):
+        fn = getattr(tc, "function", None)
+        if fn is not None and getattr(fn, "name", None) == "turn_end":
+            return True
+    return False
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -3582,6 +3603,20 @@ def run_conversation(
                                 agent.stream_delta_callback(None)
                             except Exception:
                                 pass
+                    break
+
+                # Quiet-channel silent finish: the agent called the terminal
+                # ``turn_end`` tool. The tool batch (e.g. slack_react) already
+                # ran above; end the turn now with no text. Ending on a tool
+                # call means the empty-response recovery machinery (post-tool
+                # nudge / retry / fallback) is never reached. Inert outside
+                # quiet channels (gated by _silent_completion_ok).
+                if _called_terminal_turn_end(
+                    assistant_message,
+                    getattr(agent, "_silent_completion_ok", False),
+                ):
+                    _turn_exit_reason = "turn_end_tool"
+                    final_response = ""
                     break
 
                 # Reset per-turn retry counters after successful tool

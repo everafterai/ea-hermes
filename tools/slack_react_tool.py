@@ -117,6 +117,35 @@ def _check_slack_react() -> bool:
     return bool(_resolve_slack_token())
 
 
+# ---------------------------------------------------------------------------
+# turn_end — explicit "I'm done, finish this turn silently" signal
+# ---------------------------------------------------------------------------
+# In a quiet channel the agent is asked to react (slack_react) and then stop
+# without posting text. Returning an empty response would trip the agent loop's
+# anti-stall recovery (nudge / retry / fallback). Instead the agent calls this
+# tool as its final action; the conversation loop treats it as a TERMINAL tool
+# (only when the turn allows silent completion — i.e. a quiet channel) and ends
+# the turn cleanly with no text, never reaching the empty-response machinery.
+# Outside quiet channels it's a harmless no-op ack and the turn continues.
+
+TURN_END_SCHEMA = {
+    "name": "turn_end",
+    "description": (
+        "Finish the current turn silently with NO text reply. Call this as your "
+        "FINAL action (e.g. right after slack_react) when you have nothing more "
+        "to say — typically in a quiet channel where a reaction is the entire "
+        "response. Takes no arguments."
+    ),
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+def _turn_end_handler(args: dict, **_kw) -> str:
+    # The conversation loop detects this tool by name and ends the turn; the
+    # handler itself only needs to return a benign ack.
+    return tool_result(ok=True, ended=True)
+
+
 registry.register(
     name="slack_react",
     toolset="slack",
@@ -127,4 +156,15 @@ registry.register(
     is_async=True,
     emoji="🦥",
     max_result_size_chars=2000,
+)
+
+registry.register(
+    name="turn_end",
+    toolset="slack",
+    schema=TURN_END_SCHEMA,
+    handler=_turn_end_handler,
+    requires_env=[],
+    is_async=False,
+    emoji="🏁",
+    max_result_size_chars=200,
 )
