@@ -730,6 +730,20 @@ def _home_thread_env_var(platform_name: str) -> str:
     return f"{_home_target_env_var(platform_name)}_THREAD_ID"
 
 
+def _home_channel_prompt_enabled(platform_name: str) -> bool:
+    """Whether the one-time "set a home channel" onboarding notice should fire.
+
+    Slack-only opt-out: ``slack.home_channel_prompt: false`` (bridged to
+    ``SLACK_HOME_CHANNEL_PROMPT``) silences the prompt for deployments that
+    intentionally run without a home channel — cron jobs default to
+    ``deliver=origin`` (back to the chat they were created in), so a global
+    home channel is unnecessary. Other platforms are unaffected.
+    """
+    if platform_name == Platform.SLACK.value:
+        return os.getenv("SLACK_HOME_CHANNEL_PROMPT", "true").lower() not in {"false", "0", "no"}
+    return True
+
+
 def _restart_notification_pending() -> bool:
     """Return True when a /restart completion marker is waiting to be delivered."""
     return (_hermes_home / ".restart_notify.json").exists()
@@ -8751,7 +8765,7 @@ class GatewayRunner:
         if not history and source.platform and source.platform != Platform.LOCAL and source.platform != Platform.WEBHOOK:
             platform_name = source.platform.value
             env_key = _home_target_env_var(platform_name)
-            if not os.getenv(env_key):
+            if not os.getenv(env_key) and _home_channel_prompt_enabled(platform_name):
                 # Slack dispatches all Hermes commands through a single
                 # parent slash command `/hermes`; bare `/sethome` is not
                 # registered and would fail with "app did not respond".

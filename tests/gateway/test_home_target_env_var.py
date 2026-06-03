@@ -8,7 +8,11 @@ to env vars nothing read on startup — the home channel appeared to set
 successfully but was lost on every new gateway session.
 """
 
-from gateway.run import _home_target_env_var, _home_thread_env_var
+from gateway.run import (
+    _home_channel_prompt_enabled,
+    _home_target_env_var,
+    _home_thread_env_var,
+)
 
 
 def test_matrix_home_target_env_var_uses_home_room():
@@ -40,3 +44,26 @@ def test_home_thread_env_var_uses_home_target_name_plus_thread_id():
     assert _home_thread_env_var("discord") == "DISCORD_HOME_CHANNEL_THREAD_ID"
     assert _home_thread_env_var("matrix") == "MATRIX_HOME_ROOM_THREAD_ID"
     assert _home_thread_env_var("email") == "EMAIL_HOME_ADDRESS_THREAD_ID"
+
+
+def test_home_channel_prompt_enabled_by_default_for_slack(monkeypatch):
+    monkeypatch.delenv("SLACK_HOME_CHANNEL_PROMPT", raising=False)
+    assert _home_channel_prompt_enabled("slack") is True
+
+
+def test_home_channel_prompt_disabled_for_slack_when_false(monkeypatch):
+    for val in ("false", "0", "no", "FALSE", "No"):
+        monkeypatch.setenv("SLACK_HOME_CHANNEL_PROMPT", val)
+        assert _home_channel_prompt_enabled("slack") is False
+
+
+def test_home_channel_prompt_enabled_for_slack_when_truthy(monkeypatch):
+    monkeypatch.setenv("SLACK_HOME_CHANNEL_PROMPT", "true")
+    assert _home_channel_prompt_enabled("slack") is True
+
+
+def test_home_channel_prompt_unaffected_for_other_platforms(monkeypatch):
+    # The Slack opt-out must not silence other platforms' onboarding prompt.
+    monkeypatch.setenv("SLACK_HOME_CHANNEL_PROMPT", "false")
+    assert _home_channel_prompt_enabled("telegram") is True
+    assert _home_channel_prompt_enabled("discord") is True

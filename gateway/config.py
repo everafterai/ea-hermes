@@ -925,6 +925,12 @@ def load_gateway_config() -> GatewayConfig:
                     os.environ["SLACK_FREE_RESPONSE_CHANNELS"] = str(frc)
                 if "reactions" in slack_cfg and not os.getenv("SLACK_REACTIONS"):
                     os.environ["SLACK_REACTIONS"] = str(slack_cfg["reactions"]).lower()
+                # home_channel_prompt: false silences the one-time "set a home
+                # channel" onboarding notice for deployments that intentionally
+                # run without a Slack home channel (cron delivers to each job's
+                # origin chat, so no global home channel is needed).
+                if "home_channel_prompt" in slack_cfg and not os.getenv("SLACK_HOME_CHANNEL_PROMPT"):
+                    os.environ["SLACK_HOME_CHANNEL_PROMPT"] = str(slack_cfg["home_channel_prompt"]).lower()
                 # allowed_channels: if set, bot ONLY responds in these channels (whitelist)
                 ac = slack_cfg.get("allowed_channels")
                 if ac is not None and not os.getenv("SLACK_ALLOWED_CHANNELS"):

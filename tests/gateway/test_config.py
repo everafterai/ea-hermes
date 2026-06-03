@@ -343,6 +343,42 @@ class TestLoadGatewayConfig:
         # Env value preserved, not clobbered by yaml.
         assert os.environ.get("DISCORD_THREAD_REQUIRE_MENTION") == "true"
 
+    def test_bridges_slack_home_channel_prompt_from_config_yaml(self, tmp_path, monkeypatch):
+        """slack.home_channel_prompt: false should reach SLACK_HOME_CHANNEL_PROMPT."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "slack:\n"
+            "  home_channel_prompt: false\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("SLACK_HOME_CHANNEL_PROMPT", raising=False)
+
+        load_gateway_config()
+
+        assert os.environ.get("SLACK_HOME_CHANNEL_PROMPT") == "false"
+
+    def test_slack_home_channel_prompt_yaml_does_not_overwrite_env(self, tmp_path, monkeypatch):
+        """Explicit env var wins over config.yaml (env > yaml precedence)."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "slack:\n"
+            "  home_channel_prompt: false\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("SLACK_HOME_CHANNEL_PROMPT", "true")  # user override
+
+        load_gateway_config()
+
+        assert os.environ.get("SLACK_HOME_CHANNEL_PROMPT") == "true"
+
     def test_bridges_quoted_false_platform_enabled_from_config_yaml(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()
