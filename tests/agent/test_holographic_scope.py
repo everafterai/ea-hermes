@@ -292,6 +292,91 @@ class TestBackwardCompatAndConcurrency:
         assert errors == []
 
 
+class TestAutoExtractScopeSafety:
+    """on_session_end must not leak DM-derived facts into the shared default
+    store: session-end cleanup runs without per-message session contextvars, so
+    the scope resolves to ("default","default") and we cannot attribute facts."""
+
+    def test_scoped_session_end_skips_when_scope_is_default(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": True,
+            "auto_extract": True,
+            "db_dir": str(tmp_path / "holo"),
+        })
+        p.initialize(session_id="t")
+
+        # NO set_session_vars -> scope resolves to ("default","default").
+        # "I prefer dark mode always" matches the _PREF_PATTERNS, so the only
+        # reason nothing is stored is the guard (not a failed pattern match).
+        clear_session_vars(None)
+        p.on_session_end([{"role": "user", "content": "I prefer dark mode always"}])
+
+        # Inspect the default-scope store (still no contextvars).
+        out = p.handle_tool_call("fact_store", {"action": "list", "limit": 100})
+        assert json.loads(out)["count"] == 0
+
+    def test_legacy_session_end_still_extracts(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": False,
+            "auto_extract": True,
+            "db_path": str(tmp_path / "legacy.db"),
+        })
+        p.initialize(session_id="t")
+
+        p.on_session_end([{"role": "user", "content": "I prefer dark mode always"}])
+
+        out = p.handle_tool_call("fact_store", {"action": "list", "limit": 100})
+        assert json.loads(out)["count"] == 1
+
+
+class TestScopeCacheKeyedByDbPath:
+    """The per-scope bundle cache is keyed by resolved db_path, so legacy mode
+    collapses every scope onto one shared bundle (one SQLite connection)."""
+
+    def test_legacy_mode_shares_one_bundle_across_scopes(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": False,
+            "db_path": str(tmp_path / "legacy.db"),
+        })
+        p.initialize(session_id="t")
+
+        tokens = set_session_vars(chat_type="dm", user_id="A", chat_id="D1")
+        try:
+            bundle_a = p._bundle_for_current_scope()
+        finally:
+            clear_session_vars(tokens)
+
+        tokens = set_session_vars(chat_type="dm", user_id="B", chat_id="D2")
+        try:
+            bundle_b = p._bundle_for_current_scope()
+        finally:
+            clear_session_vars(tokens)
+
+        # Same db_path -> same cached bundle object (one shared connection).
+        assert bundle_a is bundle_b
+
+    def test_scoped_mode_uses_distinct_bundles_per_scope(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": True,
+            "db_dir": str(tmp_path / "holo"),
+        })
+        p.initialize(session_id="t")
+
+        tokens = set_session_vars(chat_type="dm", user_id="A", chat_id="D1")
+        try:
+            bundle_a = p._bundle_for_current_scope()
+        finally:
+            clear_session_vars(tokens)
+
+        tokens = set_session_vars(chat_type="dm", user_id="B", chat_id="D2")
+        try:
+            bundle_b = p._bundle_for_current_scope()
+        finally:
+            clear_session_vars(tokens)
+
+        assert bundle_a is not bundle_b
+
+
 class TestConfigSchema:
     def test_schema_advertises_scope_keys(self):
         p = HolographicMemoryProvider(config={})

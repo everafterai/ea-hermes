@@ -42,6 +42,8 @@ Default `db_dir` is `$HERMES_HOME/memories/holographic`. When
 `db_path`, exactly as before. Scope is resolved per operation from session
 contextvars, so a single process safely serves many concurrent users.
 
+`auto_extract` is skipped in scoped mode at session end (no session context to attribute facts to); use `fact_store(action='add')` for durable facts.
+
 ## Tools
 
 | Tool | Description |

@@ -161,7 +161,7 @@ class HolographicMemoryProvider(MemoryProvider):
         self._config = config or _load_plugin_config()
         self._min_trust = float(self._config.get("min_trust_threshold", 0.3))
         # Per-scope store cache (provider is a process-global singleton).
-        self._scopes: dict[tuple[str, str], tuple] = {}
+        self._scopes: dict[str, tuple] = {}
         self._scopes_lock = threading.RLock()
         # Populated in initialize().
         self._scope_isolation = False
@@ -250,12 +250,12 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def _bundle_for_current_scope(self):
         """Return the (store, retriever) bundle for the current session scope,
-        creating and caching it on first use. Thread-safe."""
-        scope = _resolve_scope()
+        creating and caching it on first use. Keyed by resolved db_path so legacy
+        (non-isolated) mode collapses every scope onto one shared bundle. Thread-safe."""
+        db_path = self._db_path_for_scope(_resolve_scope())
         with self._scopes_lock:
-            bundle = self._scopes.get(scope)
+            bundle = self._scopes.get(db_path)
             if bundle is None:
-                db_path = self._db_path_for_scope(scope)
                 store = MemoryStore(
                     db_path=db_path,
                     default_trust=self._default_trust,
@@ -268,7 +268,7 @@ class HolographicMemoryProvider(MemoryProvider):
                     hrr_dim=self._hrr_dim,
                 )
                 bundle = (store, retriever)
-                self._scopes[scope] = bundle
+                self._scopes[db_path] = bundle
             return bundle
 
     def system_prompt_block(self) -> str:
@@ -327,6 +327,13 @@ class HolographicMemoryProvider(MemoryProvider):
         if not self._config.get("auto_extract", False):
             return
         if not messages:
+            return
+        scope = _resolve_scope()
+        if self._scope_isolation and scope == ("default", "default"):
+            # Session-end cleanup runs without per-message session contextvars,
+            # so we cannot attribute facts to the originating user/channel.
+            # Skip rather than leak DM-derived facts into the shared default store.
+            logger.debug("holographic: skipping auto-extract at session end (no session scope in context)")
             return
         store, _ = self._bundle_for_current_scope()
         self._auto_extract_facts(store, messages)
