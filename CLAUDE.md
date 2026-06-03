@@ -76,6 +76,25 @@ inherited into compression + branch sessions to preserve self-recall. When
 touching session search/resume/scoping, preserve these isolation guarantees — they
 have end-to-end tests under [tests/](tests/) (e.g. multi-user `session_search` isolation).
 
+### Slack quiet channels + `slack_react`
+
+For low-noise "hidden assistant" channels. Config under the top-level `slack:`
+block in `~/.hermes/config.yaml`:
+
+- `quiet_channels: 'C123,C456'` — comma-separated channel IDs (mirrors
+  `free_response_channels`). In these channels the gateway forces
+  `tool_progress: off` and allows **silent (emoji-only) completion**: a
+  successful turn that produces no text stays silent instead of posting the
+  "no response generated" warning. Resolved in [gateway/run.py](gateway/run.py)
+  via `_is_quiet_channel` (matches `chat_id` or thread `parent_chat_id`).
+  Errors, approvals, and clarifications still surface. **Text replies are never
+  suppressed** — the bot can always answer.
+- `slack_react` tool ([tools/slack_react_tool.py](tools/slack_react_tool.py)) —
+  lets the agent add/remove an emoji reaction on the triggering Slack message
+  (or an explicit `message_id`). Lives in the platform-restricted `slack`
+  toolset; grant it to a role via `slack.roles`. Emoji-first behavior is driven
+  by `channel_prompts`, not enforced.
+
 ## Common commands
 
 ```bash
