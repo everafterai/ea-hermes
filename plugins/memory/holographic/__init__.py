@@ -17,9 +17,12 @@ Config in $HERMES_HOME/config.yaml (profile-scoped):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import threading
+from pathlib import Path
 from typing import Any, Dict, List
 
 from agent.memory_provider import MemoryProvider
@@ -29,6 +32,45 @@ from .retrieval import FactRetriever
 from hermes_cli.config import cfg_get
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_scope() -> "tuple[str, str]":
+    """Resolve the current memory scope from session contextvars.
+
+    DMs are per-user silos; channels/groups/threads share by chat_id.
+    Falls back to ("default", "default") for CLI/cron or missing identity.
+    """
+    try:
+        from gateway.session_context import get_session_env
+    except Exception:
+        return ("default", "default")
+    chat_type = (get_session_env("HERMES_SESSION_CHAT_TYPE", "") or "").strip()
+    user_id = (get_session_env("HERMES_SESSION_USER_ID", "") or "").strip()
+    chat_id = (get_session_env("HERMES_SESSION_CHAT_ID", "") or "").strip()
+    if chat_type == "dm" and user_id:
+        return ("user", user_id)
+    if chat_id:
+        return ("chat", chat_id)
+    if user_id:
+        return ("user", user_id)
+    return ("default", "default")
+
+
+_SCOPE_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _sanitize_scope_id(scope_id: str) -> str:
+    """Make a scope id safe for use in a filename.
+
+    Replaces every non-[A-Za-z0-9_-] char with '_'. If anything was replaced
+    or the id is long, appends a short deterministic hash of the original to
+    avoid post-sanitization collisions.
+    """
+    safe = _SCOPE_SAFE_RE.sub("_", scope_id)
+    if safe != scope_id or len(safe) > 64:
+        digest = hashlib.sha1(scope_id.encode("utf-8")).hexdigest()[:8]
+        safe = f"{safe[:48]}_{digest}"
+    return safe
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +159,19 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def __init__(self, config: dict | None = None):
         self._config = config or _load_plugin_config()
-        self._store = None
-        self._retriever = None
         self._min_trust = float(self._config.get("min_trust_threshold", 0.3))
+        # Per-scope store cache (provider is a process-global singleton).
+        self._scopes: dict[str, tuple] = {}
+        self._scopes_lock = threading.RLock()
+        # Populated in initialize().
+        self._scope_isolation = False
+        self._db_dir = Path(".")
+        self._legacy_db_path = ""
+        self._default_trust = 0.5
+        self._hrr_dim = 1024
+        self._hrr_weight = 0.3
+        self._temporal_decay = 0
+        self._session_id = ""
 
     @property
     def name(self) -> str:
@@ -147,9 +199,13 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def get_config_schema(self):
         from hermes_constants import display_hermes_home
-        _default_db = f"{display_hermes_home()}/memory_store.db"
+        _home = display_hermes_home()
+        _default_db = f"{_home}/memory_store.db"
+        _default_dir = f"{_home}/memories/holographic"
         return [
-            {"key": "db_path", "description": "SQLite database path", "default": _default_db},
+            {"key": "scope_isolation", "description": "Per-DM-user / per-channel memory isolation (Slack multi-user gateway)", "default": "false", "choices": ["true", "false"]},
+            {"key": "db_dir", "description": "Directory for per-scope SQLite DBs (used when scope_isolation=true)", "default": _default_dir},
+            {"key": "db_path", "description": "Single SQLite DB path (used when scope_isolation=false)", "default": _default_db},
             {"key": "auto_extract", "description": "Auto-extract facts at session end", "default": "false", "choices": ["true", "false"]},
             {"key": "default_trust", "description": "Default trust score for new facts", "default": "0.5"},
             {"key": "hrr_dim", "description": "HRR vector dimensions", "default": "1024"},
@@ -157,36 +213,68 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         from hermes_constants import get_hermes_home
-        _hermes_home = str(get_hermes_home())
-        _default_db = _hermes_home + "/memory_store.db"
-        db_path = self._config.get("db_path", _default_db)
-        # Expand $HERMES_HOME in user-supplied paths so config values like
-        # "$HERMES_HOME/memory_store.db" or "~/.hermes/memory_store.db" both
-        # resolve to the active profile's directory.
-        if isinstance(db_path, str):
-            db_path = db_path.replace("$HERMES_HOME", _hermes_home)
-            db_path = db_path.replace("${HERMES_HOME}", _hermes_home)
-        default_trust = float(self._config.get("default_trust", 0.5))
-        hrr_dim = int(self._config.get("hrr_dim", 1024))
-        hrr_weight = float(self._config.get("hrr_weight", 0.3))
-        temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
+        hermes_home = str(get_hermes_home())
 
-        self._store = MemoryStore(db_path=db_path, default_trust=default_trust, hrr_dim=hrr_dim)
-        self._retriever = FactRetriever(
-            store=self._store,
-            temporal_decay_half_life=temporal_decay,
-            hrr_weight=hrr_weight,
-            hrr_dim=hrr_dim,
+        def _expand(value):
+            if isinstance(value, str):
+                return value.replace("$HERMES_HOME", hermes_home).replace("${HERMES_HOME}", hermes_home)
+            return value
+
+        self._scope_isolation = str(self._config.get("scope_isolation", "false")).strip().lower() in (
+            "1", "true", "yes", "on",
         )
+        self._legacy_db_path = _expand(self._config.get("db_path", hermes_home + "/memory_store.db"))
+        db_dir = _expand(self._config.get("db_dir", hermes_home + "/memories/holographic"))
+        self._db_dir = Path(db_dir).expanduser()
+        if self._scope_isolation:
+            self._db_dir.mkdir(parents=True, exist_ok=True)
+        self._default_trust = float(self._config.get("default_trust", 0.5))
+        self._hrr_dim = int(self._config.get("hrr_dim", 1024))
+        self._hrr_weight = float(self._config.get("hrr_weight", 0.3))
+        self._temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
         self._session_id = session_id
+        # NOTE: do NOT touch self._scopes here. The provider is shared across
+        # concurrent gateway sessions; re-initialising on one message must not
+        # disturb other live scopes.
+
+    def _db_path_for_scope(self, scope: "tuple[str, str]") -> str:
+        if not self._scope_isolation:
+            return self._legacy_db_path
+        kind, ident = scope
+        safe = _sanitize_scope_id(ident)
+        base = self._db_dir.resolve()
+        target = (base / f"{kind}_{safe}.db").resolve()
+        if base not in target.parents:
+            raise ValueError(f"scope db path escapes base dir: {target}")
+        return str(target)
+
+    def _bundle_for_current_scope(self):
+        """Return the (store, retriever) bundle for the current session scope,
+        creating and caching it on first use. Keyed by resolved db_path so legacy
+        (non-isolated) mode collapses every scope onto one shared bundle. Thread-safe."""
+        db_path = self._db_path_for_scope(_resolve_scope())
+        with self._scopes_lock:
+            bundle = self._scopes.get(db_path)
+            if bundle is None:
+                store = MemoryStore(
+                    db_path=db_path,
+                    default_trust=self._default_trust,
+                    hrr_dim=self._hrr_dim,
+                )
+                retriever = FactRetriever(
+                    store=store,
+                    temporal_decay_half_life=self._temporal_decay,
+                    hrr_weight=self._hrr_weight,
+                    hrr_dim=self._hrr_dim,
+                )
+                bundle = (store, retriever)
+                self._scopes[db_path] = bundle
+            return bundle
 
     def system_prompt_block(self) -> str:
-        if not self._store:
-            return ""
         try:
-            total = self._store._conn.execute(
-                "SELECT COUNT(*) FROM facts"
-            ).fetchone()[0]
+            store, _ = self._bundle_for_current_scope()
+            total = store._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         except Exception:
             total = 0
         if total == 0:
@@ -204,10 +292,11 @@ class HolographicMemoryProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if not self._retriever or not query:
+        if not query:
             return ""
         try:
-            results = self._retriever.search(query, min_trust=self._min_trust, limit=5)
+            _, retriever = self._bundle_for_current_scope()
+            results = retriever.search(query, min_trust=self._min_trust, limit=5)
             if not results:
                 return ""
             lines = []
@@ -237,30 +326,46 @@ class HolographicMemoryProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         if not self._config.get("auto_extract", False):
             return
-        if not self._store or not messages:
+        if not messages:
             return
-        self._auto_extract_facts(messages)
+        scope = _resolve_scope()
+        if self._scope_isolation and scope == ("default", "default"):
+            # Session-end cleanup runs without per-message session contextvars,
+            # so we cannot attribute facts to the originating user/channel.
+            # Skip rather than leak DM-derived facts into the shared default store.
+            logger.debug("holographic: skipping auto-extract at session end (no session scope in context)")
+            return
+        store, _ = self._bundle_for_current_scope()
+        self._auto_extract_facts(store, messages)
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in memory writes as facts."""
-        if action == "add" and self._store and content:
+        """Mirror built-in memory writes as facts.
+
+        Disabled in scoped mode: global MEMORY.md notes must not be copied into
+        a per-scope silo (they live in the global built-in store instead).
+        """
+        if self._scope_isolation:
+            return
+        if action == "add" and content:
             try:
+                store, _ = self._bundle_for_current_scope()
                 category = "user_pref" if target == "user" else "general"
-                self._store.add_fact(content, category=category)
+                store.add_fact(content, category=category)
             except Exception as e:
                 logger.debug("Holographic memory_write mirror failed: %s", e)
 
     def shutdown(self) -> None:
-        self._store = None
-        self._retriever = None
+        # Provider is a process-global singleton; do NOT close cached per-scope
+        # stores here — other concurrent sessions may still be using them.
+        # SQLite connections are released at process exit.
+        pass
 
     # -- Tool handlers -------------------------------------------------------
 
     def _handle_fact_store(self, args: dict) -> str:
         try:
+            store, retriever = self._bundle_for_current_scope()
             action = args["action"]
-            store = self._store
-            retriever = self._retriever
 
             if action == "add":
                 fact_id = store.add_fact(
@@ -345,9 +450,10 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def _handle_fact_feedback(self, args: dict) -> str:
         try:
+            store, _ = self._bundle_for_current_scope()
             fact_id = int(args["fact_id"])
             helpful = args["action"] == "helpful"
-            result = self._store.record_feedback(fact_id, helpful=helpful)
+            result = store.record_feedback(fact_id, helpful=helpful)
             return json.dumps(result)
         except KeyError as exc:
             return tool_error(f"Missing required argument: {exc}")
@@ -356,7 +462,7 @@ class HolographicMemoryProvider(MemoryProvider):
 
     # -- Auto-extraction (on_session_end) ------------------------------------
 
-    def _auto_extract_facts(self, messages: list) -> None:
+    def _auto_extract_facts(self, store, messages: list) -> None:
         _PREF_PATTERNS = [
             re.compile(r'\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)', re.IGNORECASE),
             re.compile(r'\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)', re.IGNORECASE),
@@ -378,7 +484,7 @@ class HolographicMemoryProvider(MemoryProvider):
             for pattern in _PREF_PATTERNS:
                 if pattern.search(content):
                     try:
-                        self._store.add_fact(content[:400], category="user_pref")
+                        store.add_fact(content[:400], category="user_pref")
                         extracted += 1
                     except Exception:
                         pass
@@ -387,7 +493,7 @@ class HolographicMemoryProvider(MemoryProvider):
             for pattern in _DECISION_PATTERNS:
                 if pattern.search(content):
                     try:
-                        self._store.add_fact(content[:400], category="project")
+                        store.add_fact(content[:400], category="project")
                         extracted += 1
                     except Exception:
                         pass
