@@ -1079,8 +1079,22 @@ def init_agent(
                 agent._memory_store = MemoryStore(
                     memory_char_limit=mem_config.get("memory_char_limit", 2200),
                     user_char_limit=mem_config.get("user_char_limit", 1375),
+                    user_profile_enabled=agent._user_profile_enabled,
                 )
                 agent._memory_store.load_from_disk()
+                # When the user-profile store is disabled, the built-in `memory`
+                # tool becomes a GLOBAL-only store: drop the `user` target from
+                # the schema the model sees and reframe its description, so
+                # per-user memory routes to the scoped fact_store provider
+                # instead of the shared MEMORY.md. Done once at init (before the
+                # first turn) so the cached tool surface stays stable.
+                if agent.tools and not agent._user_profile_enabled:
+                    from tools.memory_tool import memory_schema_for
+                    _mem_schema = memory_schema_for(False)
+                    for _t in agent.tools:
+                        if isinstance(_t, dict) and _t.get("function", {}).get("name") == "memory":
+                            _t["function"] = _mem_schema
+                            break
         except Exception:
             pass  # Memory is optional -- don't break agent init
     
