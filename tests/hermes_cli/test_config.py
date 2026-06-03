@@ -771,6 +771,12 @@ class TestDiscordChannelPromptsConfig:
         assert raw["discord"]["channel_prompts"] == {}
 
 
+class TestSlackQuietChannelsConfig:
+    def test_default_config_includes_slack_quiet_channels(self):
+        from hermes_cli.config import DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["slack"]["quiet_channels"] == ""
+
+
 class TestUserMessagePreviewConfig:
     def test_default_config_preview_line_counts(self):
         preview = DEFAULT_CONFIG["display"]["user_message_preview"]

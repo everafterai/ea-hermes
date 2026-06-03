@@ -280,6 +280,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "slack": {
+        "description": "Slack interaction tools (emoji reactions on messages)",
+        "tools": ["slack_react"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [

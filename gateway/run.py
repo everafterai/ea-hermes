@@ -1432,6 +1432,39 @@ def _load_gateway_config() -> dict:
     return {}
 
 
+def _parse_channel_id_list(value) -> set:
+    """Parse a comma-separated channel-ID string into a set of trimmed IDs.
+
+    Mirrors how ``free_response_channels`` is expressed in config.yaml.
+    Returns an empty set for None/empty/non-string input.
+    """
+    if not value or not isinstance(value, str):
+        return set()
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def _is_quiet_channel(source, cfg: dict) -> bool:
+    """Return True when *source* is a Slack channel listed in slack.quiet_channels.
+
+    Matches the triggering channel (``chat_id``) or, for threads, the parent
+    channel (``parent_chat_id``) so thread replies inherit the channel's setting.
+    Only applies to Slack; other platforms always return False.
+    """
+    from gateway.config import Platform
+    if getattr(source, "platform", None) != Platform.SLACK:
+        return False
+    quiet = _parse_channel_id_list(
+        (cfg.get("slack") or {}).get("quiet_channels")
+    )
+    if not quiet:
+        return False
+    candidates = {
+        c for c in (getattr(source, "chat_id", None),
+                    getattr(source, "parent_chat_id", None)) if c
+    }
+    return bool(candidates & quiet)
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 
@@ -1560,6 +1593,7 @@ def _normalize_empty_agent_response(
     response: str,
     *,
     history_len: int = 0,
+    quiet_completion_ok: bool = False,
 ) -> str:
     """Normalize empty/None agent responses into user-facing messages.
 
@@ -1593,6 +1627,10 @@ def _normalize_empty_agent_response(
         if agent_result.get("partial"):
             err = agent_result.get("error", "processing incomplete")
             return f"⚠️ Processing stopped: {str(err)[:200]}. Try again."
+        if quiet_completion_ok:
+            # Quiet channel: a successful turn that produced no text is a
+            # legitimate emoji-only completion. Stay silent instead of warning.
+            return ""
         return (
             "⚠️ Processing completed but no response was generated. "
             "This may be a transient error — try sending your message again."
@@ -8866,6 +8904,7 @@ class GatewayRunner:
             # the case where agent did work but returned no text. Fix for #18765.
             response = _normalize_empty_agent_response(
                 agent_result, response, history_len=len(history),
+                quiet_completion_ok=_is_quiet_channel(source, _load_gateway_config()),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
 
@@ -15956,6 +15995,9 @@ class GatewayRunner:
             if _env_tp and not _tool_progress_configured
             else (_resolved_tp or _env_tp or "all")
         )
+        # Quiet channels hide tool-progress entirely, regardless of global config.
+        if _is_quiet_channel(source, user_config):
+            progress_mode = "off"
         # Disable tool progress for webhooks - they don't support message editing,
         # so each progress line would be sent as a separate message.
         from gateway.config import Platform
