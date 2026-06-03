@@ -1593,6 +1593,7 @@ def _normalize_empty_agent_response(
     response: str,
     *,
     history_len: int = 0,
+    quiet_completion_ok: bool = False,
 ) -> str:
     """Normalize empty/None agent responses into user-facing messages.
 
@@ -1626,6 +1627,10 @@ def _normalize_empty_agent_response(
         if agent_result.get("partial"):
             err = agent_result.get("error", "processing incomplete")
             return f"⚠️ Processing stopped: {str(err)[:200]}. Try again."
+        if quiet_completion_ok:
+            # Quiet channel: a successful turn that produced no text is a
+            # legitimate emoji-only completion. Stay silent instead of warning.
+            return ""
         return (
             "⚠️ Processing completed but no response was generated. "
             "This may be a transient error — try sending your message again."

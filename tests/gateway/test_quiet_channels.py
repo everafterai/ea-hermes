@@ -40,3 +40,35 @@ def test_is_quiet_channel_false_for_non_slack():
 def test_is_quiet_channel_false_when_unconfigured():
     assert _is_quiet_channel(_src("C1"), {}) is False
     assert _is_quiet_channel(_src("C1"), {"slack": {}}) is False
+
+
+from gateway.run import _normalize_empty_agent_response
+
+
+def test_normalize_suppresses_empty_success_when_quiet():
+    result = {"api_calls": 2}  # did work, no error, no partial
+    out = _normalize_empty_agent_response(result, "", quiet_completion_ok=True)
+    assert out == ""
+
+
+def test_normalize_keeps_empty_success_warning_when_not_quiet():
+    result = {"api_calls": 2}
+    out = _normalize_empty_agent_response(result, "", quiet_completion_ok=False)
+    assert "no response was generated" in out
+
+
+def test_normalize_surfaces_errors_even_when_quiet():
+    result = {"failed": True, "error": "boom"}
+    out = _normalize_empty_agent_response(result, "", quiet_completion_ok=True)
+    assert "boom" in out
+
+
+def test_normalize_surfaces_partial_even_when_quiet():
+    result = {"api_calls": 1, "partial": True, "error": "stopped early"}
+    out = _normalize_empty_agent_response(result, "", quiet_completion_ok=True)
+    assert "stopped early" in out
+
+
+def test_normalize_passes_through_real_text_when_quiet():
+    out = _normalize_empty_agent_response({"api_calls": 1}, "hello", quiet_completion_ok=True)
+    assert out == "hello"
