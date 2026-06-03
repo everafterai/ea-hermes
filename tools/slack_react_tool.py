@@ -59,7 +59,7 @@ def _resolve_slack_token() -> str:
         cfg = load_gateway_config()
         pconfig = cfg.platforms.get(Platform.SLACK)
         if pconfig and getattr(pconfig, "token", ""):
-            return pconfig.token
+            return pconfig.token or ""
     except Exception:
         pass
     return os.getenv("SLACK_BOT_TOKEN", "").strip()
