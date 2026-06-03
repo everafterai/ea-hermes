@@ -159,9 +159,19 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def __init__(self, config: dict | None = None):
         self._config = config or _load_plugin_config()
-        self._store = None
-        self._retriever = None
         self._min_trust = float(self._config.get("min_trust_threshold", 0.3))
+        # Per-scope store cache (provider is a process-global singleton).
+        self._scopes: dict[tuple[str, str], tuple] = {}
+        self._scopes_lock = threading.RLock()
+        # Populated in initialize().
+        self._scope_isolation = False
+        self._db_dir = Path(".")
+        self._legacy_db_path = ""
+        self._default_trust = 0.5
+        self._hrr_dim = 1024
+        self._hrr_weight = 0.3
+        self._temporal_decay = 0
+        self._session_id = ""
 
     @property
     def name(self) -> str:
@@ -199,28 +209,40 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         from hermes_constants import get_hermes_home
-        _hermes_home = str(get_hermes_home())
-        _default_db = _hermes_home + "/memory_store.db"
-        db_path = self._config.get("db_path", _default_db)
-        # Expand $HERMES_HOME in user-supplied paths so config values like
-        # "$HERMES_HOME/memory_store.db" or "~/.hermes/memory_store.db" both
-        # resolve to the active profile's directory.
-        if isinstance(db_path, str):
-            db_path = db_path.replace("$HERMES_HOME", _hermes_home)
-            db_path = db_path.replace("${HERMES_HOME}", _hermes_home)
-        default_trust = float(self._config.get("default_trust", 0.5))
-        hrr_dim = int(self._config.get("hrr_dim", 1024))
-        hrr_weight = float(self._config.get("hrr_weight", 0.3))
-        temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
+        hermes_home = str(get_hermes_home())
 
-        self._store = MemoryStore(db_path=db_path, default_trust=default_trust, hrr_dim=hrr_dim)
-        self._retriever = FactRetriever(
-            store=self._store,
-            temporal_decay_half_life=temporal_decay,
-            hrr_weight=hrr_weight,
-            hrr_dim=hrr_dim,
+        def _expand(value):
+            if isinstance(value, str):
+                return value.replace("$HERMES_HOME", hermes_home).replace("${HERMES_HOME}", hermes_home)
+            return value
+
+        self._scope_isolation = str(self._config.get("scope_isolation", "false")).strip().lower() in (
+            "1", "true", "yes", "on",
         )
+        self._legacy_db_path = _expand(self._config.get("db_path", hermes_home + "/memory_store.db"))
+        db_dir = _expand(self._config.get("db_dir", hermes_home + "/memories/holographic"))
+        self._db_dir = Path(db_dir).expanduser()
+        if self._scope_isolation:
+            self._db_dir.mkdir(parents=True, exist_ok=True)
+        self._default_trust = float(self._config.get("default_trust", 0.5))
+        self._hrr_dim = int(self._config.get("hrr_dim", 1024))
+        self._hrr_weight = float(self._config.get("hrr_weight", 0.3))
+        self._temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
         self._session_id = session_id
+        # NOTE: do NOT touch self._scopes here. The provider is shared across
+        # concurrent gateway sessions; re-initialising on one message must not
+        # disturb other live scopes.
+
+    def _db_path_for_scope(self, scope: "tuple[str, str]") -> str:
+        if not self._scope_isolation:
+            return self._legacy_db_path
+        kind, ident = scope
+        safe = _sanitize_scope_id(ident)
+        base = self._db_dir.resolve()
+        target = (base / f"{kind}_{safe}.db").resolve()
+        if base not in target.parents:
+            raise ValueError(f"scope db path escapes base dir: {target}")
+        return str(target)
 
     def system_prompt_block(self) -> str:
         if not self._store:
