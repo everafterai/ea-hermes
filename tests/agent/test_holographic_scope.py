@@ -235,3 +235,58 @@ class TestOnMemoryWrite:
         p.on_memory_write("add", "user", "a preference")
         out = p.handle_tool_call("fact_store", {"action": "list"})
         assert json.loads(out)["count"] == 1
+
+
+import threading
+
+
+class TestBackwardCompatAndConcurrency:
+    def test_legacy_single_file_shared_across_scopes(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": False,
+            "db_path": str(tmp_path / "legacy.db"),
+        })
+        p.initialize(session_id="t")
+
+        tokens = set_session_vars(chat_type="dm", user_id="A", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "shared fact xyz"})
+        finally:
+            clear_session_vars(tokens)
+
+        # Different scope, but legacy mode = one shared file -> visible.
+        tokens = set_session_vars(chat_type="dm", user_id="B", chat_id="D2")
+        try:
+            out = p.handle_tool_call("fact_store", {"action": "search", "query": "shared fact xyz"})
+            assert json.loads(out)["count"] == 1
+        finally:
+            clear_session_vars(tokens)
+
+    def test_concurrent_scopes_do_not_bleed(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": True,
+            "db_dir": str(tmp_path / "holo"),
+        })
+        p.initialize(session_id="t")
+        errors = []
+
+        def worker(uid):
+            # Each thread gets a fresh contextvar context.
+            tokens = set_session_vars(chat_type="dm", user_id=uid, chat_id=f"D_{uid}")
+            try:
+                for i in range(5):
+                    p.handle_tool_call("fact_store", {"action": "add", "content": f"{uid} fact {i}"})
+                out = p.handle_tool_call("fact_store", {"action": "list", "limit": 100})
+                contents = [f["content"] for f in json.loads(out)["facts"]]
+                if any(not c.startswith(uid) for c in contents):
+                    errors.append((uid, contents))
+            finally:
+                clear_session_vars(tokens)
+
+        threads = [threading.Thread(target=worker, args=(f"U{n}",)) for n in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
