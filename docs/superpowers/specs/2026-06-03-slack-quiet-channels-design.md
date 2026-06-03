@@ -196,9 +196,29 @@ Plus the `slack` toolset granted to the relevant role(s) in `slack.roles` /
   per-task session contextvars (no global state), consistent with existing tools.
 - **Back-compat:** absent `quiet_channels` → no behavior change anywhere.
 
+## Implementation notes (deviations from this design, as built)
+
+Two intentional refinements were made during implementation; the code is the
+source of truth:
+
+- **`slack_react` posts directly to the Slack Web API** (fresh `aiohttp` session
+  to `reactions.add`/`reactions.remove`, mirroring
+  `tools/send_message_tool.py:_send_slack`) rather than reaching the live adapter
+  via `_gateway_runner_ref()` + `adapter._add_reaction()`. This is loop-safe from
+  the tool's worker thread and avoids event-loop/adapter coupling. Functionally
+  equivalent for a single-workspace bot token.
+- **`quiet_channels` is read from the raw top-level `slack:` config block**
+  (via `_load_gateway_config()` in `_is_quiet_channel`) rather than being bridged
+  into the platform runtime `extra`. The consumer lives in `gateway/run.py`, so
+  no bridge is needed; this is a deliberate departure from how
+  `free_response_channels` is wired (that key is consumed in the adapter).
+
 ## Open questions / deferred
 
 - Whether to also expose a generic per-channel `tool_progress` override (without
   the full quiet flag) — deferred; not required for this use case.
 - Cross-platform generalization (base-adapter reaction tool) — deferred to a
   future iteration once the Slack version is proven.
+- The `slack` toolset defaults ON; without RBAC active, `slack_react` is
+  available to all authorized Slack users (consistent with other default-on
+  toolsets). Enable RBAC (`slack.user_roles`) to restrict it per role.
