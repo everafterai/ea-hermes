@@ -244,13 +244,33 @@ class HolographicMemoryProvider(MemoryProvider):
             raise ValueError(f"scope db path escapes base dir: {target}")
         return str(target)
 
+    def _bundle_for_current_scope(self):
+        """Return the (store, retriever) bundle for the current session scope,
+        creating and caching it on first use. Thread-safe."""
+        scope = _resolve_scope()
+        with self._scopes_lock:
+            bundle = self._scopes.get(scope)
+            if bundle is None:
+                db_path = self._db_path_for_scope(scope)
+                store = MemoryStore(
+                    db_path=db_path,
+                    default_trust=self._default_trust,
+                    hrr_dim=self._hrr_dim,
+                )
+                retriever = FactRetriever(
+                    store=store,
+                    temporal_decay_half_life=self._temporal_decay,
+                    hrr_weight=self._hrr_weight,
+                    hrr_dim=self._hrr_dim,
+                )
+                bundle = (store, retriever)
+                self._scopes[scope] = bundle
+            return bundle
+
     def system_prompt_block(self) -> str:
-        if not self._store:
-            return ""
         try:
-            total = self._store._conn.execute(
-                "SELECT COUNT(*) FROM facts"
-            ).fetchone()[0]
+            store, _ = self._bundle_for_current_scope()
+            total = store._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         except Exception:
             total = 0
         if total == 0:
@@ -268,10 +288,11 @@ class HolographicMemoryProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        if not self._retriever or not query:
+        if not query:
             return ""
         try:
-            results = self._retriever.search(query, min_trust=self._min_trust, limit=5)
+            _, retriever = self._bundle_for_current_scope()
+            results = retriever.search(query, min_trust=self._min_trust, limit=5)
             if not results:
                 return ""
             lines = []
@@ -301,30 +322,33 @@ class HolographicMemoryProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         if not self._config.get("auto_extract", False):
             return
-        if not self._store or not messages:
+        if not messages:
             return
-        self._auto_extract_facts(messages)
+        store, _ = self._bundle_for_current_scope()
+        self._auto_extract_facts(store, messages)
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
         """Mirror built-in memory writes as facts."""
-        if action == "add" and self._store and content:
+        if action == "add" and content:
             try:
+                store, _ = self._bundle_for_current_scope()
                 category = "user_pref" if target == "user" else "general"
-                self._store.add_fact(content, category=category)
+                store.add_fact(content, category=category)
             except Exception as e:
                 logger.debug("Holographic memory_write mirror failed: %s", e)
 
     def shutdown(self) -> None:
-        self._store = None
-        self._retriever = None
+        # Provider is a process-global singleton; do NOT close cached per-scope
+        # stores here — other concurrent sessions may still be using them.
+        # SQLite connections are released at process exit.
+        pass
 
     # -- Tool handlers -------------------------------------------------------
 
     def _handle_fact_store(self, args: dict) -> str:
         try:
+            store, retriever = self._bundle_for_current_scope()
             action = args["action"]
-            store = self._store
-            retriever = self._retriever
 
             if action == "add":
                 fact_id = store.add_fact(
@@ -409,9 +433,10 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def _handle_fact_feedback(self, args: dict) -> str:
         try:
+            store, _ = self._bundle_for_current_scope()
             fact_id = int(args["fact_id"])
             helpful = args["action"] == "helpful"
-            result = self._store.record_feedback(fact_id, helpful=helpful)
+            result = store.record_feedback(fact_id, helpful=helpful)
             return json.dumps(result)
         except KeyError as exc:
             return tool_error(f"Missing required argument: {exc}")
@@ -420,7 +445,7 @@ class HolographicMemoryProvider(MemoryProvider):
 
     # -- Auto-extraction (on_session_end) ------------------------------------
 
-    def _auto_extract_facts(self, messages: list) -> None:
+    def _auto_extract_facts(self, store, messages: list) -> None:
         _PREF_PATTERNS = [
             re.compile(r'\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)', re.IGNORECASE),
             re.compile(r'\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)', re.IGNORECASE),
@@ -442,7 +467,7 @@ class HolographicMemoryProvider(MemoryProvider):
             for pattern in _PREF_PATTERNS:
                 if pattern.search(content):
                     try:
-                        self._store.add_fact(content[:400], category="user_pref")
+                        store.add_fact(content[:400], category="user_pref")
                         extracted += 1
                     except Exception:
                         pass
@@ -451,7 +476,7 @@ class HolographicMemoryProvider(MemoryProvider):
             for pattern in _DECISION_PATTERNS:
                 if pattern.search(content):
                     try:
-                        self._store.add_fact(content[:400], category="project")
+                        store.add_fact(content[:400], category="project")
                         extracted += 1
                     except Exception:
                         pass

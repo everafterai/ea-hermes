@@ -108,3 +108,104 @@ class TestDbPathForScope:
         a = p._db_path_for_scope(("user", "A"))
         b = p._db_path_for_scope(("chat", "B"))
         assert a == b == str(tmp_path / "legacy.db")
+
+
+class TestScopeIsolation:
+    def _provider(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": True,
+            "db_dir": str(tmp_path / "holo"),
+        })
+        p.initialize(session_id="t")
+        return p
+
+    def _add(self, provider, content):
+        return provider.handle_tool_call("fact_store", {"action": "add", "content": content})
+
+    def _search(self, provider, query):
+        out = provider.handle_tool_call("fact_store", {"action": "search", "query": query})
+        return json.loads(out)
+
+    def test_dm_users_are_isolated(self, tmp_path):
+        p = self._provider(tmp_path)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            self._add(p, "Shai prefers no em dashes")
+        finally:
+            clear_session_vars(tokens)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHACHAR", chat_id="D2")
+        try:
+            res = self._search(p, "em dashes")
+            assert res["count"] == 0
+        finally:
+            clear_session_vars(tokens)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            res = self._search(p, "em dashes")
+            assert res["count"] == 1
+        finally:
+            clear_session_vars(tokens)
+
+    def test_channel_is_shared_across_users(self, tmp_path):
+        p = self._provider(tmp_path)
+
+        tokens = set_session_vars(chat_type="channel", user_id="U_SHAI", chat_id="C_PROD")
+        try:
+            self._add(p, "prod deploy uses blue green rollout")
+        finally:
+            clear_session_vars(tokens)
+
+        # Different user, same channel -> must see the fact.
+        # NOTE: avoid hyphens in FTS5 test queries — SQLite FTS5 treats '-' as a
+        # column-filter/negation operator, so "blue-green" would match nothing.
+        tokens = set_session_vars(chat_type="channel", user_id="U_SHACHAR", chat_id="C_PROD")
+        try:
+            res = self._search(p, "blue green rollout")
+            assert res["count"] == 1
+        finally:
+            clear_session_vars(tokens)
+
+    def test_model_supplied_identity_arg_cannot_cross_scope(self, tmp_path):
+        """Hardening: scope is server-derived from contextvars. A model-supplied
+        user_id/chat_id arg on the tool call must be ignored, so it cannot reach
+        another user's or channel's memory."""
+        p = self._provider(tmp_path)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            self._add(p, "Shai private banking pin reminder")
+        finally:
+            clear_session_vars(tokens)
+
+        # Attacker session (different user) tries to inject Shai's identity as args.
+        tokens = set_session_vars(chat_type="dm", user_id="U_ATTACKER", chat_id="D9")
+        try:
+            out = p.handle_tool_call("fact_store", {
+                "action": "search",
+                "query": "banking pin",
+                "user_id": "U_SHAI",      # bogus override attempt
+                "chat_id": "D1",          # bogus override attempt
+                "scope": "user:U_SHAI",   # bogus override attempt
+            })
+            assert json.loads(out)["count"] == 0
+        finally:
+            clear_session_vars(tokens)
+
+    def test_dm_and_channel_for_same_user_are_separate(self, tmp_path):
+        p = self._provider(tmp_path)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            self._add(p, "secret personal note")
+        finally:
+            clear_session_vars(tokens)
+
+        tokens = set_session_vars(chat_type="channel", user_id="U_SHAI", chat_id="C_PROD")
+        try:
+            res = self._search(p, "secret personal note")
+            assert res["count"] == 0
+        finally:
+            clear_session_vars(tokens)
