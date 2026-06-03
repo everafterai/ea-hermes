@@ -290,3 +290,11 @@ class TestBackwardCompatAndConcurrency:
             t.join()
 
         assert errors == []
+
+
+class TestConfigSchema:
+    def test_schema_advertises_scope_keys(self):
+        p = HolographicMemoryProvider(config={})
+        keys = {entry["key"] for entry in p.get_config_schema()}
+        assert "scope_isolation" in keys
+        assert "db_dir" in keys

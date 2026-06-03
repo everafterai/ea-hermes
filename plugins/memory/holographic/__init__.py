@@ -199,9 +199,13 @@ class HolographicMemoryProvider(MemoryProvider):
 
     def get_config_schema(self):
         from hermes_constants import display_hermes_home
-        _default_db = f"{display_hermes_home()}/memory_store.db"
+        _home = display_hermes_home()
+        _default_db = f"{_home}/memory_store.db"
+        _default_dir = f"{_home}/memories/holographic"
         return [
-            {"key": "db_path", "description": "SQLite database path", "default": _default_db},
+            {"key": "scope_isolation", "description": "Per-DM-user / per-channel memory isolation (Slack multi-user gateway)", "default": "false", "choices": ["true", "false"]},
+            {"key": "db_dir", "description": "Directory for per-scope SQLite DBs (used when scope_isolation=true)", "default": _default_dir},
+            {"key": "db_path", "description": "Single SQLite DB path (used when scope_isolation=false)", "default": _default_db},
             {"key": "auto_extract", "description": "Auto-extract facts at session end", "default": "false", "choices": ["true", "false"]},
             {"key": "default_trust", "description": "Default trust score for new facts", "default": "0.5"},
             {"key": "hrr_dim", "description": "HRR vector dimensions", "default": "1024"},
