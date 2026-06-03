@@ -209,3 +209,29 @@ class TestScopeIsolation:
             assert res["count"] == 0
         finally:
             clear_session_vars(tokens)
+
+
+class TestOnMemoryWrite:
+    def test_noop_when_scoped(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": True,
+            "db_dir": str(tmp_path / "holo"),
+        })
+        p.initialize(session_id="t")
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            p.on_memory_write("add", "user", "global env note")
+            out = p.handle_tool_call("fact_store", {"action": "list"})
+            assert json.loads(out)["count"] == 0
+        finally:
+            clear_session_vars(tokens)
+
+    def test_mirrors_when_not_scoped(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "scope_isolation": False,
+            "db_path": str(tmp_path / "legacy.db"),
+        })
+        p.initialize(session_id="t")
+        p.on_memory_write("add", "user", "a preference")
+        out = p.handle_tool_call("fact_store", {"action": "list"})
+        assert json.loads(out)["count"] == 1

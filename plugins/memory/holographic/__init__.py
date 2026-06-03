@@ -328,7 +328,13 @@ class HolographicMemoryProvider(MemoryProvider):
         self._auto_extract_facts(store, messages)
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in memory writes as facts."""
+        """Mirror built-in memory writes as facts.
+
+        Disabled in scoped mode: global MEMORY.md notes must not be copied into
+        a per-scope silo (they live in the global built-in store instead).
+        """
+        if self._scope_isolation:
+            return
         if action == "add" and content:
             try:
                 store, _ = self._bundle_for_current_scope()
