@@ -281,8 +281,8 @@ TOOLSETS = {
     },
 
     "slack": {
-        "description": "Slack interaction tools (emoji reactions on messages)",
-        "tools": ["slack_react"],
+        "description": "Slack interaction tools (emoji reactions; silent turn-end)",
+        "tools": ["slack_react", "turn_end"],
         "includes": [],
     },
 
@@ -463,6 +463,7 @@ TOOLSETS = {
         "description": "Slack bot toolset - full access for workspace use (terminal has safety checks)",
         "tools": _HERMES_CORE_TOOLS + [
             "slack_react",
+            "turn_end",
         ],
         "includes": []
     },

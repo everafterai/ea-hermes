@@ -91,9 +91,21 @@ block in `~/.hermes/config.yaml`:
   suppressed** — the bot can always answer.
 - `slack_react` tool ([tools/slack_react_tool.py](tools/slack_react_tool.py)) —
   lets the agent add/remove an emoji reaction on the triggering Slack message
-  (or an explicit `message_id`). Lives in the platform-restricted `slack`
+  (or an explicit `message_id`). Targets the message via session contextvars
+  (`HERMES_SESSION_MESSAGE_ID`, set in [slack.py](gateway/platforms/slack.py)
+  `build_source(message_id=ts)`). Lives in the platform-restricted `slack`
   toolset; grant it to a role via `slack.roles`. Emoji-first behavior is driven
   by `channel_prompts`, not enforced.
+- `turn_end` tool ([tools/slack_react_tool.py](tools/slack_react_tool.py)) —
+  a **terminal** tool: the agent calls it as its final action (e.g. after
+  `slack_react`) to finish a turn silently with no text. The conversation loop
+  ([agent/conversation_loop.py](agent/conversation_loop.py)
+  `_called_terminal_turn_end`) ends the turn on this tool call **only when
+  `_silent_completion_ok` is set** — the gateway sets that per-turn for quiet
+  channels. Ending on a tool call (not an empty text response) is what avoids
+  the loop's empty-response recovery nets (post-tool nudge / retry / fallback)
+  that would otherwise force unwanted text. Inert (benign no-op ack) outside
+  quiet channels. Drive it via `channel_prompts`: "react, then call `turn_end`."
 
 ## Common commands
 

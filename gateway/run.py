@@ -17244,6 +17244,9 @@ class GatewayRunner:
                 }
                 if observed_group_context:
                     _conversation_kwargs["persist_user_message"] = message
+                # Quiet channels permit a silent finish via the terminal
+                # ``turn_end`` tool — tell the agent loop to honor it this turn.
+                agent._silent_completion_ok = _is_quiet_channel(source, user_config)
                 result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
             finally:
                 unregister_gateway_notify(_approval_session_key)
