@@ -200,3 +200,25 @@ class TestFloorToolsets:
         p = policy_from_extra({})
         assert p.can_use_tool("U_A", "clarify") is True
         assert p.can_use_tool("U_A", "terminal") is True
+
+
+class TestSlackReactToolsetGating:
+    def test_slack_react_maps_to_slack_toolset(self):
+        import tools.slack_react_tool  # noqa: F401  (register the tool)
+        from tools.registry import registry
+        assert registry.get_toolset_for_tool("slack_react") == "slack"
+
+    def test_slack_toolset_gating(self):
+        p = policy_from_extra({
+            "user_roles": {"U_react": "reactor", "U_chat": "chat_only"},
+            "roles": {"reactor": ["slack"], "chat_only": []},
+        })
+        assert p.can_use_tool("U_react", "slack") is True
+        assert p.can_use_tool("U_chat", "slack") is False
+
+    def test_admin_wildcard_allows_slack_toolset(self):
+        p = policy_from_extra({
+            "user_roles": {"U_admin": "admin"},
+            "roles": {"admin": ["*"]},
+        })
+        assert p.can_use_tool("U_admin", "slack") is True
