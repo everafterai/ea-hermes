@@ -17,9 +17,12 @@ Config in $HERMES_HOME/config.yaml (profile-scoped):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import threading
+from pathlib import Path
 from typing import Any, Dict, List
 
 from agent.memory_provider import MemoryProvider
@@ -29,6 +32,45 @@ from .retrieval import FactRetriever
 from hermes_cli.config import cfg_get
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_scope() -> "tuple[str, str]":
+    """Resolve the current memory scope from session contextvars.
+
+    DMs are per-user silos; channels/groups/threads share by chat_id.
+    Falls back to ("default", "default") for CLI/cron or missing identity.
+    """
+    try:
+        from gateway.session_context import get_session_env
+    except Exception:
+        return ("default", "default")
+    chat_type = (get_session_env("HERMES_SESSION_CHAT_TYPE", "") or "").strip()
+    user_id = (get_session_env("HERMES_SESSION_USER_ID", "") or "").strip()
+    chat_id = (get_session_env("HERMES_SESSION_CHAT_ID", "") or "").strip()
+    if chat_type == "dm" and user_id:
+        return ("user", user_id)
+    if chat_id:
+        return ("chat", chat_id)
+    if user_id:
+        return ("user", user_id)
+    return ("default", "default")
+
+
+_SCOPE_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _sanitize_scope_id(scope_id: str) -> str:
+    """Make a scope id safe for use in a filename.
+
+    Replaces every non-[A-Za-z0-9_-] char with '_'. If anything was replaced
+    or the id is long, appends a short deterministic hash of the original to
+    avoid post-sanitization collisions.
+    """
+    safe = _SCOPE_SAFE_RE.sub("_", scope_id)
+    if safe != scope_id or len(safe) > 64:
+        digest = hashlib.sha1(scope_id.encode("utf-8")).hexdigest()[:8]
+        safe = f"{safe[:48]}_{digest}"
+    return safe
 
 
 # ---------------------------------------------------------------------------
