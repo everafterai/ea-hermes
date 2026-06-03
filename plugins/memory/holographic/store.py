@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS memory_banks (
     fact_count INTEGER DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS scope_summary (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    summary         TEXT NOT NULL,
+    fact_signature  TEXT NOT NULL,
+    generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Trust adjustment constants
@@ -390,6 +397,38 @@ class MemoryStore:
                 "new_trust":    new_trust,
                 "helpful_count": row["helpful_count"] + helpful_increment,
             }
+
+    def fact_signature(self) -> str:
+        """Cheap change-detector for the facts table: '<count>:<max updated_at>'."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM facts"
+            ).fetchone()
+            return f"{row['c']}:{row['m']}"
+
+    def get_summary(self) -> "dict | None":
+        """Return the cached scope summary dict, or None if unset."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT summary, fact_signature, generated_at FROM scope_summary WHERE id = 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_summary(self, summary: str, fact_signature: str) -> None:
+        """Upsert the single-row scope summary."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO scope_summary (id, summary, fact_signature, generated_at)
+                VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    summary = excluded.summary,
+                    fact_signature = excluded.fact_signature,
+                    generated_at = excluded.generated_at
+                """,
+                (summary, fact_signature),
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Entity helpers
