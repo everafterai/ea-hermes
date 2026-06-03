@@ -122,11 +122,17 @@ class MemoryStore:
         Tool responses always reflect this live state.
     """
 
-    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375):
+    def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375,
+                 user_profile_enabled: bool = True):
         self.memory_entries: List[str] = []
         self.user_entries: List[str] = []
         self.memory_char_limit = memory_char_limit
         self.user_char_limit = user_char_limit
+        # When False, the 'user' profile store is disabled: the built-in memory
+        # tool exposes only the global 'memory' target, and 'user'-target writes
+        # are refused. Per-user memory is handled by the scoped fact_store
+        # provider instead. Default True preserves upstream behavior.
+        self.user_profile_enabled = user_profile_enabled
         # Frozen snapshot for system prompt -- set once at load_from_disk()
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
 
@@ -485,6 +491,9 @@ class MemoryStore:
 
         if target == "user":
             header = f"USER PROFILE (who the user is) [{pct}% — {current:,}/{limit:,} chars]"
+        elif not self.user_profile_enabled:
+            # Global-only mode: this store is shared across every user/session.
+            header = f"GLOBAL MEMORY — shared, always-on context for ALL users [{pct}% — {current:,}/{limit:,} chars]"
         else:
             header = f"MEMORY (your personal notes) [{pct}% — {current:,}/{limit:,} chars]"
 
@@ -618,6 +627,18 @@ def memory_tool(
     if target not in {"memory", "user"}:
         return tool_error(f"Invalid target '{target}'. Use 'memory' or 'user'.", success=False)
 
+    # Backstop: when the user-profile store is disabled, refuse 'user'-target
+    # writes regardless of what the model was shown (covers delegated sub-agents
+    # and the code-execution sandbox, which may not get the trimmed schema).
+    # Per-user memory is handled by the scoped fact_store provider instead.
+    if target == "user" and not getattr(store, "user_profile_enabled", True):
+        return tool_error(
+            "The 'user' profile store is disabled. The memory tool is for global, "
+            "always-on facts shared across ALL users (target='memory'); per-user and "
+            "per-channel memory is handled automatically by the fact_store tool.",
+            success=False,
+        )
+
     if action == "add":
         if not content:
             return tool_error("Content is required for 'add' action.", success=False)
@@ -700,6 +721,45 @@ MEMORY_SCHEMA = {
         "required": ["action", "target"],
     },
 }
+
+
+_MEMORY_GLOBAL_ONLY_DESCRIPTION = (
+    "Save durable, GLOBAL facts to always-on shared memory. This store is injected "
+    "into EVERY session for EVERY user across the entire deployment, so use it ONLY "
+    "for knowledge that is true for everyone: environment and machine facts, installed "
+    "tools and integrations, project conventions, API quirks, and stable workflows.\n\n"
+    "Do NOT store anything user-specific, person-specific, conversation-specific, or "
+    "task state here — putting personal or per-user info here would expose it to ALL "
+    "users. Per-user and per-channel memory is handled automatically by the fact_store "
+    "tool; use that for preferences, personal details, and anything scoped to one "
+    "person or channel.\n\n"
+    "WHEN TO SAVE (proactively): you discover a global environment/tooling/project fact "
+    "that will matter again in future sessions for anyone.\n"
+    "ACTIONS: add (new entry), replace (update existing — old_text identifies it), "
+    "remove (delete — old_text identifies it).\n"
+    "SKIP: user preferences, personal details, task progress, session outcomes, "
+    "trivial/obvious info, and raw data dumps."
+)
+
+
+def memory_schema_for(user_profile_enabled: bool) -> dict:
+    """Return the memory tool schema to advertise to the model.
+
+    When ``user_profile_enabled`` is True, returns the default schema unchanged
+    (both 'memory' and 'user' targets). When False, returns a global-only variant:
+    the 'user' target is dropped from the enum and the description is reframed so
+    the model treats memory as strictly global, always-on, shared context — routing
+    per-user/per-channel facts to the fact_store provider instead.
+    """
+    if user_profile_enabled:
+        return MEMORY_SCHEMA
+    import copy
+    schema = copy.deepcopy(MEMORY_SCHEMA)
+    schema["description"] = _MEMORY_GLOBAL_ONLY_DESCRIPTION
+    target = schema["parameters"]["properties"]["target"]
+    target["enum"] = ["memory"]
+    target["description"] = "Always 'memory' — the single global, always-on shared store."
+    return schema
 
 
 # --- Registry ---
