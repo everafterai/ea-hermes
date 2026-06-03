@@ -8904,6 +8904,7 @@ class GatewayRunner:
             # the case where agent did work but returned no text. Fix for #18765.
             response = _normalize_empty_agent_response(
                 agent_result, response, history_len=len(history),
+                quiet_completion_ok=_is_quiet_channel(source, _load_gateway_config()),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
 
@@ -15994,6 +15995,9 @@ class GatewayRunner:
             if _env_tp and not _tool_progress_configured
             else (_resolved_tp or _env_tp or "all")
         )
+        # Quiet channels hide tool-progress entirely, regardless of global config.
+        if _is_quiet_channel(source, user_config):
+            progress_mode = "off"
         # Disable tool progress for webhooks - they don't support message editing,
         # so each progress line would be sent as a separate message.
         from gateway.config import Platform
