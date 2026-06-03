@@ -2767,6 +2767,34 @@ class TestProgressMessageThread:
         )
 
     @pytest.mark.asyncio
+    async def test_source_carries_triggering_message_ts(self, adapter):
+        """source.message_id must equal the triggering ts.
+
+        Regression: build_source previously omitted message_id, so the gateway
+        set HERMES_SESSION_MESSAGE_ID="" and slack_react had no message to target
+        ("No target Slack message in context"). The MessageEvent.message_id was
+        always set, but the SessionSource (which _set_session_env reads) was not.
+        """
+        # Use a DM (im) so the message isn't gated by require_mention.
+        event = {
+            "channel": "D_DM",
+            "channel_type": "im",
+            "user": "U_USER",
+            "text": "react to me",
+            "ts": "1700000000.000009",
+        }
+        captured = []
+        adapter.handle_message = AsyncMock(side_effect=lambda e: captured.append(e))
+        with patch.object(adapter, "_resolve_user_name", new=AsyncMock(return_value="testuser")):
+            await adapter._handle_slack_message(event)
+
+        assert len(captured) == 1
+        assert captured[0].source.message_id == "1700000000.000009", (
+            "source.message_id must equal the triggering ts so slack_react can "
+            "target it via HERMES_SESSION_MESSAGE_ID"
+        )
+
+    @pytest.mark.asyncio
     async def test_dm_toplevel_shares_session_when_disabled(self, adapter):
         """Opting out restores legacy single-session-per-DM-channel behavior."""
         adapter.config.extra["dm_top_level_threads_as_sessions"] = False

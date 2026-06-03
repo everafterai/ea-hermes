@@ -2187,6 +2187,7 @@ class SlackAdapter(BasePlatformAdapter):
             user_id=user_id,
             user_name=user_name,
             thread_id=thread_ts,
+            message_id=ts,  # triggering message ts — lets slack_react target it
         )
 
         # Per-channel ephemeral prompt
