@@ -1432,6 +1432,39 @@ def _load_gateway_config() -> dict:
     return {}
 
 
+def _parse_channel_id_list(value) -> set:
+    """Parse a comma-separated channel-ID string into a set of trimmed IDs.
+
+    Mirrors how ``free_response_channels`` is expressed in config.yaml.
+    Returns an empty set for None/empty/non-string input.
+    """
+    if not value or not isinstance(value, str):
+        return set()
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def _is_quiet_channel(source, cfg: dict) -> bool:
+    """Return True when *source* is a Slack channel listed in slack.quiet_channels.
+
+    Matches the triggering channel (``chat_id``) or, for threads, the parent
+    channel (``parent_chat_id``) so thread replies inherit the channel's setting.
+    Only applies to Slack; other platforms always return False.
+    """
+    from gateway.config import Platform
+    if getattr(source, "platform", None) != Platform.SLACK:
+        return False
+    quiet = _parse_channel_id_list(
+        (cfg.get("slack") or {}).get("quiet_channels")
+    )
+    if not quiet:
+        return False
+    candidates = {
+        c for c in (getattr(source, "chat_id", None),
+                    getattr(source, "parent_chat_id", None)) if c
+    }
+    return bool(candidates & quiet)
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 
