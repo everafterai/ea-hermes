@@ -113,9 +113,17 @@ behavior (active/empty metadata line) — no summary read or fallback rendering.
   operation that runs in the fork.)
 - **Refresh step:** when a holographic provider is active AND `profile_summary`
   is enabled AND the scope has facts AND `fact_signature() != cached signature`:
-  1. Pull the scope's top `summary_facts` facts (by trust, then recency).
-  2. Build a summarization prompt ("Summarize what is known about this
-     {user|channel} in <= N chars of prose; factual, no preamble").
+  1. Pull the scope's top `summary_facts` facts (by trust, then recency) AND
+     the current cached summary (`get_summary()`).
+  2. Build a summarization prompt that includes BOTH the previous summary and the
+     latest facts: "Here is the previous summary and the most recent facts about
+     this {user|channel}. Produce an updated summary in <= N chars of prose:
+     preserve still-relevant knowledge from the previous summary (it may capture
+     things no longer in the recent facts), integrate the new facts, and drop
+     anything obsolete or contradicted. Factual, no preamble." This makes the
+     summary **accretive** — critical knowledge distilled in earlier summaries
+     survives even after the underlying facts age out of the top `summary_facts`,
+     while the char budget forces ongoing compression so it cannot grow unbounded.
   3. Make **one** non-tool completion call via the fork's existing model client.
   4. `set_summary(result, current_signature)`.
 
@@ -172,6 +180,9 @@ Advertised via `get_config_schema()`.
   `profile_summary: false` → legacy metadata behavior (no summary, no fallback).
 - **Generation gating:** unchanged signature → no model call; changed signature →
   regenerates and stores (model call mocked); model error → previous summary kept.
+- **Accretion:** when a prior summary exists, the assembled prompt passed to
+  `complete_fn` includes the previous summary text (verify the captured prompt
+  contains it), so distilled prior knowledge is carried into regeneration.
 - **Scope-awareness:** fork with channel identity writes the summary to the
   channel DB, not a user DB; fork with user identity writes to the user DB; fork
   without identity → default scope (no cross-scope write).
