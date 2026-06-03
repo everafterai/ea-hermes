@@ -74,8 +74,33 @@ def test_error_when_no_token(monkeypatch, _fake_post):
     assert "error" in out
 
 
+def test_already_reacted_is_treated_as_success(monkeypatch):
+    async def fake(token, channel, ts, emoji, remove):
+        return {"ok": False, "error": "already_reacted"}
+    monkeypatch.setattr(srt, "_post_reaction", fake)
+    monkeypatch.setattr(srt, "_resolve_slack_token", lambda: "xoxb-test")
+    monkeypatch.setattr(srt, "_session", lambda k, d="": {
+        "HERMES_SESSION_CHAT_ID": "C1", "HERMES_SESSION_MESSAGE_ID": "1.2"}.get(k, d))
+    out = _run({"emoji": "eyes"})
+    assert out.get("success") is True
+    assert "error" not in out
+
+
+def test_slack_api_error_surfaces(monkeypatch):
+    async def fake(token, channel, ts, emoji, remove):
+        return {"ok": False, "error": "channel_not_found"}
+    monkeypatch.setattr(srt, "_post_reaction", fake)
+    monkeypatch.setattr(srt, "_resolve_slack_token", lambda: "xoxb-test")
+    monkeypatch.setattr(srt, "_session", lambda k, d="": {
+        "HERMES_SESSION_CHAT_ID": "C1", "HERMES_SESSION_MESSAGE_ID": "1.2"}.get(k, d))
+    out = _run({"emoji": "eyes"})
+    assert "error" in out
+    assert "channel_not_found" in out["error"]
+
+
 def test_registered_in_registry():
     from tools.registry import registry
     import tools.slack_react_tool  # noqa: F401
     assert registry.get_entry("slack_react") is not None
     assert registry.get_toolset_for_tool("slack_react") == "slack"
+    assert registry.get_entry("slack_react").is_async is True

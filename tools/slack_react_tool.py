@@ -78,7 +78,7 @@ async def _post_reaction(token: str, channel: str, ts: str, emoji: str, remove: 
     payload = {"channel": channel, "timestamp": ts, "name": emoji}
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), **_sess_kw) as session:
         async with session.post(url, headers=headers, json=payload, **_req_kw) as resp:
-            return await resp.json()
+            return await resp.json(content_type=None)
 
 
 async def _slack_react_handler(args: dict, **_kw) -> str:
@@ -86,7 +86,7 @@ async def _slack_react_handler(args: dict, **_kw) -> str:
     if not emoji:
         return tool_error("'emoji' is required (Slack short name without colons).")
 
-    channel = (args.get("channel") or _session("HERMES_SESSION_CHAT_ID")).strip()
+    channel = _session("HERMES_SESSION_CHAT_ID").strip()
     ts = (args.get("message_id") or _session("HERMES_SESSION_MESSAGE_ID")).strip()
     if not channel or not ts:
         return tool_error(
