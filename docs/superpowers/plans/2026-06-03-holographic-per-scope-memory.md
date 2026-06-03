@@ -349,15 +349,43 @@ class TestScopeIsolation:
 
         tokens = set_session_vars(chat_type="channel", user_id="U_SHAI", chat_id="C_PROD")
         try:
-            self._add(p, "prod deploy uses blue-green rollout")
+            self._add(p, "prod deploy uses blue green rollout")
         finally:
             clear_session_vars(tokens)
 
         # Different user, same channel -> must see the fact.
+        # NOTE: avoid hyphens in FTS5 test queries — SQLite FTS5 treats '-' as a
+        # column-filter/negation operator, so "blue-green" would match nothing.
         tokens = set_session_vars(chat_type="channel", user_id="U_SHACHAR", chat_id="C_PROD")
         try:
-            res = self._search(p, "blue-green rollout")
+            res = self._search(p, "blue green rollout")
             assert res["count"] == 1
+        finally:
+            clear_session_vars(tokens)
+
+    def test_model_supplied_identity_arg_cannot_cross_scope(self, tmp_path):
+        """Hardening: scope is server-derived from contextvars. A model-supplied
+        user_id/chat_id arg on the tool call must be ignored, so it cannot reach
+        another user's or channel's memory."""
+        p = self._provider(tmp_path)
+
+        tokens = set_session_vars(chat_type="dm", user_id="U_SHAI", chat_id="D1")
+        try:
+            self._add(p, "Shai private banking pin reminder")
+        finally:
+            clear_session_vars(tokens)
+
+        # Attacker session (different user) tries to inject Shai's identity as args.
+        tokens = set_session_vars(chat_type="dm", user_id="U_ATTACKER", chat_id="D9")
+        try:
+            out = p.handle_tool_call("fact_store", {
+                "action": "search",
+                "query": "banking pin",
+                "user_id": "U_SHAI",      # bogus override attempt
+                "chat_id": "D1",          # bogus override attempt
+                "scope": "user:U_SHAI",   # bogus override attempt
+            })
+            assert json.loads(out)["count"] == 0
         finally:
             clear_session_vars(tokens)
 
@@ -522,6 +550,26 @@ Replace `shutdown` with:
         # SQLite connections are released at process exit.
         pass
 ```
+
+`on_memory_write` also still references the removed `self._store`. To satisfy the
+"no stale `self._store`" grep gate WITHOUT yet adding Task 4's behavioral change,
+rewire only its store access here (Task 4 adds the `scope_isolation` no-op guard):
+
+```python
+    def on_memory_write(self, action: str, target: str, content: str) -> None:
+        """Mirror built-in memory writes as facts."""
+        if action == "add" and content:
+            try:
+                store, _ = self._bundle_for_current_scope()
+                category = "user_pref" if target == "user" else "general"
+                store.add_fact(content, category=category)
+            except Exception as e:
+                logger.debug("Holographic memory_write mirror failed: %s", e)
+```
+
+After this task, confirm zero stale refs:
+`grep -n "self\._store\|self\._retriever" plugins/memory/holographic/__init__.py`
+should print nothing.
 
 - [ ] **Step 4: Run test to verify it passes**
 
