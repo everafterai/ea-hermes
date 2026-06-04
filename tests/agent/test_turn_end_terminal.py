@@ -2,7 +2,10 @@
 
 from types import SimpleNamespace
 
-from agent.conversation_loop import _called_terminal_turn_end
+from agent.conversation_loop import (
+    _called_terminal_turn_end,
+    _should_accept_silent_empty,
+)
 
 
 def _msg(*tool_names):
@@ -11,6 +14,13 @@ def _msg(*tool_names):
         SimpleNamespace(function=SimpleNamespace(name=n)) for n in tool_names
     ]
     return SimpleNamespace(tool_calls=tool_calls)
+
+
+def _reasoning_msg(**kw):
+    """Fake assistant_message carrying structured reasoning fields."""
+    base = {"reasoning": None, "reasoning_content": None, "reasoning_details": None}
+    base.update(kw)
+    return SimpleNamespace(**base)
 
 
 def test_terminal_when_turn_end_called_and_flag_set():
@@ -29,6 +39,25 @@ def test_not_terminal_without_turn_end():
 def test_not_terminal_with_no_tool_calls():
     assert _called_terminal_turn_end(SimpleNamespace(tool_calls=None), True) is False
     assert _called_terminal_turn_end(SimpleNamespace(tool_calls=[]), True) is False
+
+
+def test_silent_empty_accepted_in_quiet_channel():
+    # Empty response + quiet channel + no reasoning → silent finish.
+    assert _should_accept_silent_empty(_reasoning_msg(), "", True) is True
+
+
+def test_silent_empty_not_accepted_outside_quiet_channel():
+    assert _should_accept_silent_empty(_reasoning_msg(), "", False) is False
+
+
+def test_silent_empty_not_accepted_for_inline_thinking():
+    # Model still mid-reasoning (visible <think>) → let prefill continue.
+    assert _should_accept_silent_empty(_reasoning_msg(), "<think>...", True) is False
+
+
+def test_silent_empty_not_accepted_for_structured_reasoning():
+    msg = _reasoning_msg(reasoning_content="still thinking")
+    assert _should_accept_silent_empty(msg, "", True) is False
 
 
 def test_turn_end_tool_registered_in_slack_toolset():

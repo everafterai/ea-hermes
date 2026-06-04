@@ -106,6 +106,12 @@ block in `~/.hermes/config.yaml`:
   the loop's empty-response recovery nets (post-tool nudge / retry / fallback)
   that would otherwise force unwanted text. Inert (benign no-op ack) outside
   quiet channels. Drive it via `channel_prompts`: "react, then call `turn_end`."
+  Safety net: even when the model forgets `turn_end`, an empty/no-content turn in
+  a quiet channel is accepted silently (`_should_accept_silent_empty` in
+  [agent/conversation_loop.py](agent/conversation_loop.py)) — the empty-response
+  recovery (prior-content fallback / nudge / retry / provider fallback) is
+  skipped when `_silent_completion_ok` is set. Thinking-only responses still
+  prefill-continue. **Text replies are never suppressed** — only empty turns.
 
 ## Common commands
 

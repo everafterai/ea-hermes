@@ -95,6 +95,35 @@ def _called_terminal_turn_end(assistant_message: Any, silent_completion_ok: bool
     return False
 
 
+def _should_accept_silent_empty(
+    assistant_message: Any, final_response: str, silent_completion_ok: bool
+) -> bool:
+    """Return True when an empty/no-content response should finish the turn silently.
+
+    In a quiet channel (``silent_completion_ok``) the agent legitimately finishes
+    with no text — it reacted, or chose to ignore an off-topic message. Accept
+    that instead of running the empty-response recovery machinery (prior-content
+    fallback / post-tool nudge / retry / provider fallback), which would emit a
+    warning and force unwanted text. This is the safety net for when the model
+    does NOT explicitly call ``turn_end``.
+
+    A thinking-only response (visible ``<think>`` block or structured reasoning
+    with no surfaced content) is NOT accepted here — the model is still mid-turn,
+    so the normal prefill-continuation path should run and let it finish.
+    """
+    if not silent_completion_ok:
+        return False
+    if re.search(r'<think>|<thinking>|<reasoning>', final_response or "", re.IGNORECASE):
+        return False
+    if (
+        getattr(assistant_message, "reasoning", None)
+        or getattr(assistant_message, "reasoning_content", None)
+        or getattr(assistant_message, "reasoning_details", None)
+    ):
+        return False
+    return True
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -3723,6 +3752,25 @@ def run_conversation(
                         )
                         final_response = _recovered
                         agent._response_was_previewed = True
+                        break
+
+                    # ── Quiet-channel silent completion ──────────────
+                    # In a quiet channel an empty/no-content response is a
+                    # legitimate finish: the agent reacted (slack_react) and/or
+                    # chose to ignore an off-topic message. Accept it silently
+                    # instead of running the recovery machinery below (prior-
+                    # content fallback / post-tool nudge / retry / provider
+                    # fallback), which would warn and force unwanted text. This
+                    # is the safety net for when the model doesn't call turn_end.
+                    # Gated by _silent_completion_ok → inert outside quiet
+                    # channels. Thinking-only responses fall through to prefill.
+                    if _should_accept_silent_empty(
+                        assistant_message,
+                        final_response,
+                        getattr(agent, "_silent_completion_ok", False),
+                    ):
+                        _turn_exit_reason = "quiet_silent_completion"
+                        final_response = ""
                         break
 
                     # If the previous turn already delivered real content alongside
