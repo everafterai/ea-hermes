@@ -338,9 +338,34 @@ class HolographicMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         try:
             store, _ = self._bundle_for_current_scope()
+        except Exception:
+            return ""
+        try:
             total = store._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         except Exception:
             total = 0
+
+        if self._profile_summary:
+            label = self._scope_label()
+            try:
+                summ = store.get_summary()
+            except Exception:
+                summ = None
+            if summ and summ.get("summary"):
+                body = summ["summary"][: self._summary_max_chars]
+                return f"## What I know about {label}\n{body}"
+            # Cold start: no summary yet — fall back to top facts so it is
+            # useful immediately before the first summary is generated.
+            if total:
+                try:
+                    facts = store.list_facts(limit=min(5, self._summary_facts))
+                except Exception:
+                    facts = []
+                if facts:
+                    lines = "\n".join(f"- {f.get('content', '')}" for f in facts)
+                    return f"## What I know about {label}\n{lines}"
+
+        # Legacy metadata behavior (summary disabled, or empty store).
         if total == 0:
             return (
                 "# Holographic Memory\n"

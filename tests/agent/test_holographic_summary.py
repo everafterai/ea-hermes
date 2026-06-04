@@ -159,3 +159,67 @@ class TestRefreshScopeSummary:
             assert store.get_summary()["summary"] == "GOOD"  # unchanged
         finally:
             clear_session_vars(tokens)
+
+
+class TestSystemPromptInjection:
+    def _provider(self, tmp_path, **cfg):
+        base = {"db_dir": str(tmp_path / "h"), "profile_summary": True}
+        base.update(cfg)
+        p = HolographicMemoryProvider(config=base)
+        p.initialize(session_id="t")
+        return p
+
+    def test_injects_cached_summary_with_user_label(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            p.refresh_scope_summary(lambda prompt: "They are an analytics PM who likes brevity.")
+            block = p.system_prompt_block()
+            assert "What I know about this user" in block
+            assert "analytics PM" in block
+        finally:
+            clear_session_vars(tokens)
+
+    def test_channel_label(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="channel", user_id="U1", chat_id="C1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            p.refresh_scope_summary(lambda prompt: "Channel for prod incidents.")
+            assert "What I know about this channel" in p.system_prompt_block()
+        finally:
+            clear_session_vars(tokens)
+
+    def test_cold_start_falls_back_to_facts(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "uses pytest heavily"})
+            block = p.system_prompt_block()  # no summary generated yet
+            assert "What I know about this user" in block
+            assert "uses pytest heavily" in block
+        finally:
+            clear_session_vars(tokens)
+
+    def test_char_cap_enforced(self, tmp_path):
+        p = self._provider(tmp_path, summary_max_chars=20)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            p.refresh_scope_summary(lambda prompt: "x" * 200)
+            block = p.system_prompt_block()
+            assert "x" * 21 not in block  # summary body capped at 20
+        finally:
+            clear_session_vars(tokens)
+
+    def test_disabled_keeps_legacy_metadata(self, tmp_path):
+        p = self._provider(tmp_path, profile_summary=False)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            block = p.system_prompt_block()
+            assert "What I know about" not in block
+            assert "Holographic Memory" in block  # legacy active line
+        finally:
+            clear_session_vars(tokens)
