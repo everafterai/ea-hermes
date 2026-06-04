@@ -27,6 +27,50 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _refresh_holographic_scope_summary(agent) -> None:
+    """Refresh the current scope's holographic summary, scoped to the agent's
+    identity. Runs inside the background-review daemon thread, which does NOT
+    carry the gateway session contextvars — so we set them from the agent's
+    inherited identity, run the refresh, then restore. No-op if the holographic
+    provider is absent or the feature is off (the provider self-gates)."""
+    mm = getattr(agent, "_memory_manager", None)
+    if mm is None:
+        return
+    try:
+        provider = mm.get_provider("holographic")
+    except Exception:
+        provider = None
+    if provider is None or not hasattr(provider, "refresh_scope_summary"):
+        return
+
+    from gateway.session_context import set_session_vars, clear_session_vars
+
+    platform = getattr(agent, "platform", "") or ""
+    platform = getattr(platform, "value", platform)  # enum -> str if needed
+    tokens = set_session_vars(
+        platform=str(platform) if platform else "",
+        chat_id=getattr(agent, "_chat_id", "") or "",
+        chat_type=getattr(agent, "_chat_type", "") or "",
+        user_id=getattr(agent, "_user_id", "") or "",
+    )
+    try:
+        def _complete(prompt: str) -> str:
+            from agent.auxiliary_client import call_llm
+            resp = call_llm(
+                task="scope_summary",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.3,
+                main_runtime=agent._current_main_runtime(),
+            )
+            return (resp.choices[0].message.content or "")
+        provider.refresh_scope_summary(_complete)
+    except Exception as e:
+        logger.debug("Scope summary refresh skipped: %s", e)
+    finally:
+        clear_session_vars(tokens)
+
+
 # Review-prompt strings — used by ``spawn_background_review_thread`` to build
 # the user-message that the forked review agent receives.  AIAgent exposes
 # them as class attributes (``_MEMORY_REVIEW_PROMPT`` etc.) for back-compat;
@@ -354,6 +398,13 @@ def _run_review_in_thread(
         _set_approval_callback(_bg_review_auto_deny)
     except Exception:
         pass
+
+    # Refresh the per-scope holographic summary (scoped to the agent's identity).
+    # Independent of the memory/skill review below; self-gates when disabled.
+    try:
+        _refresh_holographic_scope_summary(agent)
+    except Exception:
+        logger.debug("background scope-summary refresh raised", exc_info=True)
 
     review_agent = None
     review_messages: List[Dict] = []

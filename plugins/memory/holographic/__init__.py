@@ -172,6 +172,9 @@ class HolographicMemoryProvider(MemoryProvider):
         self._hrr_weight = 0.3
         self._temporal_decay = 0
         self._session_id = ""
+        self._profile_summary = False
+        self._summary_max_chars = 600
+        self._summary_facts = 30
 
     @property
     def name(self) -> str:
@@ -209,6 +212,9 @@ class HolographicMemoryProvider(MemoryProvider):
             {"key": "auto_extract", "description": "Auto-extract facts at session end", "default": "false", "choices": ["true", "false"]},
             {"key": "default_trust", "description": "Default trust score for new facts", "default": "0.5"},
             {"key": "hrr_dim", "description": "HRR vector dimensions", "default": "1024"},
+            {"key": "profile_summary", "description": "Inject an always-on LLM summary of the current scope's memory into the system prompt (uses your model)", "default": "false", "choices": ["true", "false"]},
+            {"key": "summary_max_chars", "description": "Max characters of the injected scope summary", "default": "600"},
+            {"key": "summary_facts", "description": "Max facts fed to the summary generator", "default": "30"},
         ]
 
     def initialize(self, session_id: str, **kwargs) -> None:
@@ -233,6 +239,20 @@ class HolographicMemoryProvider(MemoryProvider):
         self._hrr_weight = float(self._config.get("hrr_weight", 0.3))
         self._temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
         self._session_id = session_id
+        self._profile_summary = str(self._config.get("profile_summary", "false")).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        self._summary_max_chars = int(self._config.get("summary_max_chars", 600))
+        self._summary_facts = int(self._config.get("summary_facts", 30))
+        if self._profile_summary and not self._scope_isolation:
+            # Without scope isolation every scope shares one DB / one summary row,
+            # so on a multi-user gateway a single commingled summary would be
+            # injected (and mislabeled) into every user/channel. Fine for a
+            # single-user CLI; unsafe for a shared gateway.
+            logger.warning(
+                "holographic: profile_summary is on but scope_isolation is off — "
+                "all scopes share one summary; enable scope_isolation for multi-user use."
+            )
         # NOTE: do NOT touch self._scopes here. The provider is shared across
         # concurrent gateway sessions; re-initialising on one message must not
         # disturb other live scopes.
@@ -271,12 +291,90 @@ class HolographicMemoryProvider(MemoryProvider):
                 self._scopes[db_path] = bundle
             return bundle
 
+    def _scope_label(self) -> str:
+        kind, _ = _resolve_scope()
+        return {"user": "this user", "chat": "this channel"}.get(kind, "this context")
+
+    def _build_summary_prompt(self, prior: str, facts: list) -> str:
+        label = self._scope_label()
+        fact_lines = "\n".join(f"- {f.get('content', '')}" for f in facts)
+        prior_block = (
+            f"PREVIOUS SUMMARY (preserve still-relevant knowledge from this):\n{prior}\n\n"
+            if prior else ""
+        )
+        return (
+            f"You maintain a running profile of {label} for an assistant.\n\n"
+            f"{prior_block}"
+            f"TOP FACTS (highest-trust first):\n{fact_lines}\n\n"
+            f"Write an updated summary of {label} in <= {self._summary_max_chars} characters of plain prose. "
+            f"Preserve still-relevant knowledge from the previous summary (it may capture things no longer in the "
+            f"recent facts), integrate the new facts, and drop anything obsolete or contradicted. "
+            f"Be factual and specific. Return ONLY the summary text — no preamble, no headers, no quotes."
+        )
+
+    def refresh_scope_summary(self, complete_fn) -> bool:
+        """Regenerate the current scope's cached summary if its facts changed.
+
+        ``complete_fn(prompt: str) -> str`` performs a single model completion;
+        it is supplied by the caller (the background-review fork) so the provider
+        carries no LLM client. Returns True if a new summary was stored.
+        """
+        if not self._profile_summary:
+            return False
+        try:
+            store, _ = self._bundle_for_current_scope()
+            sig = store.fact_signature()
+            if sig.startswith("0:"):
+                return False  # no facts yet
+            cached = store.get_summary()
+            if cached and cached.get("fact_signature") == sig:
+                return False  # unchanged since last summary
+            facts = store.list_facts(limit=self._summary_facts)
+            if not facts:
+                return False
+            prior = (cached or {}).get("summary", "") or ""
+            text = (complete_fn(self._build_summary_prompt(prior, facts)) or "").strip()
+            if not text:
+                return False
+            if len(text) > self._summary_max_chars:
+                text = text[: self._summary_max_chars].rstrip()
+            store.set_summary(text, sig)
+            return True
+        except Exception as e:
+            logger.debug("Holographic scope summary refresh failed: %s", e)
+            return False
+
     def system_prompt_block(self) -> str:
         try:
             store, _ = self._bundle_for_current_scope()
+        except Exception:
+            return ""
+        try:
             total = store._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
         except Exception:
             total = 0
+
+        if self._profile_summary:
+            label = self._scope_label()
+            try:
+                summ = store.get_summary()
+            except Exception:
+                summ = None
+            if summ and summ.get("summary"):
+                body = summ["summary"][: self._summary_max_chars]
+                return f"## What I know about {label}\n{body}"
+            # Cold start: no summary yet — fall back to top facts so it is
+            # useful immediately before the first summary is generated.
+            if total:
+                try:
+                    facts = store.list_facts(limit=min(5, self._summary_facts))
+                except Exception:
+                    facts = []
+                if facts:
+                    lines = "\n".join(f"- {f.get('content', '')}" for f in facts)
+                    return f"## What I know about {label}\n{lines}"
+
+        # Legacy metadata behavior (summary disabled, or empty store).
         if total == 0:
             return (
                 "# Holographic Memory\n"
