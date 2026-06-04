@@ -282,6 +282,59 @@ class HolographicMemoryProvider(MemoryProvider):
                 self._scopes[db_path] = bundle
             return bundle
 
+    def _scope_label(self) -> str:
+        kind, _ = _resolve_scope()
+        return {"user": "this user", "chat": "this channel"}.get(kind, "this context")
+
+    def _build_summary_prompt(self, prior: str, facts: list) -> str:
+        label = self._scope_label()
+        fact_lines = "\n".join(f"- {f.get('content', '')}" for f in facts)
+        prior_block = (
+            f"PREVIOUS SUMMARY (preserve still-relevant knowledge from this):\n{prior}\n\n"
+            if prior else ""
+        )
+        return (
+            f"You maintain a running profile of {label} for an assistant.\n\n"
+            f"{prior_block}"
+            f"MOST RECENT FACTS:\n{fact_lines}\n\n"
+            f"Write an updated summary of {label} in <= {self._summary_max_chars} characters of plain prose. "
+            f"Preserve still-relevant knowledge from the previous summary (it may capture things no longer in the "
+            f"recent facts), integrate the new facts, and drop anything obsolete or contradicted. "
+            f"Be factual and specific. Return ONLY the summary text — no preamble, no headers, no quotes."
+        )
+
+    def refresh_scope_summary(self, complete_fn) -> bool:
+        """Regenerate the current scope's cached summary if its facts changed.
+
+        ``complete_fn(prompt: str) -> str`` performs a single model completion;
+        it is supplied by the caller (the background-review fork) so the provider
+        carries no LLM client. Returns True if a new summary was stored.
+        """
+        if not self._profile_summary:
+            return False
+        try:
+            store, _ = self._bundle_for_current_scope()
+            sig = store.fact_signature()
+            if sig.startswith("0:"):
+                return False  # no facts yet
+            cached = store.get_summary()
+            if cached and cached.get("fact_signature") == sig:
+                return False  # unchanged since last summary
+            facts = store.list_facts(limit=self._summary_facts)
+            if not facts:
+                return False
+            prior = (cached or {}).get("summary", "") or ""
+            text = (complete_fn(self._build_summary_prompt(prior, facts)) or "").strip()
+            if not text:
+                return False
+            if len(text) > self._summary_max_chars:
+                text = text[: self._summary_max_chars].rstrip()
+            store.set_summary(text, sig)
+            return True
+        except Exception as e:
+            logger.debug("Holographic scope summary refresh failed: %s", e)
+            return False
+
     def system_prompt_block(self) -> str:
         try:
             store, _ = self._bundle_for_current_scope()

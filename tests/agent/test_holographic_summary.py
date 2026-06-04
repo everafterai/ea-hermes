@@ -64,3 +64,98 @@ class TestSummaryConfig:
         assert "profile_summary" in keys
         assert "summary_max_chars" in keys
         assert "summary_facts" in keys
+
+
+from gateway.session_context import set_session_vars, clear_session_vars
+
+
+class TestRefreshScopeSummary:
+    def _provider(self, tmp_path, **cfg):
+        base = {"db_dir": str(tmp_path / "h"), "profile_summary": True}
+        base.update(cfg)
+        p = HolographicMemoryProvider(config=base)
+        p.initialize(session_id="t")
+        return p
+
+    def test_disabled_is_noop(self, tmp_path):
+        p = self._provider(tmp_path, profile_summary=False)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "likes tea"})
+            calls = []
+            assert p.refresh_scope_summary(lambda prompt: calls.append(prompt) or "x") is False
+            assert calls == []  # model never called
+        finally:
+            clear_session_vars(tokens)
+
+    def test_generates_when_facts_present(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "User is an analytics PM"})
+            captured = {}
+            def fake(prompt):
+                captured["prompt"] = prompt
+                return "Analytics PM; prefers concise replies."
+            assert p.refresh_scope_summary(fake) is True
+            store, _ = p._bundle_for_current_scope()
+            assert store.get_summary()["summary"] == "Analytics PM; prefers concise replies."
+            # prompt mentions the scope label and includes the fact
+            assert "this user" in captured["prompt"]
+            assert "analytics pm" in captured["prompt"].lower()
+        finally:
+            clear_session_vars(tokens)
+
+    def test_skips_when_signature_unchanged(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact one"})
+            assert p.refresh_scope_summary(lambda prompt: "S1") is True
+            n = {"calls": 0}
+            def fake(prompt):
+                n["calls"] += 1
+                return "S2"
+            assert p.refresh_scope_summary(fake) is False  # unchanged signature
+            assert n["calls"] == 0
+        finally:
+            clear_session_vars(tokens)
+
+    def test_accretion_includes_prior_summary(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            p.refresh_scope_summary(lambda prompt: "PRIOR-SUMMARY-TEXT")
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact B"})
+            captured = {}
+            p.refresh_scope_summary(lambda prompt: captured.setdefault("p", prompt) or "new")
+            assert "PRIOR-SUMMARY-TEXT" in captured["p"]
+        finally:
+            clear_session_vars(tokens)
+
+    def test_channel_label_in_prompt(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="channel", user_id="U1", chat_id="C1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "deploy on fridays"})
+            captured = {}
+            p.refresh_scope_summary(lambda prompt: captured.setdefault("p", prompt) or "s")
+            assert "this channel" in captured["p"]
+        finally:
+            clear_session_vars(tokens)
+
+    def test_model_error_keeps_prior_summary(self, tmp_path):
+        p = self._provider(tmp_path)
+        tokens = set_session_vars(chat_type="dm", user_id="U1", chat_id="D1")
+        try:
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact A"})
+            p.refresh_scope_summary(lambda prompt: "GOOD")
+            p.handle_tool_call("fact_store", {"action": "add", "content": "fact B"})
+            def boom(prompt):
+                raise RuntimeError("model down")
+            assert p.refresh_scope_summary(boom) is False
+            store, _ = p._bundle_for_current_scope()
+            assert store.get_summary()["summary"] == "GOOD"  # unchanged
+        finally:
+            clear_session_vars(tokens)
