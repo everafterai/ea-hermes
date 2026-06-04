@@ -56,6 +56,13 @@ in so distilled knowledge survives as individual facts age out. Defaults off
 and `summary_facts` (default 30). Until the first summary exists, the top facts
 are injected as a fallback.
 
+**Multi-user gateways: requires `scope_isolation: true`.** With isolation off,
+every scope shares one DB and therefore one summary row, so a single commingled
+summary would be injected (and mislabeled) into every user/channel. Only enable
+`profile_summary` on a shared gateway when `scope_isolation: true` is also set.
+(Single-user CLI is fine either way — there is only one scope.) The provider logs
+a warning if `profile_summary` is on while `scope_isolation` is off.
+
 ## Tools
 
 | Tool | Description |

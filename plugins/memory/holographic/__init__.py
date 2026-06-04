@@ -244,6 +244,15 @@ class HolographicMemoryProvider(MemoryProvider):
         )
         self._summary_max_chars = int(self._config.get("summary_max_chars", 600))
         self._summary_facts = int(self._config.get("summary_facts", 30))
+        if self._profile_summary and not self._scope_isolation:
+            # Without scope isolation every scope shares one DB / one summary row,
+            # so on a multi-user gateway a single commingled summary would be
+            # injected (and mislabeled) into every user/channel. Fine for a
+            # single-user CLI; unsafe for a shared gateway.
+            logger.warning(
+                "holographic: profile_summary is on but scope_isolation is off — "
+                "all scopes share one summary; enable scope_isolation for multi-user use."
+            )
         # NOTE: do NOT touch self._scopes here. The provider is shared across
         # concurrent gateway sessions; re-initialising on one message must not
         # disturb other live scopes.
@@ -296,7 +305,7 @@ class HolographicMemoryProvider(MemoryProvider):
         return (
             f"You maintain a running profile of {label} for an assistant.\n\n"
             f"{prior_block}"
-            f"MOST RECENT FACTS:\n{fact_lines}\n\n"
+            f"TOP FACTS (highest-trust first):\n{fact_lines}\n\n"
             f"Write an updated summary of {label} in <= {self._summary_max_chars} characters of plain prose. "
             f"Preserve still-relevant knowledge from the previous summary (it may capture things no longer in the "
             f"recent facts), integrate the new facts, and drop anything obsolete or contradicted. "
