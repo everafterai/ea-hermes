@@ -172,6 +172,9 @@ class HolographicMemoryProvider(MemoryProvider):
         self._hrr_weight = 0.3
         self._temporal_decay = 0
         self._session_id = ""
+        self._profile_summary = False
+        self._summary_max_chars = 600
+        self._summary_facts = 30
 
     @property
     def name(self) -> str:
@@ -209,6 +212,9 @@ class HolographicMemoryProvider(MemoryProvider):
             {"key": "auto_extract", "description": "Auto-extract facts at session end", "default": "false", "choices": ["true", "false"]},
             {"key": "default_trust", "description": "Default trust score for new facts", "default": "0.5"},
             {"key": "hrr_dim", "description": "HRR vector dimensions", "default": "1024"},
+            {"key": "profile_summary", "description": "Inject an always-on LLM summary of the current scope's memory into the system prompt (uses your model)", "default": "false", "choices": ["true", "false"]},
+            {"key": "summary_max_chars", "description": "Max characters of the injected scope summary", "default": "600"},
+            {"key": "summary_facts", "description": "Max facts fed to the summary generator", "default": "30"},
         ]
 
     def initialize(self, session_id: str, **kwargs) -> None:
@@ -233,6 +239,11 @@ class HolographicMemoryProvider(MemoryProvider):
         self._hrr_weight = float(self._config.get("hrr_weight", 0.3))
         self._temporal_decay = int(self._config.get("temporal_decay_half_life", 0))
         self._session_id = session_id
+        self._profile_summary = str(self._config.get("profile_summary", "false")).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        self._summary_max_chars = int(self._config.get("summary_max_chars", 600))
+        self._summary_facts = int(self._config.get("summary_facts", 30))
         # NOTE: do NOT touch self._scopes here. The provider is shared across
         # concurrent gateway sessions; re-initialising on one message must not
         # disturb other live scopes.

@@ -33,3 +33,34 @@ class TestScopeSummaryStorage:
         assert got2["fact_signature"] == "2:2026-06-03 01:00:00"
         count = s._conn.execute("SELECT COUNT(*) FROM scope_summary").fetchone()[0]
         assert count == 1
+
+
+from plugins.memory.holographic import HolographicMemoryProvider
+
+
+class TestSummaryConfig:
+    def test_defaults_off(self, tmp_path):
+        p = HolographicMemoryProvider(config={"db_dir": str(tmp_path / "h")})
+        p.initialize(session_id="t")
+        assert p._profile_summary is False
+        assert p._summary_max_chars == 600
+        assert p._summary_facts == 30
+
+    def test_enabled_and_overrides(self, tmp_path):
+        p = HolographicMemoryProvider(config={
+            "db_dir": str(tmp_path / "h"),
+            "profile_summary": True,
+            "summary_max_chars": 400,
+            "summary_facts": 10,
+        })
+        p.initialize(session_id="t")
+        assert p._profile_summary is True
+        assert p._summary_max_chars == 400
+        assert p._summary_facts == 10
+
+    def test_schema_advertises_summary_keys(self, tmp_path):
+        p = HolographicMemoryProvider(config={})
+        keys = {e["key"] for e in p.get_config_schema()}
+        assert "profile_summary" in keys
+        assert "summary_max_chars" in keys
+        assert "summary_facts" in keys
