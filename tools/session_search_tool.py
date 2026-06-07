@@ -192,13 +192,18 @@ def _locate_session_db(session_id: str):
     return None, None
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10) -> str:
+def _read_session(db, session_id: str, head: int = 20, tail: int = 10, scope=None) -> str:
     """Read shape: dump a whole session by id (head + tail when large).
 
     Serves the linked-session case — the user dropped an @session reference and
     the agent wants the transcript. Bounded payload: small sessions return in
     full, large ones return the first ``head`` and last ``tail`` messages with a
     pointer to scroll the middle.
+
+    ``scope`` enforces the same per-requester visibility partition as the scroll
+    path — an out-of-scope session is reported as not-found so a platform user
+    cannot dump another user's (or another channel's) transcript by id. ``None``
+    scope (CLI/admin) imposes no restriction.
     """
     try:
         meta = db.get_session(session_id) or {}
@@ -206,6 +211,11 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10) -> str:
         logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
         meta = {}
     if not meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+
+    from hermes_state import session_row_visible
+    if not session_row_visible(meta, scope):
+        # Do not disclose the existence of out-of-scope sessions.
         return tool_error(f"session_id not found: {session_id}", success=False)
 
     try:
@@ -593,9 +603,11 @@ def session_search(
         )
 
     # Read shape: a session_id with no anchor → dump the whole session.
+    # Scope-gated exactly like scroll: a platform user can only read sessions
+    # within their own visibility partition (None scope = CLI/admin, no limit).
     if isinstance(session_id, str) and session_id.strip():
         sid = session_id.strip()
-        result = _read_session(db, sid)
+        result = _read_session(db, sid, scope=scope)
         if json.loads(result).get("success"):
             return result
 
@@ -605,7 +617,7 @@ def session_search(
         located, owner = _locate_session_db(sid)
         if located is not None:
             try:
-                found = json.loads(_read_session(located, sid))
+                found = json.loads(_read_session(located, sid, scope=scope))
             finally:
                 located.close()
             if found.get("success"):

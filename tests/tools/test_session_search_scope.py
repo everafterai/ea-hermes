@@ -233,3 +233,59 @@ def test_scroll_allows_same_channel_session(tmp_path, monkeypatch):
         clear_session_vars(tokens)
     result = json.loads(out)
     assert result["success"] is True
+
+
+def test_read_rejects_other_user_session(tmp_path, monkeypatch):
+    # READ shape (session_id, no anchor) must honor the same DM partition as
+    # scroll — Bob cannot dump Alice's DM transcript by bare id. Regression for
+    # the upstream-sync merge that added the read shape without a scope gate.
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.append_message("s_alice", role="user", content="ALICE SECRET: codename bluebird")
+    db.append_message("s_alice", role="assistant", content="ok")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="D_BOB", user_id="U_BOB")
+    try:
+        out = session_search(session_id="s_alice", db=db)
+    finally:
+        clear_session_vars(tokens)
+    result = json.loads(out)
+    assert result["success"] is False
+    # Out-of-scope sessions must be indistinguishable from non-existent ones.
+    assert "not found" in result.get("error", "").lower()
+    # And the secret content must never appear in the payload.
+    assert "bluebird" not in out
+
+
+def test_read_allows_same_channel_session(tmp_path, monkeypatch):
+    # READ shape within a shared channel is allowed, mirroring scroll.
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="C1", chat_type="group")
+    db.append_message("s_alice", role="user", content="channel message one")
+    db.append_message("s_alice", role="assistant", content="channel reply")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    tokens = set_session_vars(platform="slack", chat_type="group", chat_id="C1", user_id="U_BOB")
+    try:
+        out = session_search(session_id="s_alice", db=db, current_session_id="s_bob_other")
+    finally:
+        clear_session_vars(tokens)
+    result = json.loads(out)
+    assert result["success"] is True
+
+
+def test_read_admin_can_read_any_session(tmp_path, monkeypatch):
+    # No gateway identity -> admin scope (None) -> read shape imposes no limit.
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.append_message("s_alice", role="user", content="codename bluebird")
+    db._conn.commit()
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_CHAT_TYPE", raising=False)
+    out = session_search(session_id="s_alice", db=db)
+    result = json.loads(out)
+    assert result["success"] is True
+    assert result["session_id"] == "s_alice"
