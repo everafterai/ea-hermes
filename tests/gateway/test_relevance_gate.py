@@ -98,3 +98,10 @@ def test_classify_passes_model_through(monkeypatch):
     assert seen.get("temperature") == 0
     blob = str(seen.get("messages"))
     assert "PURPOSE" in blob and "the message" in blob and "the ctx" in blob
+
+
+def test_classify_none_content_fails_open_to_act(monkeypatch):
+    async def fake(**kw):
+        return _FakeResp(None)
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    assert _run(gr._classify_relevance("p", "msg", "", None)) is True

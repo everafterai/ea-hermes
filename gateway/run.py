@@ -1689,7 +1689,8 @@ async def _classify_relevance(purpose: str, message_text: str, thread_context: s
     )
     try:
         content = (resp.choices[0].message.content or "").strip().lower()
-    except Exception:
+    except (AttributeError, IndexError, TypeError):
+        # Malformed response shape → treat as no usable verdict (fail-open to act).
         content = ""
     # Skip only on an explicit 'ignore'; everything else (act / empty / garbage)
     # → act (fail-open).
