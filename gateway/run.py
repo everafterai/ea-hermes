@@ -7700,6 +7700,25 @@ class GatewayRunner:
                 if _action == "allow":
                     break
 
+        # Relevance pre-gate: in a quiet channel, a cheap classifier decides
+        # whether this (non-@mention) message warrants running the full agent.
+        # Skips silently when irrelevant; @mention/DM bypass + fail-open inside.
+        if not is_internal:
+            try:
+                if await _relevance_gate_should_skip(
+                    event,
+                    _load_gateway_config(),
+                    self.adapters.get(event.source.platform),
+                ):
+                    logger.info(
+                        "relevance gate skip: platform=%s chat=%s",
+                        event.source.platform.value if event.source.platform else "unknown",
+                        event.source.chat_id or "unknown",
+                    )
+                    return None
+            except Exception as _gate_exc:  # never let the gate break dispatch
+                logger.warning("relevance gate raised — proceeding: %s", _gate_exc)
+
         if is_internal:
             pass
         elif source.user_id is None:
