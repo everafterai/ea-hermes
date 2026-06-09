@@ -7700,25 +7700,6 @@ class GatewayRunner:
                 if _action == "allow":
                     break
 
-        # Relevance pre-gate: in a quiet channel, a cheap classifier decides
-        # whether this (non-@mention) message warrants running the full agent.
-        # Skips silently when irrelevant; @mention/DM bypass + fail-open inside.
-        if not is_internal:
-            try:
-                if await _relevance_gate_should_skip(
-                    event,
-                    _load_gateway_config(),
-                    self.adapters.get(event.source.platform),
-                ):
-                    logger.info(
-                        "relevance gate skip: platform=%s chat=%s",
-                        event.source.platform.value if event.source.platform else "unknown",
-                        event.source.chat_id or "unknown",
-                    )
-                    return None
-            except Exception as _gate_exc:  # never let the gate break dispatch
-                logger.warning("relevance gate raised — proceeding: %s", _gate_exc)
-
         if is_internal:
             pass
         elif source.user_id is None:
@@ -8788,6 +8769,27 @@ class GatewayRunner:
             if self._should_send_telegram_lobby_reminder(source):
                 return self._telegram_topic_root_lobby_message()
             return None
+
+        # Relevance pre-gate: in a quiet channel, a cheap classifier decides
+        # whether this (non-@mention) message warrants running the full agent.
+        # Placed AFTER auth + slash-command interception so commands and
+        # unauthorized senders are handled first; skips silently when irrelevant.
+        # @mention/DM bypass + fail-open are inside the gate.
+        if not is_internal:
+            try:
+                if await _relevance_gate_should_skip(
+                    event,
+                    _load_gateway_config(),
+                    self.adapters.get(event.source.platform),
+                ):
+                    logger.info(
+                        "relevance gate skip: platform=%s chat=%s",
+                        event.source.platform.value if event.source.platform else "unknown",
+                        event.source.chat_id or "unknown",
+                    )
+                    return None
+            except Exception as _gate_exc:  # never let the gate break dispatch
+                logger.warning("relevance gate raised — proceeding: %s", _gate_exc)
 
         # ── Claim this session before any await ───────────────────────
         # Between here and _run_agent registering the real AIAgent, there
