@@ -1697,6 +1697,49 @@ async def _classify_relevance(purpose: str, message_text: str, thread_context: s
     return not content.startswith("ignore")
 
 
+async def _relevance_gate_should_skip(event, cfg: dict, adapter, *, classify=_classify_relevance) -> bool:
+    """Return True when a quiet-channel message should be skipped (no agent run).
+
+    Gate is inactive (returns False) unless the channel is a quiet channel.
+    Directly-addressed (@mention/DM) messages always run the agent. Classifier
+    errors fail open (return False → agent runs). *adapter* is the platform
+    adapter (for optional thread context); may be None. *classify* is injectable
+    for tests.
+    """
+    source = getattr(event, "source", None)
+    if source is None:
+        return False
+    purpose = _relevance_gate_purpose(source, cfg)
+    if purpose is None:
+        return False  # not a quiet channel — gate inactive
+    if getattr(event, "directly_addressed", False):
+        return False  # explicit @mention / DM → always act
+    if getattr(source, "chat_type", "") == "dm":
+        return False  # belt-and-suspenders
+
+    model = (cfg.get("slack") or {}).get("relevance_gate_model") or None
+
+    thread_context = ""
+    thread_id = getattr(source, "thread_id", None)
+    if adapter is not None and thread_id and hasattr(adapter, "_fetch_thread_context"):
+        try:
+            thread_context = await adapter._fetch_thread_context(
+                channel_id=getattr(source, "chat_id", ""),
+                thread_ts=thread_id,
+                current_ts=getattr(source, "message_id", ""),
+            ) or ""
+        except Exception:
+            thread_context = ""
+
+    try:
+        act = await classify(purpose, getattr(event, "text", "") or "", thread_context, model)
+    except Exception as exc:
+        logger.warning("relevance gate classifier failed — failing open (allow): %s", exc)
+        return False  # fail-open
+
+    return not act
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 

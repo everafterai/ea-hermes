@@ -105,3 +105,57 @@ def test_classify_none_content_fails_open_to_act(monkeypatch):
         return _FakeResp(None)
     monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
     assert _run(gr._classify_relevance("p", "msg", "", None)) is True
+
+
+# ---------------------------------------------------------------------------
+# _relevance_gate_should_skip orchestrator tests (Task 6)
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+from gateway.run import _relevance_gate_should_skip
+
+
+def _event(chat_id="C1", text="m", directly=False, thread_id=None, chat_type="channel",
+           platform=Platform.SLACK):
+    src = SessionSource(platform=platform, chat_id=chat_id, chat_type=chat_type,
+                        thread_id=thread_id, message_id="1.1")
+    return SimpleNamespace(text=text, source=src, directly_addressed=directly)
+
+
+_QUIET_CFG = {"slack": {"quiet_channels": "C1"}}
+
+
+def test_skip_when_classifier_says_ignore():
+    async def classify(*a, **k):
+        return False  # ignore
+    assert _run(_relevance_gate_should_skip(_event(), _QUIET_CFG, None, classify=classify)) is True
+
+
+def test_no_skip_when_classifier_says_act():
+    async def classify(*a, **k):
+        return True
+    assert _run(_relevance_gate_should_skip(_event(), _QUIET_CFG, None, classify=classify)) is False
+
+
+def test_no_skip_no_call_when_directly_addressed():
+    called = {"n": 0}
+    async def classify(*a, **k):
+        called["n"] += 1
+        return False
+    res = _run(_relevance_gate_should_skip(_event(directly=True), _QUIET_CFG, None, classify=classify))
+    assert res is False and called["n"] == 0
+
+
+def test_no_skip_no_call_when_not_quiet_channel():
+    called = {"n": 0}
+    async def classify(*a, **k):
+        called["n"] += 1
+        return False
+    cfg = {"slack": {"quiet_channels": "C2"}}
+    res = _run(_relevance_gate_should_skip(_event("C1"), cfg, None, classify=classify))
+    assert res is False and called["n"] == 0
+
+
+def test_fail_open_on_classifier_error():
+    async def classify(*a, **k):
+        raise RuntimeError("boom")
+    assert _run(_relevance_gate_should_skip(_event(), _QUIET_CFG, None, classify=classify)) is False
