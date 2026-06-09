@@ -1632,6 +1632,36 @@ def _is_quiet_channel(source, cfg: dict) -> bool:
     return bool(candidates & quiet)
 
 
+_RELEVANCE_GATE_DEFAULT_PURPOSE = (
+    "Decide whether the assistant must take an action relevant to this "
+    "channel; otherwise ignore."
+)
+
+
+def _relevance_gate_purpose(source, cfg: dict):
+    """Return the relevance-gate purpose for *source*'s channel, or None.
+
+    None means the channel is not a quiet channel — the gate is inactive.
+    Otherwise resolve: slack.relevance_gate_purpose[chat_id] →
+    slack.channel_prompts[chat_id] → a generic default.
+    """
+    if not _is_quiet_channel(source, cfg):
+        return None
+    slack_cfg = cfg.get("slack") or {}
+    chat_id = getattr(source, "chat_id", None)
+    purposes = slack_cfg.get("relevance_gate_purpose") or {}
+    if isinstance(purposes, dict):
+        explicit = purposes.get(chat_id)
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+    prompts = slack_cfg.get("channel_prompts") or {}
+    if isinstance(prompts, dict):
+        prompt = prompts.get(chat_id)
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+    return _RELEVANCE_GATE_DEFAULT_PURPOSE
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 
