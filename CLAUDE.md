@@ -112,6 +112,12 @@ block in `~/.hermes/config.yaml`:
   recovery (prior-content fallback / nudge / retry / provider fallback) is
   skipped when `_silent_completion_ok` is set. Thinking-only responses still
   prefill-continue. **Text replies are never suppressed** — only empty turns.
+  Same for the codex/Responses path: a gpt-5.x turn that yields only reasoning
+  (no text, no tool call) is classified `incomplete` and continued up to 3×; when
+  that's exhausted in a quiet channel, `_codex_incomplete_exhausted_result`
+  ([agent/conversation_loop.py](agent/conversation_loop.py)) finishes silently
+  instead of posting "Codex response remained incomplete…" (the model chose to
+  stay silent). Non-quiet channels keep the warning.
 
 ## Common commands
 

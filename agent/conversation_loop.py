@@ -114,6 +114,36 @@ def _should_accept_silent_empty(
     return True
 
 
+def _codex_incomplete_exhausted_result(
+    messages: list, api_call_count: int, silent_completion_ok: bool
+) -> dict:
+    """Build the run-result when codex continuation is exhausted (3 retries).
+
+    A gpt-5.x reasoning response that yields only reasoning — no visible text
+    and no tool call — is classified ``incomplete`` and continued. In a quiet
+    channel that pattern is usually *intentional silence* (the model reasoned
+    "this isn't for me" and chose to say nothing), so after the retries are
+    spent we finish silently (empty response, ``completed``) instead of posting
+    a "remained incomplete" warning. Outside quiet channels we keep the warning
+    (a genuinely stuck turn should surface).
+    """
+    if silent_completion_ok:
+        return {
+            "final_response": "",
+            "messages": messages,
+            "api_calls": api_call_count,
+            "completed": True,
+        }
+    return {
+        "final_response": None,
+        "messages": messages,
+        "api_calls": api_call_count,
+        "completed": False,
+        "partial": True,
+        "error": "Codex response remained incomplete after 3 continuation attempts",
+    }
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -3897,14 +3927,11 @@ def run_conversation(
 
                 agent._codex_incomplete_retries = 0
                 agent._persist_session(messages, conversation_history)
-                return {
-                    "final_response": None,
-                    "messages": messages,
-                    "api_calls": api_call_count,
-                    "completed": False,
-                    "partial": True,
-                    "error": "Codex response remained incomplete after 3 continuation attempts",
-                }
+                return _codex_incomplete_exhausted_result(
+                    messages,
+                    api_call_count,
+                    getattr(agent, "_silent_completion_ok", False),
+                )
             elif hasattr(agent, "_codex_incomplete_retries"):
                 agent._codex_incomplete_retries = 0
             
