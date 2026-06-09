@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from agent.conversation_loop import (
     _called_terminal_turn_end,
+    _codex_incomplete_exhausted_result,
     _should_accept_silent_empty,
 )
 
@@ -58,6 +59,22 @@ def test_silent_empty_not_accepted_for_inline_thinking():
 def test_silent_empty_not_accepted_for_structured_reasoning():
     msg = _reasoning_msg(reasoning_content="still thinking")
     assert _should_accept_silent_empty(msg, "", True) is False
+
+
+def test_codex_incomplete_finishes_silently_in_quiet_channel():
+    # Exhausted codex continuation in a quiet channel → clean silent finish.
+    res = _codex_incomplete_exhausted_result([{"role": "x"}], 4, True)
+    assert res["final_response"] == ""
+    assert res["completed"] is True
+    assert "error" not in res
+    assert res.get("partial") is not True
+
+
+def test_codex_incomplete_surfaces_warning_outside_quiet_channel():
+    res = _codex_incomplete_exhausted_result([{"role": "x"}], 4, False)
+    assert res["final_response"] is None
+    assert res["partial"] is True
+    assert "remained incomplete" in res["error"]
 
 
 def test_turn_end_tool_registered_in_slack_toolset():
