@@ -1662,6 +1662,40 @@ def _relevance_gate_purpose(source, cfg: dict):
     return _RELEVANCE_GATE_DEFAULT_PURPOSE
 
 
+async def _classify_relevance(purpose: str, message_text: str, thread_context: str, model) -> bool:
+    """Return True ('act') unless the classifier clearly says 'ignore'.
+
+    Lean-silent is enforced via the prompt (the model answers 'ignore' when
+    unsure). Parse-level uncertainty (empty/garbage) returns True (act) so a
+    real message is never silently dropped — fail-open. Raises propagate to the
+    orchestrator, which also fails open.
+    """
+    from agent.auxiliary_client import async_call_llm
+    system = (
+        "You are a relevance filter for a Slack channel. Channel purpose: "
+        f"{purpose}\n"
+        "Decide if the assistant must ACT on the latest message (e.g. "
+        "track/update/resolve something this channel is for) or IGNORE it "
+        "(chatter, questions directed at people, general discussion). When "
+        "unsure, answer IGNORE. Reply with exactly one word: act or ignore."
+    )
+    user = f"Recent thread context:\n{thread_context}\n\nLatest message:\n{message_text}"
+    resp = await async_call_llm(
+        model=model or None,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        temperature=0,
+        max_tokens=4,
+    )
+    try:
+        content = (resp.choices[0].message.content or "").strip().lower()
+    except Exception:
+        content = ""
+    # Skip only on an explicit 'ignore'; everything else (act / empty / garbage)
+    # → act (fail-open).
+    return not content.startswith("ignore")
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 

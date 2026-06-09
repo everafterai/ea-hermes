@@ -42,3 +42,59 @@ def test_purpose_falls_back_to_channel_prompt():
 def test_purpose_falls_back_to_default():
     cfg = {"slack": {"quiet_channels": "C1"}}
     assert _relevance_gate_purpose(_src("C1"), cfg) == _DEFAULT_PURPOSE
+
+
+import asyncio
+import gateway.run as gr
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+# NOTE: _classify_relevance imports async_call_llm lazily from
+# agent.auxiliary_client, so patch it on the SOURCE module (re-read each call).
+def test_classify_act(monkeypatch):
+    async def fake(**kw):
+        return _FakeResp("act")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    assert _run(gr._classify_relevance("p", "msg", "", None)) is True
+
+
+def test_classify_ignore(monkeypatch):
+    async def fake(**kw):
+        return _FakeResp("ignore")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    assert _run(gr._classify_relevance("p", "msg", "ctx", "gpt-5-nano")) is False
+
+
+def test_classify_ignore_case_and_punctuation(monkeypatch):
+    async def fake(**kw):
+        return _FakeResp("  IGNORE.\n")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    assert _run(gr._classify_relevance("p", "msg", "", None)) is False
+
+
+def test_classify_empty_or_garbage_fails_open_to_act(monkeypatch):
+    async def fake(**kw):
+        return _FakeResp("")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    assert _run(gr._classify_relevance("p", "msg", "", None)) is True
+
+
+def test_classify_passes_model_through(monkeypatch):
+    seen = {}
+    async def fake(**kw):
+        seen.update(kw)
+        return _FakeResp("ignore")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    _run(gr._classify_relevance("PURPOSE", "the message", "the ctx", "gpt-5-nano"))
+    assert seen.get("model") == "gpt-5-nano"
+    assert seen.get("temperature") == 0
+    blob = str(seen.get("messages"))
+    assert "PURPOSE" in blob and "the message" in blob and "the ctx" in blob
