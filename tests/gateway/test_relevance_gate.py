@@ -159,3 +159,13 @@ def test_fail_open_on_classifier_error():
     async def classify(*a, **k):
         raise RuntimeError("boom")
     assert _run(_relevance_gate_should_skip(_event(), _QUIET_CFG, None, classify=classify)) is False
+
+
+def test_no_skip_no_call_for_dm_even_if_not_directly_addressed():
+    called = {"n": 0}
+    async def classify(*a, **k):
+        called["n"] += 1
+        return False
+    ev = _event(directly=False, chat_type="dm")
+    res = _run(_relevance_gate_should_skip(ev, _QUIET_CFG, None, classify=classify))
+    assert res is False and called["n"] == 0

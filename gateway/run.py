@@ -1715,7 +1715,9 @@ async def _relevance_gate_should_skip(event, cfg: dict, adapter, *, classify=_cl
     if getattr(event, "directly_addressed", False):
         return False  # explicit @mention / DM → always act
     if getattr(source, "chat_type", "") == "dm":
-        return False  # belt-and-suspenders
+        # Defensive: never gate a DM even if a DM id is misconfigured into
+        # quiet_channels (DMs are also covered by directly_addressed above).
+        return False
 
     model = (cfg.get("slack") or {}).get("relevance_gate_model") or None
 
@@ -1727,6 +1729,7 @@ async def _relevance_gate_should_skip(event, cfg: dict, adapter, *, classify=_cl
                 channel_id=getattr(source, "chat_id", ""),
                 thread_ts=thread_id,
                 current_ts=getattr(source, "message_id", ""),
+                team_id=getattr(source, "guild_id", "") or "",
             ) or ""
         except Exception:
             thread_context = ""
