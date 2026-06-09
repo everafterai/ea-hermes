@@ -1681,7 +1681,7 @@ async def _classify_relevance(purpose: str, message_text: str, thread_context: s
     )
     user = f"Recent thread context:\n{thread_context}\n\nLatest message:\n{message_text}"
     resp = await async_call_llm(
-        model=model or None,
+        model=model or "",
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         temperature=0,
