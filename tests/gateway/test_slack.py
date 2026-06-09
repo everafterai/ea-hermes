@@ -3398,6 +3398,19 @@ class TestProgressMessageThread:
         )
         assert msg_event.message_id == "2000000000.000001"
 
+    @pytest.mark.asyncio
+    async def test_dm_sets_directly_addressed(self, adapter):
+        event = {
+            "channel": "D_DM", "channel_type": "im", "user": "U_USER",
+            "text": "hello", "ts": "1700000000.000010",
+        }
+        captured = []
+        adapter.handle_message = AsyncMock(side_effect=lambda e: captured.append(e))
+        with patch.object(adapter, "_resolve_user_name", new=AsyncMock(return_value="testuser")):
+            await adapter._handle_slack_message(event)
+        assert len(captured) == 1
+        assert captured[0].directly_addressed is True
+
 
 class TestSlackReplyToText:
     """Ensure MessageEvent.reply_to_text is populated on thread replies so
