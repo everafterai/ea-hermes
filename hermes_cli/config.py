@@ -1812,6 +1812,8 @@ DEFAULT_CONFIG = {
         "free_response_channels": "",  # Comma-separated channel IDs where bot responds without mention
         "allowed_channels": "",        # If set, bot ONLY responds in these channel IDs (whitelist)
         "quiet_channels": "",          # Comma-separated channel IDs: hide tool-progress + allow emoji-only (silent) completion
+        "relevance_gate_model": "",    # Cheap/fast model for the quiet-channel relevance pre-gate (empty = use main turn model)
+        "relevance_gate_purpose": {},  # Per-channel {chat_id: purpose}; classifier "what to act on" (falls back to channel_prompts)
         "channel_prompts": {},         # Per-channel ephemeral system prompts
     },
 
