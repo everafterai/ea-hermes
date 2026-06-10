@@ -1837,7 +1837,7 @@ class TestRunJobSkillBacked:
 
         fake_db = MagicMock()
 
-        def _skill_view(name):
+        def _skill_view(name, **kwargs):
             return json.dumps({"success": True, "content": f"# {name}\nInstructions for {name}."})
 
         with patch("cron.scheduler._hermes_home", tmp_path), \
@@ -1864,8 +1864,18 @@ class TestRunJobSkillBacked:
         assert success is True
         assert error is None
         assert final_response == "ok"
-        assert skill_view_mock.call_count == 2
-        assert [call.args[0] for call in skill_view_mock.call_args_list] == ["blogwatcher", "maps"]
+        # Each skill is loaded once for the prompt (positional call) plus one
+        # cheap frontmatter probe (preprocess=False) for model overrides.
+        prompt_loads = [
+            c.args[0] for c in skill_view_mock.call_args_list
+            if "preprocess" not in c.kwargs
+        ]
+        assert prompt_loads == ["blogwatcher", "maps"]
+        probe_loads = [
+            c.args[0] for c in skill_view_mock.call_args_list
+            if c.kwargs.get("preprocess") is False
+        ]
+        assert probe_loads == ["blogwatcher", "maps"]
 
         prompt_arg = mock_agent.run_conversation.call_args.args[0]
         assert prompt_arg.index("blogwatcher") < prompt_arg.index("maps")

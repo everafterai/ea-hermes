@@ -2841,6 +2841,9 @@ class GatewayRunner:
                 runtime_model,
             )
             model = runtime_model
+        model, runtime_kwargs = self._apply_channel_model_override(
+            source, user_config, model, runtime_kwargs
+        )
         if override and resolved_session_key:
             model, runtime_kwargs = self._apply_session_model_override(
                 resolved_session_key, model, runtime_kwargs
@@ -8728,6 +8731,15 @@ class GatewayRunner:
                     )
                     if msg:
                         event.text = msg
+                        # Skill-declared model override (frontmatter
+                        # metadata.hermes.model): switch the session like
+                        # /model would, before the agent for this turn is
+                        # resolved, so the skill's own turn runs on it.
+                        self._apply_skill_model_override_from_path(
+                            _quick_key,
+                            skill_cmds[cmd_key].get("skill_md_path", ""),
+                            _skill_name or cmd_key,
+                        )
                         # Fall through to normal message processing with skill content
                 else:
                     # Not an active skill — check if it's a known-but-disabled or
@@ -9328,6 +9340,7 @@ class GatewayRunner:
                 from agent.skill_commands import _load_skill_payload, _build_skill_message
                 _combined_parts: list[str] = []
                 _loaded_names: list[str] = []
+                _skill_model_applied = False
                 for _sname in _skill_names:
                     _loaded = _load_skill_payload(_sname, task_id=_quick_key)
                     if _loaded:
@@ -9340,6 +9353,13 @@ class GatewayRunner:
                         if _part:
                             _combined_parts.append(_part)
                             _loaded_names.append(_sname)
+                            # First override-bearing skill wins for the session.
+                            _mo = _loaded_skill.get("model_override")
+                            if _mo and not _skill_model_applied:
+                                self._apply_skill_model_override(
+                                    session_key, _mo, _display_name
+                                )
+                                _skill_model_applied = True
                     else:
                         logger.warning("[Gateway] Auto-skill '%s' not found", _sname)
                 if _combined_parts:
@@ -16646,6 +16666,145 @@ class GatewayRunner:
             default=str,
         )
         return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+    def _apply_channel_model_override(
+        self, source, user_config, model: str, runtime_kwargs: dict
+    ) -> tuple:
+        """Apply a slack.channel_models override, returning (model, runtime_kwargs).
+
+        Sits between the global default and the session /model override in
+        the precedence chain (callers apply the session override after this).
+        Slack only.  Fail-open: any lookup or credential-resolution problem
+        logs a warning and leaves the global resolution untouched — a
+        misconfigured channel entry must never break the channel.
+        """
+        from gateway.config import Platform
+
+        if getattr(source, "platform", None) != Platform.SLACK:
+            return model, runtime_kwargs
+        try:
+            from agent.model_override import (
+                normalize_model_override,
+                resolve_override_runtime,
+            )
+            from gateway.platforms.base import resolve_channel_model
+
+            chat_id = getattr(source, "chat_id", None)
+            parent_id = getattr(source, "parent_chat_id", None)
+
+            entry = None
+            adapter = (getattr(self, "adapters", None) or {}).get(Platform.SLACK)
+            adapter_extra = getattr(getattr(adapter, "config", None), "extra", None)
+            if isinstance(adapter_extra, dict) and adapter_extra.get("channel_models"):
+                entry = resolve_channel_model(adapter_extra, chat_id, parent_id)
+            if entry is None:
+                cfg = user_config if user_config is not None else _load_gateway_config()
+                slack_cfg = (cfg.get("slack") or {}) if isinstance(cfg, dict) else {}
+                entry = resolve_channel_model(slack_cfg, chat_id, parent_id)
+
+            override = normalize_model_override(entry)
+            if not override:
+                return model, runtime_kwargs
+
+            override_model, override_runtime = resolve_override_runtime(override)
+            if override_model:
+                model = override_model
+            for key in ("provider", "api_key", "base_url", "api_mode"):
+                val = override_runtime.get(key)
+                if val is not None:
+                    runtime_kwargs[key] = val
+            logger.debug(
+                "Channel model override applied: chat=%s model=%s provider=%s",
+                chat_id, model, override_runtime.get("provider") or "(inherit)",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Channel model override failed for chat=%s — falling back to "
+                "global model: %s",
+                getattr(source, "chat_id", None), exc,
+            )
+        return model, runtime_kwargs
+
+    def _apply_skill_model_override(
+        self, session_key: str, override, skill_name: str
+    ) -> None:
+        """Switch the session's model because an invoked skill declared one.
+
+        Semantics match the /model command: store the resolved bundle in
+        ``_session_model_overrides``, evict the cached agent so the current
+        turn builds fresh on the new model, and queue a pending model note.
+        Fail-open: any resolution problem logs and leaves the session on its
+        current model — the skill still loads.  No-op when the same override
+        is already active (repeat invocations must not churn the cache).
+        """
+        try:
+            from agent.model_override import (
+                normalize_model_override,
+                resolve_override_runtime,
+            )
+
+            normalized = normalize_model_override(override)
+            if not normalized or not session_key:
+                return
+
+            existing = self._session_model_overrides.get(session_key) or {}
+            if existing and all(
+                existing.get(k) == normalized.get(k) or normalized.get(k) is None
+                for k in ("model", "provider", "base_url")
+            ) and existing.get("model") == normalized.get("model"):
+                return
+
+            override_model, override_runtime = resolve_override_runtime(normalized)
+            bundle = {"model": override_model} if override_model else {}
+            for key in ("provider", "api_key", "base_url", "api_mode"):
+                val = override_runtime.get(key)
+                if val is not None:
+                    bundle[key] = val
+            if not bundle:
+                return
+
+            current_model = existing.get("model") or ""
+            self._session_model_overrides[session_key] = bundle
+            self._evict_cached_agent(session_key)
+            if not hasattr(self, "_pending_model_notes"):
+                self._pending_model_notes = {}
+            self._pending_model_notes[session_key] = (
+                f"[Note: model was switched to {override_model or bundle.get('provider')} "
+                f"by the \"{skill_name}\" skill (declared in its frontmatter). "
+                f"Adjust your self-identification accordingly.]"
+            )
+            logger.info(
+                "Skill model override applied: session=%s skill=%s %s -> %s",
+                session_key, skill_name, current_model or "(default)", override_model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skill model override failed for skill=%s — staying on current "
+                "model: %s",
+                skill_name, exc,
+            )
+
+    def _apply_skill_model_override_from_path(
+        self, session_key: str, skill_md_path: str, skill_name: str
+    ) -> None:
+        """Read SKILL.md frontmatter from disk and apply its model override."""
+        try:
+            from pathlib import Path
+
+            from agent.model_override import extract_skill_model_override
+            from agent.skill_utils import parse_frontmatter
+
+            content = Path(skill_md_path).read_text(encoding="utf-8")
+            frontmatter, _ = parse_frontmatter(content)
+            override = extract_skill_model_override(frontmatter)
+        except Exception as exc:
+            logger.debug(
+                "Could not read skill frontmatter for model override (%s): %s",
+                skill_name, exc,
+            )
+            return
+        if override:
+            self._apply_skill_model_override(session_key, override, skill_name)
 
     def _apply_session_model_override(
         self, session_key: str, model: str, runtime_kwargs: dict

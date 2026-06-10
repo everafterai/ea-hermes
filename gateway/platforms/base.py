@@ -1770,6 +1770,41 @@ def resolve_channel_skills(
     return None
 
 
+def resolve_channel_model(
+    config_extra: dict,
+    channel_id: str | None,
+    parent_id: str | None = None,
+) -> "str | dict | None":
+    """Resolve a per-channel model override entry from platform config.
+
+    Looks up ``channel_models`` in the adapter's ``config.extra`` dict (or
+    any dict carrying that key, e.g. the raw ``slack:`` config block).
+    Prefers an exact match on *channel_id*; falls back to *parent_id*
+    (threads inherit the parent channel's model).
+
+    Returns the raw entry — a model string or a
+    ``{model, provider, base_url}`` dict (normalization is the caller's
+    job, see ``agent.model_override``) — or None if no match.  Blank
+    string entries are treated as absent.
+    """
+    models = config_extra.get("channel_models") or {}
+    if not isinstance(models, dict):
+        return None
+
+    for key in (channel_id, parent_id):
+        if not key:
+            continue
+        entry = models.get(str(key))
+        if entry is None:
+            continue
+        if isinstance(entry, str):
+            entry = entry.strip()
+            if not entry:
+                continue
+        return entry
+    return None
+
+
 def _strip_media_directives(text: str) -> str:
     """Strip internal delivery directives ([[audio_as_voice]], [[as_document]],
     MEDIA:<path>) so they never render as visible text.

@@ -918,6 +918,12 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["group_user_allowed_commands"] = platform_cfg["group_user_allowed_commands"]
                 if plat in {Platform.DISCORD, Platform.SLACK} and "channel_skill_bindings" in platform_cfg:
                     bridged["channel_skill_bindings"] = platform_cfg["channel_skill_bindings"]
+                if plat == Platform.SLACK and "channel_models" in platform_cfg:
+                    channel_models = platform_cfg["channel_models"]
+                    if isinstance(channel_models, dict):
+                        bridged["channel_models"] = {str(k): v for k, v in channel_models.items()}
+                    else:
+                        bridged["channel_models"] = channel_models
                 if "channel_prompts" in platform_cfg:
                     channel_prompts = platform_cfg["channel_prompts"]
                     if isinstance(channel_prompts, dict):

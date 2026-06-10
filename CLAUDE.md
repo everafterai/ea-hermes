@@ -130,6 +130,33 @@ block in `~/.hermes/config.yaml`:
   error → the agent runs (never silently drops a real message). Only active on
   Slack quiet channels; inert elsewhere.
 
+### Per-channel / per-task model overrides
+
+Route work to different models without changing the global `model.default`.
+All surfaces share one entry shape — a model string OR
+`{model, provider, base_url}` (credentials always resolved host-side; never
+put API keys in entries). Shared helpers: [agent/model_override.py](agent/model_override.py).
+Design doc: [docs/superpowers/specs/2026-06-10-model-overrides-design.md](docs/superpowers/specs/2026-06-10-model-overrides-design.md).
+
+- **`slack.channel_models`** (top-level `slack:` block): `chat_id → entry`;
+  threads inherit via `parent_chat_id`. Applied in
+  `_apply_channel_model_override` ([gateway/run.py](gateway/run.py)).
+  Precedence: session `/model` > `channel_models` > global default.
+  Fail-open — a bad entry logs and falls back to the global model.
+- **Skill frontmatter** (`metadata.hermes.{model,provider,base_url}` in
+  SKILL.md): invoking the skill (slash command or channel auto-skill)
+  switches the session's model for the rest of the session, exactly like
+  `/model` (writes `_session_model_overrides`, evicts the cached agent).
+  Last writer wins; cleared by `/new`/`/reset`/restart. CLI sessions, skill
+  bundles, and plugin skills are out of scope (v1).
+- **Cron**: jobs already carry per-job `model`/`provider`/`base_url`;
+  additionally a skill listed in `job.skills` fills any of those fields the
+  job leaves unset (`_effective_job_model_fields` in
+  [cron/scheduler.py](cron/scheduler.py)). Job fields always win.
+- **Delegation**: `delegate_task` accepts `model`/`provider`/`base_url`
+  (top-level and per-task) so sub-agents can run on cheaper/stronger models;
+  omitted = inherit parent ([tools/delegate_tool.py](tools/delegate_tool.py)).
+
 ## Common commands
 
 ```bash

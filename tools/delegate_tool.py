@@ -1974,6 +1974,9 @@ def delegate_task(
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+    base_url: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -1987,6 +1990,11 @@ def delegate_task(
     'leaf' (default) cannot; 'orchestrator' retains the delegation
     toolset and can spawn its own workers, bounded by
     delegation.max_spawn_depth.  Per-task role beats the top-level one.
+
+    model/provider/base_url run the child on a different model.  Field-wise
+    precedence: per-task fields > top-level params > delegation.* config >
+    inherit parent.  Credentials for a different provider are resolved
+    host-side via the runtime provider system.
 
     Returns JSON with results array, one entry per task.
     """
@@ -2103,25 +2111,76 @@ def delegate_task(
     # Wrapped in try/finally so the global is always restored even if a
     # child build raises (otherwise _last_resolved_tool_names stays corrupted).
     children = []
+    # Identical per-task override entries resolve credentials once per batch.
+    _override_runtime_cache: Dict[tuple, tuple] = {}
     try:
         for i, t in enumerate(task_list):
             task_acp_args = t.get("acp_args") if "acp_args" in t else None
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
+
+            # Per-call model override — field-wise precedence: per-task
+            # fields > top-level params > delegation.* config (creds) >
+            # inherit parent (handled in _build_child_agent).
+            from agent.model_override import (
+                normalize_model_override,
+                resolve_override_runtime,
+            )
+
+            call_override = normalize_model_override(
+                {
+                    "model": t.get("model") or model,
+                    "provider": t.get("provider") or provider,
+                    "base_url": t.get("base_url") or base_url,
+                }
+            )
+            task_model = creds["model"]
+            task_provider = creds["provider"]
+            task_base_url = creds["base_url"]
+            task_api_key = creds["api_key"]
+            task_api_mode = creds["api_mode"]
+            if call_override:
+                cache_key = (
+                    call_override.get("model"),
+                    call_override.get("provider"),
+                    call_override.get("base_url"),
+                )
+                if cache_key not in _override_runtime_cache:
+                    try:
+                        _override_runtime_cache[cache_key] = resolve_override_runtime(
+                            call_override
+                        )
+                    except Exception as exc:
+                        return tool_error(
+                            f"Cannot resolve model override for task {i} "
+                            f"(provider '{call_override.get('provider')}'): {exc}. "
+                            f"Check that the provider is configured (API key set, "
+                            f"valid provider name), or omit provider/base_url to "
+                            f"use the model on the parent's provider."
+                        )
+                o_model, o_runtime = _override_runtime_cache[cache_key]
+                if o_model:
+                    task_model = o_model
+                if o_runtime:
+                    task_provider = o_runtime.get("provider") or task_provider
+                    task_api_key = o_runtime.get("api_key") or task_api_key
+                    task_base_url = o_runtime.get("base_url") or task_base_url
+                    task_api_mode = o_runtime.get("api_mode") or task_api_mode
+
             child = _build_child_agent(
                 task_index=i,
                 goal=t["goal"],
                 context=t.get("context"),
                 toolsets=t.get("toolsets") or toolsets,
-                model=creds["model"],
+                model=task_model,
                 max_iterations=effective_max_iter,
                 task_count=n_tasks,
                 parent_agent=parent_agent,
-                override_provider=creds["provider"],
-                override_base_url=creds["base_url"],
-                override_api_key=creds["api_key"],
-                override_api_mode=creds["api_mode"],
+                override_provider=task_provider,
+                override_base_url=task_base_url,
+                override_api_key=task_api_key,
+                override_api_mode=task_api_mode,
                 override_acp_command=t.get("acp_command")
                 or acp_command
                 or creds.get("command"),
@@ -2795,6 +2854,18 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "model": {
+                            "type": "string",
+                            "description": "Per-task model override. See top-level 'model' for semantics.",
+                        },
+                        "provider": {
+                            "type": "string",
+                            "description": "Per-task provider override. See top-level 'provider' for semantics.",
+                        },
+                        "base_url": {
+                            "type": "string",
+                            "description": "Per-task base_url override. See top-level 'base_url' for semantics.",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -2830,6 +2901,30 @@ DELEGATE_TASK_SCHEMA = {
                     "Leave empty unless acp_command is explicitly provided."
                 ),
             },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Run the subagent(s) on a different model "
+                    "(default: inherit the parent's model). Useful for routing "
+                    "leaf work to a cheaper/faster model or a stronger one."
+                ),
+            },
+            "provider": {
+                "type": "string",
+                "description": (
+                    "Provider for the override model, only needed when it lives "
+                    "on a different provider than the parent (e.g. 'openai', "
+                    "'anthropic', 'openrouter', or 'custom:<name>'). Credentials "
+                    "are resolved from the host config — NEVER pass API keys."
+                ),
+            },
+            "base_url": {
+                "type": "string",
+                "description": (
+                    "Custom API endpoint for the override model (self-hosted or "
+                    "custom providers). Leave empty otherwise."
+                ),
+            },
         },
         "required": [],
     },
@@ -2852,6 +2947,9 @@ registry.register(
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
         role=args.get("role"),
+        model=args.get("model"),
+        provider=args.get("provider"),
+        base_url=args.get("base_url"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
