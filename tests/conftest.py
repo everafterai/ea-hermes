@@ -642,6 +642,51 @@ def _live_system_guard(request, monkeypatch):
 
         monkeypatch.setattr(_os, "killpg", _guarded_killpg)
 
+    # ── In-process exec into a hermes entrypoint ───────────────────
+    # ``relaunch(["update"])`` uses os.execvp to REPLACE the current process
+    # with ``hermes update``. Inside a pytest worker that (1) silently
+    # vaporizes the worker — the file reports "no tests ran" — and (2) runs
+    # the real updater against PROJECT_ROOT: autostash + checkout main on
+    # the developer's checkout (incident 2026-06-10). Only hermes-entrypoint
+    # execs are blocked; fork+exec helpers (pty/ptyprocess children) that
+    # exec arbitrary argv keep working. execl/execlp/execle/execlpe call
+    # these v-variants through the os module namespace, so they're covered.
+    def _is_hermes_exec_target(file, args) -> bool:
+        try:
+            argv = [str(file)] + [str(a) for a in (args or [])]
+        except Exception:
+            return False
+        head = argv[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+        joined = " ".join(argv).lower()
+        return (
+            head in ("hermes", "hermes.exe")
+            or "hermes_cli.main" in joined
+            or "hermes_cli/main.py" in joined
+        )
+
+    def _make_guarded_exec(real_exec, exec_name):
+        def _guarded_exec(file, args, *rest):
+            if _is_hermes_exec_target(file, args):
+                raise RuntimeError(
+                    f"tests/conftest.py live-system guard: blocked "
+                    f"os.{exec_name}({file!r}) — exec into a hermes "
+                    "entrypoint replaces the pytest worker (file reports "
+                    "'no tests ran') and `hermes update` mutates the real "
+                    "repo (autostash + checkout main). Mock "
+                    "hermes_cli.relaunch.relaunch or cmd_update in the "
+                    "test, or mark with "
+                    "@pytest.mark.live_system_guard_bypass."
+                )
+            return real_exec(file, args, *rest)
+        return _guarded_exec
+
+    for _exec_name in ("execv", "execve", "execvp", "execvpe"):
+        _real_exec = getattr(_os, _exec_name, None)
+        if _real_exec is not None:
+            monkeypatch.setattr(
+                _os, _exec_name, _make_guarded_exec(_real_exec, _exec_name)
+            )
+
     # ── Subprocess command-string inspection (whole-line) ──────────
     _HERMES_TOKENS = (
         "hermes-gateway",
@@ -714,7 +759,98 @@ def _live_system_guard(request, monkeypatch):
                     return True
         return False
 
-    def _check_subprocess_cmd(name, cmd):
+    # ── Repo-mutation / self-update guard (incident 2026-06-10) ────
+    # A test that reaches the real ``hermes update`` mutates PROJECT_ROOT
+    # itself: cmd_update autostashes uncommitted work and checks out main —
+    # on a developer machine that vaporized ~1600 lines of in-progress work
+    # mid-suite, twice. Three escape routes are closed below:
+    #   (a) ``hermes update`` / ``python -m hermes_cli.main update`` as a
+    #       subprocess (e.g. web_server's _spawn_hermes_action),
+    #   (b) mutating git commands whose effective directory is the real
+    #       repo root (the updater's stash/checkout/pull primitives),
+    #   (c) in-process os.exec* into a hermes entrypoint (the
+    #       ``relaunch(["update"])`` path) — handled further below, since
+    #       exec also silently replaces the pytest worker ("no tests ran").
+    from pathlib import Path as _Path
+
+    _repo_root = _Path(__file__).resolve().parent.parent
+    _HERMES_HEADS = {"hermes", "hermes.exe"}
+
+    def _split_tokens(cmd_str):
+        try:
+            return _shlex.split(cmd_str)
+        except ValueError:
+            return cmd_str.split()
+
+    def _is_hermes_self_update(cmd) -> bool:
+        cmd_str = _cmd_to_string(cmd)
+        if "update" not in cmd_str.lower():
+            return False
+        toks = [t.lower() for t in _split_tokens(cmd_str)]
+        for i, tok in enumerate(toks):
+            head = tok.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            entrypoint = (
+                head in _HERMES_HEADS
+                or tok == "hermes_cli.main"
+                or tok.endswith("hermes_cli/main.py")
+            )
+            if entrypoint and toks[i + 1 : i + 2] == ["update"]:
+                # Only the TOP-LEVEL update subcommand is the self-updater;
+                # nested ones (``hermes users update``) are fine.
+                return True
+        return False
+
+    _GIT_MUTATING_VERBS = {
+        "stash", "checkout", "switch", "pull", "reset",
+        "clean", "merge", "rebase", "restore",
+    }
+    _GIT_STASH_READONLY = {"list", "show"}
+
+    def _is_repo_mutating_git(cmd, run_kwargs) -> bool:
+        cmd_str = _cmd_to_string(cmd)
+        if "git" not in cmd_str:
+            return False
+        toks = _split_tokens(cmd_str)
+        git_idx = next(
+            (
+                i for i, tok in enumerate(toks)
+                if tok.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] in ("git", "git.exe")
+            ),
+            None,
+        )
+        if git_idx is None:
+            return False
+        rest = toks[git_idx + 1 :]
+        effective_dir = None
+        verb = None
+        verb_args = []
+        j = 0
+        while j < len(rest):
+            tok = rest[j]
+            if tok == "-C" and j + 1 < len(rest):
+                effective_dir = rest[j + 1]
+                j += 2
+                continue
+            if tok.startswith("-"):
+                j += 1
+                continue
+            verb = tok
+            verb_args = rest[j + 1 :]
+            break
+        if verb not in _GIT_MUTATING_VERBS:
+            return False
+        if verb == "stash":
+            sub = next((t for t in verb_args if not t.startswith("-")), None)
+            if sub in _GIT_STASH_READONLY:
+                return False
+        if effective_dir is None:
+            effective_dir = (run_kwargs or {}).get("cwd") or _os.getcwd()
+        try:
+            return _Path(str(effective_dir)).resolve() == _repo_root
+        except Exception:
+            return False
+
+    def _check_subprocess_cmd(name, cmd, run_kwargs=None):
         if _is_blocked_systemctl(cmd):
             raise RuntimeError(
                 f"tests/conftest.py live-system guard: blocked "
@@ -731,10 +867,27 @@ def _live_system_guard(request, monkeypatch):
                 "Mark with @pytest.mark.live_system_guard_bypass if "
                 "intentional."
             )
+        if _is_hermes_self_update(cmd):
+            raise RuntimeError(
+                f"tests/conftest.py live-system guard: blocked "
+                f"subprocess.{name}({cmd!r}) — `hermes update` mutates the "
+                "REAL repo (PROJECT_ROOT): it autostashes uncommitted work "
+                "and checks out main. Mock cmd_update / _spawn_hermes_action "
+                "/ relaunch in the test, or mark with "
+                "@pytest.mark.live_system_guard_bypass."
+            )
+        if _is_repo_mutating_git(cmd, run_kwargs):
+            raise RuntimeError(
+                f"tests/conftest.py live-system guard: blocked "
+                f"subprocess.{name}({cmd!r}) — mutating git command aimed at "
+                "the real repo root would clobber the developer's checkout. "
+                "Run git against a tmp_path fixture repo (pass cwd=...), or "
+                "mark with @pytest.mark.live_system_guard_bypass."
+            )
 
     def _wrap_subprocess(name, real):
         def _guarded(cmd, *args, **kwargs):
-            _check_subprocess_cmd(name, cmd)
+            _check_subprocess_cmd(name, cmd, kwargs)
             return real(cmd, *args, **kwargs)
         _guarded.__name__ = f"_guarded_{name}"
         # Make the wrapper subscriptable like the wrapped callable when
@@ -752,7 +905,7 @@ def _live_system_guard(request, monkeypatch):
 
         class _GuardedPopen(real):  # type: ignore[misc, valid-type]
             def __init__(self, cmd, *args, **kwargs):
-                _check_subprocess_cmd("Popen", cmd)
+                _check_subprocess_cmd("Popen", cmd, kwargs)
                 super().__init__(cmd, *args, **kwargs)
 
         _GuardedPopen.__name__ = "Popen"
@@ -824,12 +977,12 @@ def _live_system_guard(request, monkeypatch):
 
         async def _guarded_async_exec(program, *args, **kwargs):
             _check_subprocess_cmd(
-                "asyncio.create_subprocess_exec", [program, *args]
+                "asyncio.create_subprocess_exec", [program, *args], kwargs
             )
             return await real_async_exec(program, *args, **kwargs)
 
         async def _guarded_async_shell(cmd, *args, **kwargs):
-            _check_subprocess_cmd("asyncio.create_subprocess_shell", cmd)
+            _check_subprocess_cmd("asyncio.create_subprocess_shell", cmd, kwargs)
             return await real_async_shell(cmd, *args, **kwargs)
 
         monkeypatch.setattr(_asyncio, "create_subprocess_exec", _guarded_async_exec)
