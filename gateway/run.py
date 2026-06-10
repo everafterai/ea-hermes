@@ -19216,6 +19216,13 @@ class GatewayRunner:
             )
         ):
             _NOTIFY_INTERVAL = None
+        # Quiet channels suppress the "⏳ Working — N min" heartbeat entirely,
+        # regardless of global config — same policy as tool-progress above.
+        # These are low-noise "hidden assistant" channels where status bubbles
+        # are unwanted; the bot still surfaces real text replies, errors,
+        # approvals, and clarifications.
+        if _is_quiet_channel(source, user_config):
+            _NOTIFY_INTERVAL = None
         _notify_start = time.time()
 
         async def _notify_long_running():
