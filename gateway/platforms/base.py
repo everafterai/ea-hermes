@@ -1462,6 +1462,10 @@ class MessageEvent:
     # completion notifications) that must bypass user authorization checks.
     internal: bool = False
 
+    # True when the bot was explicitly addressed (Slack @mention or DM). Lets the
+    # relevance pre-gate bypass classification for directly-addressed messages.
+    directly_addressed: bool = False
+
     # Timestamps
     timestamp: datetime = field(default_factory=datetime.now)
     

@@ -940,6 +940,11 @@ class TestSlackQuietChannelsConfig:
         from hermes_cli.config import DEFAULT_CONFIG
         assert DEFAULT_CONFIG["slack"]["quiet_channels"] == ""
 
+    def test_default_config_includes_relevance_gate_keys(self):
+        from hermes_cli.config import DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["slack"]["relevance_gate_model"] == ""
+        assert DEFAULT_CONFIG["slack"]["relevance_gate_purpose"] == {}
+
 
 class TestUserMessagePreviewConfig:
     def test_default_config_preview_line_counts(self):

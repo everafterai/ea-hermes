@@ -118,6 +118,17 @@ block in `~/.hermes/config.yaml`:
   ([agent/conversation_loop.py](agent/conversation_loop.py)) finishes silently
   instead of posting "Codex response remained incomplete…" (the model chose to
   stay silent). Non-quiet channels keep the warning.
+- **Relevance pre-gate** (default for `quiet_channels`): before the full agent
+  runs, a cheap classifier (`slack.relevance_gate_model`, empty = main model)
+  decides act/ignore on each **non-@mention** message; `ignore` ends the turn
+  with no agent run. Lives in [gateway/run.py](gateway/run.py)
+  (`_relevance_gate_should_skip` → `_classify_relevance` via `async_call_llm`),
+  invoked in `_handle_message` after `pre_gateway_dispatch`. @mention/DM bypass
+  it (`MessageEvent.directly_addressed`, set in [slack.py](gateway/platforms/slack.py)).
+  Purpose per channel: `slack.relevance_gate_purpose[chat_id]` →
+  `channel_prompts[chat_id]` → a generic default. **Fail-open**: classifier
+  error → the agent runs (never silently drops a real message). Only active on
+  Slack quiet channels; inert elsewhere.
 
 ## Common commands
 

@@ -1632,6 +1632,117 @@ def _is_quiet_channel(source, cfg: dict) -> bool:
     return bool(candidates & quiet)
 
 
+_RELEVANCE_GATE_DEFAULT_PURPOSE = (
+    "Decide whether the assistant must take an action relevant to this "
+    "channel; otherwise ignore."
+)
+
+
+def _relevance_gate_purpose(source, cfg: dict):
+    """Return the relevance-gate purpose for *source*'s channel, or None.
+
+    None means the channel is not a quiet channel — the gate is inactive.
+    Otherwise resolve: slack.relevance_gate_purpose[chat_id] →
+    slack.channel_prompts[chat_id] → a generic default.
+    """
+    if not _is_quiet_channel(source, cfg):
+        return None
+    slack_cfg = cfg.get("slack") or {}
+    chat_id = getattr(source, "chat_id", None)
+    purposes = slack_cfg.get("relevance_gate_purpose") or {}
+    if isinstance(purposes, dict):
+        explicit = purposes.get(chat_id)
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+    prompts = slack_cfg.get("channel_prompts") or {}
+    if isinstance(prompts, dict):
+        prompt = prompts.get(chat_id)
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt.strip()
+    return _RELEVANCE_GATE_DEFAULT_PURPOSE
+
+
+async def _classify_relevance(purpose: str, message_text: str, thread_context: str, model) -> bool:
+    """Return True ('act') unless the classifier clearly says 'ignore'.
+
+    Lean-silent is enforced via the prompt (the model answers 'ignore' when
+    unsure). Parse-level uncertainty (empty/garbage) returns True (act) so a
+    real message is never silently dropped — fail-open. Raises propagate to the
+    orchestrator, which also fails open.
+    """
+    from agent.auxiliary_client import async_call_llm
+    system = (
+        "You are a relevance filter for a Slack channel. Channel purpose: "
+        f"{purpose}\n"
+        "Decide if the assistant must ACT on the latest message (e.g. "
+        "track/update/resolve something this channel is for) or IGNORE it "
+        "(chatter, questions directed at people, general discussion). When "
+        "unsure, answer IGNORE. Reply with exactly one word: act or ignore."
+    )
+    user = f"Recent thread context:\n{thread_context}\n\nLatest message:\n{message_text}"
+    resp = await async_call_llm(
+        model=model or "",
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        temperature=0,
+        max_tokens=4,
+    )
+    try:
+        content = (resp.choices[0].message.content or "").strip().lower()
+    except (AttributeError, IndexError, TypeError):
+        # Malformed response shape → treat as no usable verdict (fail-open to act).
+        content = ""
+    # Skip only on an explicit 'ignore'; everything else (act / empty / garbage)
+    # → act (fail-open).
+    return not content.startswith("ignore")
+
+
+async def _relevance_gate_should_skip(event, cfg: dict, adapter, *, classify=_classify_relevance) -> bool:
+    """Return True when a quiet-channel message should be skipped (no agent run).
+
+    Gate is inactive (returns False) unless the channel is a quiet channel.
+    Directly-addressed (@mention/DM) messages always run the agent. Classifier
+    errors fail open (return False → agent runs). *adapter* is the platform
+    adapter (for optional thread context); may be None. *classify* is injectable
+    for tests.
+    """
+    source = getattr(event, "source", None)
+    if source is None:
+        return False
+    purpose = _relevance_gate_purpose(source, cfg)
+    if purpose is None:
+        return False  # not a quiet channel — gate inactive
+    if getattr(event, "directly_addressed", False):
+        return False  # explicit @mention / DM → always act
+    if getattr(source, "chat_type", "") == "dm":
+        # Defensive: never gate a DM even if a DM id is misconfigured into
+        # quiet_channels (DMs are also covered by directly_addressed above).
+        return False
+
+    model = (cfg.get("slack") or {}).get("relevance_gate_model") or None
+
+    thread_context = ""
+    thread_id = getattr(source, "thread_id", None)
+    if adapter is not None and thread_id and hasattr(adapter, "_fetch_thread_context"):
+        try:
+            thread_context = await adapter._fetch_thread_context(
+                channel_id=getattr(source, "chat_id", ""),
+                thread_ts=thread_id,
+                current_ts=getattr(source, "message_id", ""),
+                team_id=getattr(source, "guild_id", "") or "",
+            ) or ""
+        except Exception:
+            thread_context = ""
+
+    try:
+        act = await classify(purpose, getattr(event, "text", "") or "", thread_context, model)
+    except Exception as exc:
+        logger.warning("relevance gate classifier failed — failing open (allow): %s", exc)
+        return False  # fail-open
+
+    return not act
+
+
 def _load_gateway_runtime_config() -> dict:
     """Load gateway config for runtime reads, expanding supported ``${VAR}`` refs.
 
@@ -8658,6 +8769,27 @@ class GatewayRunner:
             if self._should_send_telegram_lobby_reminder(source):
                 return self._telegram_topic_root_lobby_message()
             return None
+
+        # Relevance pre-gate: in a quiet channel, a cheap classifier decides
+        # whether this (non-@mention) message warrants running the full agent.
+        # Placed AFTER auth + slash-command interception so commands and
+        # unauthorized senders are handled first; skips silently when irrelevant.
+        # @mention/DM bypass + fail-open are inside the gate.
+        if not is_internal:
+            try:
+                if await _relevance_gate_should_skip(
+                    event,
+                    _load_gateway_config(),
+                    self.adapters.get(event.source.platform),
+                ):
+                    logger.info(
+                        "relevance gate skip: platform=%s chat=%s",
+                        event.source.platform.value if event.source.platform else "unknown",
+                        event.source.chat_id or "unknown",
+                    )
+                    return None
+            except Exception as _gate_exc:  # never let the gate break dispatch
+                logger.warning("relevance gate raised — proceeding: %s", _gate_exc)
 
         # ── Claim this session before any await ───────────────────────
         # Between here and _run_agent registering the real AIAgent, there
