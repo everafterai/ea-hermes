@@ -228,6 +228,26 @@ def _handle_send(args):
         return tool_error(f"Unknown platform: {platform_name}")
 
     pconfig = config.platforms.get(platform)
+
+    # Self-heal for child/delegated execution contexts: the gateway loads
+    # ~/.hermes/.env into os.environ at startup, but a sub-agent or worker
+    # spawned for a turn may not have — leaving env-sourced bot tokens absent,
+    # so load_gateway_config() yields a tokenless/disabled platform. When a
+    # token-based platform looks unconfigured, reload the dotenv and re-read
+    # config once before giving up. Mirrors slack_react's token resolver.
+    _token_platform_names = {"telegram", "discord", "slack", "mattermost", "matrix", "weixin"}
+    if platform_name in _token_platform_names and (
+        not pconfig or not pconfig.enabled
+        or not (getattr(pconfig, "token", "") or "").strip()
+    ):
+        try:
+            from hermes_cli.env_loader import load_hermes_dotenv
+            load_hermes_dotenv()
+            config = load_gateway_config()
+            pconfig = config.platforms.get(platform)
+        except Exception:
+            pass
+
     if not pconfig or not pconfig.enabled:
         # Weixin can be configured purely via .env; synthesize a pconfig so
         # send_message and cron delivery work without a gateway.yaml entry.

@@ -10,9 +10,12 @@ any Slack channel.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from tools.registry import registry, tool_error, tool_result
+
+logger = logging.getLogger(__name__)
 
 
 SLACK_REACT_SCHEMA = {
@@ -53,7 +56,15 @@ def _session(name: str, default: str = "") -> str:
 
 
 def _resolve_slack_token() -> str:
-    """Resolve the Slack bot token from gateway config, falling back to env."""
+    """Resolve the Slack bot token from gateway config, falling back to env.
+
+    Self-heals for child/delegated execution contexts: the gateway process
+    loads ``~/.hermes/.env`` into ``os.environ`` at startup, but a sub-agent
+    or worker process spawned for a turn may never have done so — leaving
+    ``SLACK_BOT_TOKEN`` unset and the tool wrongly reporting "token not
+    configured". When neither config nor env yields a token, load the Hermes
+    dotenv once and retry before giving up.
+    """
     try:
         from gateway.config import load_gateway_config, Platform
         cfg = load_gateway_config()
@@ -62,6 +73,16 @@ def _resolve_slack_token() -> str:
             return pconfig.token or ""
     except Exception:
         pass
+    token = os.getenv("SLACK_BOT_TOKEN", "").strip()
+    if token:
+        return token
+    # Token absent — the running process likely never loaded ~/.hermes/.env
+    # (delegation sub-agent / worker). Load it once and retry.
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv()
+    except Exception:
+        return ""
     return os.getenv("SLACK_BOT_TOKEN", "").strip()
 
 
@@ -96,12 +117,21 @@ async def _slack_react_handler(args: dict, **_kw) -> str:
 
     token = _resolve_slack_token()
     if not token:
+        logger.warning(
+            "[slack_react] no Slack bot token resolved (channel=%s ts=%s, "
+            "SLACK_BOT_TOKEN in env=%s) — reaction skipped",
+            channel, ts, bool(os.getenv("SLACK_BOT_TOKEN")),
+        )
         return tool_error("Slack bot token not configured (SLACK_BOT_TOKEN).")
 
     remove = bool(args.get("remove", False))
     try:
         data = await _post_reaction(token, channel, ts, emoji, remove)
     except Exception as e:
+        logger.warning(
+            "[slack_react] reaction request failed (channel=%s ts=%s emoji=%s): %s",
+            channel, ts, emoji, e,
+        )
         return tool_error(f"Slack reaction request failed: {e}")
 
     if data.get("ok"):
@@ -109,6 +139,10 @@ async def _slack_react_handler(args: dict, **_kw) -> str:
     err = data.get("error", "unknown")
     if err in {"already_reacted", "no_reaction"}:
         return tool_result(success=True, emoji=emoji, noop=err)
+    logger.warning(
+        "[slack_react] Slack API error '%s' (channel=%s ts=%s emoji=%s remove=%s)",
+        err, channel, ts, emoji, remove,
+    )
     return tool_error(f"Slack API error: {err}")
 
 
