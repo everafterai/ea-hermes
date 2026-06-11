@@ -688,6 +688,49 @@ class TestLoadGatewayConfig:
             "C01ABC": "Code review mode",
         }
 
+    def test_bridges_slack_channel_models_from_config_yaml(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "slack:\n"
+            "  channel_models:\n"
+            '    "C01ABC": gpt-5-mini\n'
+            "    123456:\n"
+            "      model: claude-opus-4\n"
+            "      provider: anthropic\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+
+        assert config.platforms[Platform.SLACK].extra["channel_models"] == {
+            "C01ABC": "gpt-5-mini",
+            "123456": {"model": "claude-opus-4", "provider": "anthropic"},
+        }
+
+    def test_channel_models_not_bridged_for_discord(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "discord:\n"
+            "  channel_models:\n"
+            '    "123": gpt-5-mini\n',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+
+        # Either the discord platform entry is absent entirely (nothing
+        # bridged) or its extra lacks the key — both prove non-bridging.
+        plat_cfg = config.platforms.get(Platform.DISCORD)
+        assert plat_cfg is None or "channel_models" not in plat_cfg.extra
+
     def test_bridges_feishu_allow_bots_from_config_yaml_to_env(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

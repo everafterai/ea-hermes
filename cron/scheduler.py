@@ -1294,6 +1294,56 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
     return _scan_assembled_cron_prompt("\n".join(parts), job, has_skills=True)
 
 
+def _resolve_job_skills_model_override(job: dict):
+    """Return the first model override declared by the job's skills, or None.
+
+    Skills declare overrides in SKILL.md frontmatter
+    (``metadata.hermes.{model,provider,base_url}``).  Fail-open: any load or
+    parse problem just means no override.
+    """
+    skills = job.get("skills")
+    if skills is None:
+        legacy = job.get("skill")
+        skills = [legacy] if legacy else []
+    elif isinstance(skills, str):
+        skills = [skills]
+    skill_names = [str(name).strip() for name in skills if str(name).strip()]
+    if not skill_names:
+        return None
+
+    try:
+        import tools.skills_tool as _skills_tool
+        from agent.model_override import normalize_model_override
+
+        for skill_name in skill_names:
+            try:
+                loaded = json.loads(_skills_tool.skill_view(skill_name, preprocess=False))
+            except Exception:
+                continue
+            if not isinstance(loaded, dict) or not loaded.get("success"):
+                continue
+            override = normalize_model_override(loaded.get("model_override"))
+            if override:
+                return override
+    except Exception:
+        logger.debug(
+            "Cron job '%s': skill model override lookup failed",
+            job.get("name", job.get("id")), exc_info=True,
+        )
+    return None
+
+
+def _effective_job_model_fields(job: dict):
+    """Return (model, provider, base_url) for a job, field-wise precedence:
+    job's own fields > skill frontmatter override > None (caller falls back
+    to config defaults)."""
+    skill_override = _resolve_job_skills_model_override(job) or {}
+    model = job.get("model") or skill_override.get("model") or None
+    provider = job.get("provider") or skill_override.get("provider") or None
+    base_url = job.get("base_url") or skill_override.get("base_url") or None
+    return model, provider, base_url
+
+
 def _scan_assembled_cron_prompt(assembled: str, job: dict, *, has_skills: bool = False) -> str:
     """Scan the fully-assembled cron prompt for injection patterns. Raises
     ``CronPromptInjectionBlocked`` when a match fires so ``run_job`` can
@@ -1623,7 +1673,10 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                 else str(delivery_target["thread_id"])
             )
 
-        model = job.get("model") or os.getenv("HERMES_MODEL") or ""
+        # Field-wise: job's own model/provider/base_url win; a skill listed on
+        # the job may declare an override in its frontmatter for the gaps.
+        _eff_model, _eff_provider, _eff_base_url = _effective_job_model_fields(job)
+        model = _eff_model or os.getenv("HERMES_MODEL") or ""
 
         # Load config.yaml for model, reasoning, prefill, toolsets, provider routing
         _cfg = {}
@@ -1635,7 +1688,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     _cfg = yaml.safe_load(_f) or {}
                 _cfg = _expand_env_vars(_cfg)
                 _model_cfg = _cfg.get("model", {})
-                if not job.get("model"):
+                if not _eff_model:
                     if isinstance(_model_cfg, str):
                         model = _model_cfg
                     elif isinstance(_model_cfg, dict):
@@ -1699,10 +1752,10 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             # circuits that precedence and can resurrect old providers (for
             # example DeepSeek) for cron jobs that do not pin provider/model.
             runtime_kwargs = {
-                "requested": job.get("provider"),
+                "requested": _eff_provider,
             }
-            if job.get("base_url"):
-                runtime_kwargs["explicit_base_url"] = job.get("base_url")
+            if _eff_base_url:
+                runtime_kwargs["explicit_base_url"] = _eff_base_url
             runtime = resolve_runtime_provider(**runtime_kwargs)
         except AuthError as auth_exc:
             # Primary provider auth failed — try fallback chain before giving up.

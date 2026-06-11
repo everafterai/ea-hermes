@@ -203,7 +203,18 @@ def test_subprocess_killall_hermes_blocked():
 
 # ──────────────────── pass-through cases (must NOT raise) ──────
 
+# The systemctl pass-through tests actually invoke systemctl: on macOS the
+# binary doesn't exist and they die on FileNotFoundError, which says nothing
+# about the guard. Skip where systemctl is absent (CI runs Linux, so the
+# guard's pass-through behavior stays covered there).
+import shutil
 
+_needs_systemctl = pytest.mark.skipif(
+    shutil.which("systemctl") is None, reason="systemctl not on this platform"
+)
+
+
+@_needs_systemctl
 def test_systemctl_status_passes_through():
     """Read-only systemctl probes (status/show/list-units) are fine."""
     # Run with check=False so we don't fail on the gateway's exit code.
@@ -216,6 +227,7 @@ def test_systemctl_status_passes_through():
     assert r is not None  # Did not raise — the guard let it through.
 
 
+@_needs_systemctl
 def test_systemctl_show_passes_through():
     r = subprocess.run(
         ["systemctl", "--user", "show", "hermes-gateway", "--no-pager"],
@@ -226,6 +238,7 @@ def test_systemctl_show_passes_through():
     assert r is not None
 
 
+@_needs_systemctl
 def test_systemctl_list_units_passes_through():
     r = subprocess.run(
         ["systemctl", "--user", "list-units", "fake-not-real-unit*", "--no-pager"],
@@ -236,6 +249,7 @@ def test_systemctl_list_units_passes_through():
     assert r is not None
 
 
+@_needs_systemctl
 def test_systemctl_unrelated_unit_passes_through():
     """systemctl restart of a non-hermes unit is allowed (we only protect hermes)."""
     # Use --dry-run so we don't actually try to restart anything; just
@@ -293,3 +307,99 @@ def test_bypass_marker_disables_guard():
     # so we get the real os.kill. Calling os.kill(os.getpid(), 0) just
     # checks that the PID exists — harmless.
     os.kill(os.getpid(), 0)  # No exception — guard is OFF.
+
+
+# ──────────────────── repo-mutation / self-update guard ─────────
+#
+# Incident 2026-06-10: a full-suite run triggered a REAL ``hermes update``
+# against the developer's checkout — ``cmd_update`` operates on
+# PROJECT_ROOT (the repo itself), so it autostashed ~1600 lines of
+# uncommitted work and switched the branch to main, twice. The guard now
+# blocks (a) in-process exec into a hermes entrypoint (the
+# ``relaunch(["update"])`` / os.execvp path), (b) ``hermes update``
+# subprocesses, and (c) mutating git commands aimed at the real repo root.
+
+
+def test_os_execvp_into_hermes_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        os.execvp("hermes", ["hermes", "update"])
+
+
+def test_os_execv_python_m_hermes_cli_blocked():
+    import sys
+
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        os.execv(sys.executable, [sys.executable, "-m", "hermes_cli.main", "update"])
+
+
+def test_subprocess_hermes_update_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["hermes", "update"])
+
+
+def test_subprocess_hermes_update_with_flags_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["hermes", "update", "--yes"])
+
+
+def test_subprocess_python_m_hermes_cli_update_blocked():
+    import sys
+
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run([sys.executable, "-m", "hermes_cli.main", "update"])
+
+
+def test_subprocess_hermes_users_update_passes_through():
+    """'update' as a nested subcommand (hermes users update) is NOT the
+    self-updater — only the top-level ``hermes update`` is blocked. Use
+    echo as a stand-in binary; the guard inspects the command string."""
+    r = subprocess.run(
+        ["echo", "hermes", "users", "update", "U123"],
+        capture_output=True,
+        text=True,
+    )
+    assert "users" in r.stdout
+
+
+def test_git_stash_in_repo_root_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["git", "stash"], capture_output=True)
+
+
+def test_git_checkout_in_repo_root_blocked():
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["git", "checkout", "main"], capture_output=True)
+
+
+def test_git_pull_with_explicit_repo_cwd_blocked():
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    with pytest.raises(RuntimeError, match="live-system guard"):
+        subprocess.run(["git", "pull"], cwd=str(repo_root), capture_output=True)
+
+
+def test_git_status_in_repo_root_passes_through():
+    r = subprocess.run(
+        ["git", "status", "--porcelain"], capture_output=True, text=True
+    )
+    assert r is not None
+
+
+def test_git_stash_list_in_repo_root_passes_through():
+    r = subprocess.run(
+        ["git", "stash", "list"], capture_output=True, text=True
+    )
+    assert r is not None
+
+
+def test_git_mutation_in_tmp_repo_passes_through(tmp_path):
+    """Mutating git in a test fixture repo (tmp_path) must keep working."""
+    subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True)
+    r = subprocess.run(
+        ["git", "checkout", "-b", "feature", "-q"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert r is not None

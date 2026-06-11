@@ -1413,10 +1413,13 @@ def skill_view(
                     "Could not preprocess skill content for %s", skill_name, exc_info=True
                 )
 
+        from agent.model_override import extract_skill_model_override
+
         result = {
             "success": True,
             "name": skill_name,
             "description": frontmatter.get("description", ""),
+            "model_override": extract_skill_model_override(frontmatter),
             "tags": tags,
             "related_skills": related_skills,
             "content": rendered_content,
