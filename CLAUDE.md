@@ -32,8 +32,11 @@ tiers ([gateway/slash_access.py](gateway/slash_access.py)) and adds a third axis
 **which toolsets an identified platform user may invoke**, keyed to named roles.
 
 - **Built-in roles** (`BUILTIN_ROLES`): `admin` (`*`), `operator`, `readonly`,
-  `chat_only` (no tools). `FLOOR_TOOLSETS` (`clarify`, `todo`) are granted to every
-  valid-role user — but NOT to roleless/undefined-role users.
+  `chat_only` (no tools). `FLOOR_TOOLSETS` (`clarify`, `todo`, `slack`) are granted
+  to every valid-role user — but NOT to roleless/undefined-role users. `slack`
+  (`slack_react` + `turn_end`) is a floor because reacting/closing a turn is UX,
+  not a privilege — so the bot can acknowledge any user's message in a quiet
+  channel, not just an admin's.
 - **Config lives under the top-level `slack:` block** in `~/.hermes/config.yaml`
   (`user_roles`, optional `user_names`, optional `roles`). The gateway config
   loader ([gateway/config.py](gateway/config.py)) bridges these keys into the

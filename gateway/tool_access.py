@@ -49,10 +49,20 @@ BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
 
 # Toolsets every VALID-role user gets regardless of their role's grant, so
 # even a restricted (e.g. chat_only) user's agent can still ask clarifying
-# questions and track its work. Mirrors slash_access._ALWAYS_ALLOWED_FOR_USERS.
+# questions, track its work, and acknowledge/close out a Slack turn.
+# Mirrors slash_access._ALWAYS_ALLOWED_FOR_USERS.
+#
+# ``slack`` (slack_react + turn_end) is a floor capability, not a privilege:
+# reacting to a message and ending a turn silently is how the bot acknowledges
+# ANY user's message in a quiet channel — including a readonly/view-only
+# user's. Gating it behind a role makes the bot fall back to posting text for
+# everyone but admins, which defeats quiet channels. On non-Slack platforms the
+# ``slack`` toolset isn't in the enabled set, so listing it here is inert there
+# (allowed_toolsets only ever intersects with what the platform actually offers).
+#
 # Note: this does NOT apply to users with no role / an undefined role — they
 # get nothing (deny-until-assigned).
-FLOOR_TOOLSETS: FrozenSet[str] = frozenset({"clarify", "todo"})
+FLOOR_TOOLSETS: FrozenSet[str] = frozenset({"clarify", "todo", "slack"})
 
 
 def _coerce_str(value: Any) -> str:

@@ -23,12 +23,19 @@ import json
 from typing import Dict, List
 
 
+def _floor_toolsets_label() -> str:
+    """Comma-joined FLOOR_TOOLSETS for help text (kept in sync automatically)."""
+    from gateway.tool_access import FLOOR_TOOLSETS
+
+    return ", ".join(sorted(FLOOR_TOOLSETS))
+
+
 def _compute_role_grants() -> Dict[str, List[str]]:
     """Return ``{toolset: [role, ...]}`` for every registered toolset.
 
     Roles are checked in definition order; ``admin`` will always appear
     because it holds ``"*"`` which matches everything.
-    Floor toolsets (``clarify``, ``todo``) are granted to every built-in
+    Floor toolsets (see ``FLOOR_TOOLSETS``) are granted to every built-in
     role regardless of the explicit toolset list.
     """
     from gateway.tool_access import BUILTIN_ROLES, FLOOR_TOOLSETS, _granted
@@ -113,8 +120,8 @@ def register_tools_rbac_subcommand(tools_sub) -> None:
             "Read-only diagnostic: discovers all built-in tools via the tool registry, "
             "groups them by toolset, and for each toolset shows which built-in RBAC roles "
             "grant it. Useful for operators verifying per-user role coverage.\n\n"
-            "admin always appears (holds '*'). FLOOR_TOOLSETS (clarify, todo) are granted "
-            "to every valid-role user regardless of their explicit role assignment.\n\n"
+            "admin always appears (holds '*'). FLOOR_TOOLSETS (" + _floor_toolsets_label() + ") "
+            "are granted to every valid-role user regardless of their explicit role assignment.\n\n"
             "MCP tools registered at runtime (mcp-* toolsets) are not shown here; "
             "admin's '*' and the mcp-* glob in operator/readonly cover them."
         ),

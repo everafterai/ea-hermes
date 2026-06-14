@@ -208,13 +208,32 @@ class TestSlackReactToolsetGating:
         from tools.registry import registry
         assert registry.get_toolset_for_tool("slack_react") == "slack"
 
-    def test_slack_toolset_gating(self):
+    def test_slack_toolset_is_floor_for_every_valid_role(self):
+        # slack_react + turn_end are UX/turn-control tools, not privileges:
+        # every valid-role user gets them regardless of their role's grant,
+        # so the bot can acknowledge/close out ANY user's Slack turn.
         p = policy_from_extra({
-            "user_roles": {"U_react": "reactor", "U_chat": "chat_only"},
+            "user_roles": {
+                "U_react": "reactor",
+                "U_chat": "chat_only",
+                "U_ro": "readonly",
+            },
             "roles": {"reactor": ["slack"], "chat_only": []},
         })
         assert p.can_use_tool("U_react", "slack") is True
-        assert p.can_use_tool("U_chat", "slack") is False
+        assert p.can_use_tool("U_chat", "slack") is True   # floor, despite []
+        assert p.can_use_tool("U_ro", "slack") is True     # floor, readonly grant lacks it
+        # And it survives the toolset filter for a restricted role.
+        assert "slack" in p.allowed_toolsets("U_chat", frozenset({"slack", "terminal"}))
+        assert "terminal" not in p.allowed_toolsets("U_chat", frozenset({"slack", "terminal"}))
+
+    def test_slack_floor_does_not_rescue_roleless_or_undefined(self):
+        # Deny-until-assigned still wins: no role / undefined role gets nothing,
+        # not even the slack floor.
+        p = policy_from_extra({"user_roles": {"U_A": "chat_only", "U_ghost": "ghost"}})
+        assert p.can_use_tool("U_STRANGER", "slack") is False
+        assert p.can_use_tool("U_ghost", "slack") is False
+        assert p.allowed_toolsets("U_STRANGER", frozenset({"slack"})) == frozenset()
 
     def test_admin_wildcard_allows_slack_toolset(self):
         p = policy_from_extra({
