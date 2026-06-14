@@ -32,7 +32,7 @@ import fnmatch
 import logging
 import threading
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,23 @@ def _coerce_user_roles(raw: Any) -> Dict[str, str]:
         role = _coerce_str(v).lower()
         if uid and role:
             out[uid] = role
+    return out
+
+
+def _coerce_channel_roles(raw: Any) -> Dict[str, str]:
+    """Normalize ``{chat_id: role_name}`` — chat→role bindings that grant a
+    fixed role to EVERY poster in that channel. The chat id is kept verbatim
+    (Slack/Discord ids are case-sensitive); the role name is lowercased to match
+    the ``roles`` table.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.items():
+        cid = _coerce_str(k)
+        role = _coerce_str(v).lower()
+        if cid and role:
+            out[cid] = role
     return out
 
 
@@ -138,40 +155,80 @@ class ToolAccessPolicy:
     enabled: bool
     user_roles: Mapping[str, str]
     roles: Mapping[str, FrozenSet[str]]
+    # chat_id → role: grants a fixed role to EVERY poster in that channel, so
+    # the bot can serve issue-tracking channels where any teammate may report.
+    # Additive — UNIONed with the poster's own role; never reduces access.
+    # Honored only while RBAC is active (it does not by itself enable RBAC).
+    channel_roles: Mapping[str, str] = field(
+        default_factory=lambda: types.MappingProxyType({})
+    )
 
     def role_for(self, user_id: Optional[str]) -> Optional[str]:
         if not self.enabled or not user_id:
             return None
         return self.user_roles.get(str(user_id))
 
-    def _resolved_grant(self, user_id: Optional[str]) -> Optional[FrozenSet[str]]:
-        """Return the grant set for *user_id*, or None if access should be denied.
-
-        Logs an ERROR once when the user's assigned role name is not defined in
-        ``self.roles``, so every entry point gets consistent logging.
+    def _grant_for_role(
+        self, role: Optional[str], *, kind: str, owner: Optional[str]
+    ) -> Optional[FrozenSet[str]]:
+        """Resolve a role name to its toolset grant, or None when unassigned or
+        undefined. Logs an ERROR (once per call) when *role* is named but not
+        defined in ``self.roles`` so every entry point logs consistently.
         """
-        role = self.role_for(user_id)
         if role is None:
             return None
         if role not in self.roles:
             logger.error(
-                "tool_access: user %s assigned undefined role '%s' — denying",
-                user_id, role,
+                "tool_access: %s %s assigned undefined role '%s' — denying",
+                kind, owner, role,
             )
             return None
         return self.roles[role]
 
-    def is_authorized(self, user_id: Optional[str]) -> bool:
+    def _effective_grant(
+        self, user_id: Optional[str], chat_id: Optional[str] = None
+    ) -> Optional[FrozenSet[str]]:
+        """Union of the user's own role grant and, when *chat_id* names a
+        ``channel_roles`` channel, that channel's role grant. None when neither
+        axis grants anything (deny-until-assigned). A channel role authorizes
+        and equips ANY poster in that channel; a user with their own role keeps
+        it everywhere and simply gains the channel grant on top while in-channel.
+        """
+        grants = []
+        user_grant = self._grant_for_role(
+            self.user_roles.get(str(user_id)) if user_id else None,
+            kind="user", owner=user_id,
+        )
+        if user_grant is not None:
+            grants.append(user_grant)
+        channel_grant = self._grant_for_role(
+            self.channel_roles.get(str(chat_id)) if chat_id else None,
+            kind="channel", owner=chat_id,
+        )
+        if channel_grant is not None:
+            grants.append(channel_grant)
+        if not grants:
+            return None
+        if len(grants) == 1:
+            return grants[0]
+        return frozenset().union(*grants)
+
+    def is_authorized(
+        self, user_id: Optional[str], chat_id: Optional[str] = None
+    ) -> bool:
         if not self.enabled:
             return True  # defer to legacy auth
-        return self._resolved_grant(user_id) is not None
+        return self._effective_grant(user_id, chat_id) is not None
 
     def allowed_toolsets(
-        self, user_id: Optional[str], all_toolsets: FrozenSet[str]
+        self,
+        user_id: Optional[str],
+        all_toolsets: FrozenSet[str],
+        chat_id: Optional[str] = None,
     ) -> FrozenSet[str]:
         if not self.enabled:
             return frozenset(all_toolsets)
-        grant = self._resolved_grant(user_id)
+        grant = self._effective_grant(user_id, chat_id)
         if grant is None:
             return frozenset()
         return frozenset(
@@ -179,11 +236,14 @@ class ToolAccessPolicy:
         )
 
     def can_use_tool(
-        self, user_id: Optional[str], toolset: Optional[str]
+        self,
+        user_id: Optional[str],
+        toolset: Optional[str],
+        chat_id: Optional[str] = None,
     ) -> bool:
         if not self.enabled:
             return True
-        grant = self._resolved_grant(user_id)
+        grant = self._effective_grant(user_id, chat_id)
         if grant is None or not toolset:
             return False
         return _granted(grant, toolset) or toolset in FLOOR_TOOLSETS
@@ -195,10 +255,15 @@ def policy_from_extra(extra: Any) -> ToolAccessPolicy:
         extra = {}
     user_roles = _coerce_user_roles(extra.get("user_roles"))
     roles = _coerce_roles(extra.get("roles"))
+    channel_roles = _coerce_channel_roles(extra.get("channel_roles"))
     return ToolAccessPolicy(
+        # Activation is still keyed to user_roles alone — channel_roles is an
+        # additive carve-out within an already-active policy and must not by
+        # itself flip RBAC on (which would deny roleless users everywhere).
         enabled=bool(user_roles),
         user_roles=types.MappingProxyType(user_roles),
         roles=types.MappingProxyType(roles),
+        channel_roles=types.MappingProxyType(channel_roles),
     )
 
 
@@ -221,6 +286,7 @@ def policy_for_source(gateway_config: Any, source: Any) -> ToolAccessPolicy:
             enabled=False,
             user_roles=types.MappingProxyType({}),
             roles=types.MappingProxyType(dict(BUILTIN_ROLES)),
+            channel_roles=types.MappingProxyType({}),
         )
     platforms = getattr(gateway_config, "platforms", None)
     platform_config = None
@@ -252,6 +318,20 @@ def _current_identity():
     except Exception as err:
         logger.debug("tool_access: _current_identity failed: %s", err)
         return None, None
+
+
+def _current_chat_id() -> Optional[str]:
+    """Return the active chat/channel id from session contextvars, or None.
+
+    Lets the execution backstop honor ``channel_roles`` (the channel a tool
+    call runs in determines the effective role for delegated/sandboxed calls).
+    """
+    try:
+        from gateway.session_context import get_session_env
+        return get_session_env("HERMES_SESSION_CHAT_ID", "") or None
+    except Exception as err:
+        logger.debug("tool_access: _current_chat_id failed: %s", err)
+        return None
 
 
 def _toolset_for_tool(tool_name: str) -> Optional[str]:
@@ -309,11 +389,12 @@ def denial_for_current_tool(tool_name: str) -> Optional[str]:
         toolset = _toolset_for_tool(tool_name)
         if toolset is None:
             return None  # tool not in registry → not gated by toolset RBAC
-        if policy.can_use_tool(user_id, toolset):
+        chat_id = _current_chat_id()
+        if policy.can_use_tool(user_id, toolset, chat_id):
             return None
         logger.info(
-            "tool_access: denied tool '%s' (toolset '%s') for %s on %s",
-            tool_name, toolset, user_id, platform_name,
+            "tool_access: denied tool '%s' (toolset '%s') for %s on %s (chat %s)",
+            tool_name, toolset, user_id, platform_name, chat_id,
         )
         return (
             f"⛔ You are not permitted to use '{tool_name}' here. "
@@ -342,7 +423,8 @@ def filter_enabled_toolsets(source, enabled_toolsets, gateway_config=None):
         if not policy.enabled:
             return sorted(base)
         user_id = getattr(source, "user_id", None)
-        allowed = policy.allowed_toolsets(user_id, frozenset(base))
+        chat_id = getattr(source, "chat_id", None)
+        allowed = policy.allowed_toolsets(user_id, frozenset(base), chat_id)
         return sorted(allowed)
     except Exception as err:  # pragma: no cover - defensive
         logger.debug("tool_access filter error: %s", err)

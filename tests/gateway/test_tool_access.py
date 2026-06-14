@@ -241,3 +241,87 @@ class TestSlackReactToolsetGating:
             "roles": {"admin": ["*"]},
         })
         assert p.can_use_tool("U_admin", "slack") is True
+
+
+class TestChannelRoles:
+    """A ``channel_roles`` map ({chat_id: role}) lets the bot serve EVERY user
+    in a configured channel under a fixed service role — used for issue-tracking
+    channels where any teammate may report and the bot must still run `ntn`
+    (terminal). The channel grant is UNIONed with the poster's own role; it
+    only ADDS access, in the listed channels, and only while RBAC is active."""
+
+    def _policy(self):
+        return policy_from_extra({
+            "user_roles": {"U_admin": "admin", "U_ro": "readonly"},
+            "roles": {"tracker": {"toolsets": ["terminal"]}},
+            "channel_roles": {"C_track": "tracker"},
+        })
+
+    def test_channel_role_authorizes_any_user_in_that_channel(self):
+        p = self._policy()
+        # Roleless user, but posting in the tracked channel → authorized.
+        assert p.is_authorized("U_stranger", "C_track") is True
+        # Same user elsewhere → still denied (deny-until-assigned holds).
+        assert p.is_authorized("U_stranger", "C_other") is False
+        # And with no channel context at all (e.g. CLI) → denied.
+        assert p.is_authorized("U_stranger") is False
+
+    def test_channel_role_grants_its_toolsets_to_any_poster(self):
+        p = self._policy()
+        assert p.can_use_tool("U_stranger", "terminal", "C_track") is True
+        assert p.can_use_tool("U_stranger", "terminal", "C_other") is False
+        assert p.can_use_tool("U_stranger", "terminal") is False
+        allowed = p.allowed_toolsets("U_stranger", frozenset({"terminal", "web"}), "C_track")
+        assert "terminal" in allowed
+        assert "web" not in allowed  # tracker grants only terminal
+
+    def test_channel_role_unions_with_user_role(self):
+        p = self._policy()
+        # readonly user in the tracked channel: keeps readonly's web AND gains
+        # the channel's terminal.
+        assert p.can_use_tool("U_ro", "web", "C_track") is True
+        assert p.can_use_tool("U_ro", "terminal", "C_track") is True
+        # Outside the tracked channel: only their own readonly grant.
+        assert p.can_use_tool("U_ro", "terminal", "C_other") is False
+        assert p.can_use_tool("U_ro", "web", "C_other") is True
+
+    def test_channel_role_grants_floor_to_roleless_poster(self):
+        p = self._policy()
+        # The bot can still react / clarify for a roleless poster in-channel.
+        assert p.can_use_tool("U_stranger", "slack", "C_track") is True
+        assert p.can_use_tool("U_stranger", "clarify", "C_track") is True
+
+    def test_undefined_channel_role_denies_that_axis(self):
+        p = policy_from_extra({
+            "user_roles": {"U_admin": "admin"},
+            "channel_roles": {"C_track": "ghost"},  # undefined role
+        })
+        assert p.is_authorized("U_stranger", "C_track") is False
+        # A real admin posting there is still authorized via their own role.
+        assert p.is_authorized("U_admin", "C_track") is True
+
+    def test_channel_roles_inert_when_rbac_disabled(self):
+        # No user_roles → RBAC stays OFF (activation boundary unchanged);
+        # channel_roles must not silently switch RBAC on.
+        p = policy_from_extra({"channel_roles": {"C_track": "operator"}})
+        assert p.enabled is False
+        assert p.is_authorized("U_stranger", "C_track") is True  # defers to legacy
+        assert p.allowed_toolsets("U_stranger", ALL_TOOLSETS, "C_track") == ALL_TOOLSETS
+
+
+class TestChannelRolesConfigBridge:
+    def test_channel_roles_reach_slack_extra(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "slack:\n"
+            "  enabled: true\n"
+            "  channel_roles:\n"
+            "    C03B4BC9D2P: operator\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        config = load_gateway_config()
+        assert config.platforms[Platform.SLACK].extra["channel_roles"] == {
+            "C03B4BC9D2P": "operator"
+        }

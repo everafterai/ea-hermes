@@ -7327,7 +7327,10 @@ class GatewayRunner:
         # RBAC: when tool-access roles are configured for this platform, role
         # assignment is the sole authorization source. A user with a role may
         # interact; a user with no role is denied — overriding the env
-        # allowlist, any allow-all flag, and DM pairing.
+        # allowlist, any allow-all flag, and DM pairing. Exception: a channel
+        # listed in slack.channel_roles authorizes EVERY poster in it (the
+        # channel's service role), so issue-tracking channels work no matter
+        # who reports — resolved inside is_authorized via the chat id.
         try:
             from gateway.tool_access import policy_for_source, _load_config_cached
             _rbac_policy = policy_for_source(_load_config_cached(), source)
@@ -7341,7 +7344,7 @@ class GatewayRunner:
                             _env_var,
                         )
                         self._warned_rbac_overrides_env = True
-                return _rbac_policy.is_authorized(user_id)
+                return _rbac_policy.is_authorized(user_id, getattr(source, "chat_id", None))
         except Exception as _rbac_err:
             logger.debug("tool_access auth-gate error: %s", _rbac_err)
         platform_group_user_env_map = {

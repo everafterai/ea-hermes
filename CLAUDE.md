@@ -38,9 +38,20 @@ tiers ([gateway/slash_access.py](gateway/slash_access.py)) and adds a third axis
   not a privilege — so the bot can acknowledge any user's message in a quiet
   channel, not just an admin's.
 - **Config lives under the top-level `slack:` block** in `~/.hermes/config.yaml`
-  (`user_roles`, optional `user_names`, optional `roles`). The gateway config
-  loader ([gateway/config.py](gateway/config.py)) bridges these keys into the
-  platform's runtime `extra`. **Hand-edit under `slack:` directly, NOT `slack.extra`.**
+  (`user_roles`, optional `user_names`, optional `roles`, optional `channel_roles`).
+  The gateway config loader ([gateway/config.py](gateway/config.py)) bridges these
+  keys into the platform's runtime `extra`. **Hand-edit under `slack:` directly,
+  NOT `slack.extra`.**
+- **`channel_roles` (`{chat_id: role}`, Slack-only)** grants a fixed *service
+  role* to EVERY poster in that channel, so a channel (e.g. issue-tracking) works
+  no matter who reports — even a roleless user. The channel grant is **UNIONed**
+  with the poster's own role (additive; never reduces access) and is resolved at
+  all three enforcement points via the chat id (`ToolAccessPolicy._effective_grant`;
+  the backstop reads `HERMES_SESSION_CHAT_ID` via `_current_chat_id`). It is
+  **inert unless RBAC is active** — it does NOT by itself enable RBAC (activation
+  stays keyed to `user_roles`). **Security:** anyone who can post in such a channel
+  can invoke that role's tools (e.g. `terminal`), so scope the role to least
+  privilege and keep the channels internal.
 - **Activation is `user_roles` presence.** When `user_roles` is non-empty, RBAC is
   the sole authorization source — a user with a role may chat and gets that role's
   toolsets; a roleless user is denied entirely (deny-until-assigned). It also

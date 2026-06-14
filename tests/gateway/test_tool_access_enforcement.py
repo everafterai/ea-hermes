@@ -12,7 +12,7 @@ from gateway.tool_access import denial_for_current_tool
 class _FakePolicy:
     enabled = True
 
-    def can_use_tool(self, user_id, toolset):
+    def can_use_tool(self, user_id, toolset, chat_id=None):
         return toolset == "web"
 
 
@@ -108,13 +108,84 @@ def test_unregistered_tool_allowed(monkeypatch):
     assert denial_for_current_tool("some_unknown_tool") is None
 
 
+class _ChannelPolicy:
+    """Grants `terminal` only to posters in channel C_track (via channel role)."""
+    enabled = True
+
+    def can_use_tool(self, user_id, toolset, chat_id=None):
+        return toolset == "terminal" and chat_id == "C_track"
+
+
+def test_backstop_allows_tool_via_channel_role(monkeypatch):
+    # A roleless user runs a terminal tool, but in a channel whose channel_role
+    # grants terminal → the execution backstop must NOT deny.
+    monkeypatch.setattr(
+        "gateway.tool_access._current_identity", lambda: ("U_stranger", "slack")
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._current_chat_id", lambda: "C_track"
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._policy_for_current_platform",
+        lambda platform: _ChannelPolicy(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._toolset_for_tool", lambda name: "terminal"
+    )
+    assert denial_for_current_tool("run_shell") is None
+
+
+def test_backstop_denies_terminal_outside_channel_role(monkeypatch):
+    # Same user + tool, but NOT in the tracked channel → denied.
+    monkeypatch.setattr(
+        "gateway.tool_access._current_identity", lambda: ("U_stranger", "slack")
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._current_chat_id", lambda: "C_other"
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._policy_for_current_platform",
+        lambda platform: _ChannelPolicy(),
+    )
+    monkeypatch.setattr(
+        "gateway.tool_access._toolset_for_tool", lambda name: "terminal"
+    )
+    assert denial_for_current_tool("run_shell") is not None
+
+
 from gateway.tool_access import filter_enabled_toolsets
+
+
+def test_filter_passes_chat_id_to_policy(monkeypatch):
+    # filter_enabled_toolsets must thread source.chat_id through so channel
+    # roles are honored at the toolset-filter enforcement point.
+    seen = {}
+
+    class _CapturePolicy:
+        enabled = True
+
+        def allowed_toolsets(self, user_id, all_toolsets, chat_id=None):
+            seen["chat_id"] = chat_id
+            return frozenset(all_toolsets)
+
+    monkeypatch.setattr(
+        "gateway.tool_access.policy_for_source",
+        lambda cfg, src: _CapturePolicy(),
+    )
+    monkeypatch.setattr("gateway.tool_access._load_config_cached", lambda: object())
+
+    class _Src:
+        user_id = "U_A"
+        chat_id = "C_track"
+
+    filter_enabled_toolsets(source=_Src(), enabled_toolsets=["web", "terminal"])
+    assert seen["chat_id"] == "C_track"
 
 
 class _RolePolicy:
     enabled = True
 
-    def allowed_toolsets(self, user_id, all_toolsets):
+    def allowed_toolsets(self, user_id, all_toolsets, chat_id=None):
         return frozenset({"web", "vision"}) & frozenset(all_toolsets)
 
 
@@ -175,7 +246,7 @@ class TestAuthGate:
             pass
         p = _P()
         p.enabled = enabled
-        p.is_authorized = lambda uid: authorized
+        p.is_authorized = lambda uid, chat_id=None: authorized
         return p
 
     def test_assigned_user_authorized(self, monkeypatch):
@@ -240,7 +311,7 @@ async def test_rbac_active_unauthorized_dm_skips_pairing_offer(monkeypatch):
     # Patch RBAC to be active (enabled=True) but deny the user.
     class _ActivePolicy:
         enabled = True
-        def is_authorized(self, uid):
+        def is_authorized(self, uid, chat_id=None):
             return False
 
     monkeypatch.setattr("gateway.tool_access._load_config_cached", lambda: object())

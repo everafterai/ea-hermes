@@ -908,6 +908,12 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["roles"] = platform_cfg["roles"]
                 if "user_roles" in platform_cfg:
                     bridged["user_roles"] = platform_cfg["user_roles"]
+                if plat == Platform.SLACK and "channel_roles" in platform_cfg:
+                    channel_roles = platform_cfg["channel_roles"]
+                    if isinstance(channel_roles, dict):
+                        bridged["channel_roles"] = {str(k): v for k, v in channel_roles.items()}
+                    else:
+                        bridged["channel_roles"] = channel_roles
                 if "group_policy" in platform_cfg:
                     bridged["group_policy"] = platform_cfg["group_policy"]
                 if "group_allow_from" in platform_cfg:
