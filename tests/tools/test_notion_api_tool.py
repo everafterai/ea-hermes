@@ -2,6 +2,7 @@
 subprocess and binary lookup are mocked; these tests pin argv construction,
 validation, env bridging, and result shaping."""
 import json
+import subprocess
 
 import pytest
 
@@ -115,3 +116,25 @@ def test_check_fn_follows_ntn_presence(monkeypatch):
     assert nt._check_notion_api() is True
     monkeypatch.setattr(nt.shutil, "which", lambda cmd: None)
     assert nt._check_notion_api() is False
+
+
+def test_rejects_path_with_whitespace(monkeypatch):
+    monkeypatch.setattr(nt.subprocess, "run",
+                        lambda *a, **k: pytest.fail("subprocess must not run"))
+    out = _call({"path": "v1/pages\n-X DELETE"})
+    assert "error" in out
+
+
+def test_timeout_returns_structured_error(monkeypatch, ntn_ok):
+    def raise_timeout(*a, **kw):
+        raise subprocess.TimeoutExpired(["ntn"], 30)
+    monkeypatch.setattr(nt.subprocess, "run", raise_timeout)
+    out = _call({"path": "v1/pages/x"})
+    assert "error" in out and "timed out" in out["error"]
+
+
+def test_missing_token_returns_structured_error(monkeypatch):
+    monkeypatch.setattr(nt.shutil, "which", lambda cmd: "/usr/local/bin/ntn")
+    monkeypatch.setattr(nt, "_ntn_env", lambda: {"NOTION_KEYRING": "0"})  # no token
+    out = _call({"path": "v1/pages"})
+    assert "error" in out and "token" in out["error"].lower()

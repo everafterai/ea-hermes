@@ -96,6 +96,8 @@ def _notion_api_handler(args: dict, **_kw) -> str:
             "path must be a Notion API path beginning with 'v1/' "
             "(e.g. 'v1/pages', 'v1/data_sources/<id>/query')."
         )
+    if any(ch.isspace() for ch in path):
+        return tool_error("path must not contain whitespace.")
 
     if not shutil.which("ntn"):
         return tool_error("Notion CLI 'ntn' is not installed on this host.")
