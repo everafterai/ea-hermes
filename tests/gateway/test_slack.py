@@ -2386,6 +2386,41 @@ class TestReactions:
         assert "1234567890.000001" not in adapter._reacting_message_ids
 
     @pytest.mark.asyncio
+    async def test_reactions_skipped_in_quiet_channel(self, adapter):
+        """Quiet channels suppress the automatic eyes/checkmark/x lifecycle —
+        the agent manages its own reactions via slack_react there."""
+        adapter.config.extra["quiet_channels"] = "C_QUIET"
+        adapter._app.client.reactions_add = AsyncMock()
+        adapter._app.client.reactions_remove = AsyncMock()
+
+        from gateway.platforms.base import (
+            MessageEvent,
+            MessageType,
+            SessionSource,
+            ProcessingOutcome,
+        )
+        from gateway.config import Platform
+
+        adapter._reacting_message_ids.add("ts_quiet")
+        source = SessionSource(
+            platform=Platform.SLACK,
+            chat_id="C_QUIET",
+            chat_type="group",
+            user_id="U1",
+        )
+        msg_event = MessageEvent(
+            text="x",
+            message_type=MessageType.TEXT,
+            source=source,
+            message_id="ts_quiet",
+        )
+        await adapter.on_processing_start(msg_event)
+        await adapter.on_processing_complete(msg_event, ProcessingOutcome.SUCCESS)
+
+        assert adapter._app.client.reactions_add.call_count == 0
+        assert adapter._app.client.reactions_remove.call_count == 0
+
+    @pytest.mark.asyncio
     async def test_reactions_failure_outcome(self, adapter):
         """Failed processing should add :x: instead of :white_check_mark:."""
         adapter._app.client.reactions_add = AsyncMock()

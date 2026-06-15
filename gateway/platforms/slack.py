@@ -1668,6 +1668,12 @@ class SlackAdapter(BasePlatformAdapter):
         if not ts or ts not in self._reacting_message_ids:
             return
         channel_id = getattr(event.source, "chat_id", None)
+        # Quiet channels suppress the automatic reaction lifecycle entirely — the
+        # agent drives its own reactions via slack_react there, and the auto
+        # :eyes:/:white_check_mark: would be noise (and would collide with the
+        # human :white_check_mark: "mark done" signal).
+        if channel_id and channel_id in self._slack_quiet_channels():
+            return
         if channel_id:
             await self._add_reaction(channel_id, ts, "eyes")
 
@@ -1683,6 +1689,9 @@ class SlackAdapter(BasePlatformAdapter):
         self._reacting_message_ids.discard(ts)
         channel_id = getattr(event.source, "chat_id", None)
         if not channel_id:
+            return
+        # Quiet channels: no automatic reaction lifecycle (see on_processing_start).
+        if channel_id in self._slack_quiet_channels():
             return
         await self._remove_reaction(channel_id, ts, "eyes")
         if outcome == ProcessingOutcome.SUCCESS:
@@ -3579,6 +3588,24 @@ class SlackAdapter(BasePlatformAdapter):
             "yes",
             "on",
         }
+
+    def _slack_quiet_channels(self) -> set:
+        """Return quiet-channel IDs (low-noise 'hidden assistant' channels).
+
+        In these channels the automatic reaction lifecycle is suppressed — the
+        agent manages its own reactions via slack_react. Mirrors
+        ``_slack_free_response_channels``; config under ``slack.quiet_channels``
+        (bridged into ``extra``) or ``SLACK_QUIET_CHANNELS``.
+        """
+        raw = self.config.extra.get("quiet_channels")
+        if raw is None:
+            raw = os.getenv("SLACK_QUIET_CHANNELS", "")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        s = str(raw).strip() if raw is not None else ""
+        if s:
+            return {part.strip() for part in s.split(",") if part.strip()}
+        return set()
 
     def _slack_free_response_channels(self) -> set:
         """Return channel IDs where no @mention is required."""
