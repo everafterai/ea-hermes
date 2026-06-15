@@ -138,3 +138,11 @@ def test_missing_token_returns_structured_error(monkeypatch):
     monkeypatch.setattr(nt, "_ntn_env", lambda: {"NOTION_KEYRING": "0"})  # no token
     out = _call({"path": "v1/pages"})
     assert "error" in out and "token" in out["error"].lower()
+
+
+def test_notion_toolset_declared_and_maps_to_tool():
+    import toolsets
+    from tools.registry import registry
+    assert "notion" in toolsets.TOOLSETS
+    assert toolsets.TOOLSETS["notion"]["tools"] == ["notion_api"]
+    assert registry.get_tool_names_for_toolset("notion") == ["notion_api"]

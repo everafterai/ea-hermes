@@ -292,6 +292,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "notion": {
+        "description": "Notion API access (read/write pages and databases via ntn)",
+        "tools": ["notion_api"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [
