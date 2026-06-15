@@ -3622,6 +3622,14 @@ class GatewayRunner:
         running_agent = self._running_agents.get(session_key)
 
         effective_mode = self._busy_input_mode
+        # Quiet channels (issue-tracking): a new report must NEVER abort the turn
+        # that's tracking the current one. Force queue so the incoming message is
+        # merged into pending and processed after the running task finishes,
+        # instead of interrupting it. Combined with the busy-ack suppression
+        # below, this makes follow-ups queue silently. (/stop and /new still
+        # force-cancel via a separate path.)
+        if effective_mode != "queue" and _is_quiet_channel(event.source, _load_gateway_config()):
+            effective_mode = "queue"
         busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
         if (
             event.message_type == MessageType.TEXT
@@ -3703,6 +3711,14 @@ class GatewayRunner:
         if not busy_ack_enabled:
             logger.debug("Busy ack suppressed for session %s", session_key)
             return True  # input still processed, just no ack sent
+
+        # Quiet channels: suppress the busy-ack text (and the one-time /busy
+        # onboarding tip appended below) entirely. The user's message is still
+        # interrupted/queued (mechanics ran above) — it just happens silently,
+        # matching the tool-progress / heartbeat suppression for these channels.
+        if _is_quiet_channel(event.source, _load_gateway_config()):
+            logger.debug("Busy ack suppressed (quiet channel) for session %s", session_key)
+            return True
 
         # Debounce: only send an acknowledgment once every 30 seconds per session
         # to avoid spamming the user when they send multiple messages quickly
