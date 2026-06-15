@@ -1714,8 +1714,11 @@ class TestMessageRouting:
         }
         await adapter._handle_slack_message(event)
         msg_event = adapter.handle_message.call_args[0][0]
-        assert msg_event.text == "what's the weather?"
+        assert "what's the weather?" in msg_event.text
         assert "<@U_BOT>" not in msg_event.text
+        # Current-message author anchor (mis-attribution fix) is wired into the
+        # handler for channel/group messages.
+        assert msg_event.text.startswith("[Message from ")
 
     @pytest.mark.asyncio
     async def test_bot_messages_ignored(self, adapter):
@@ -2570,9 +2573,9 @@ class TestThreadReplyHandling:
         await adapter_with_session_store._handle_slack_message(event)
         adapter_with_session_store.handle_message.assert_called_once()
 
-        # Verify the text is passed through unchanged (no mention stripping needed)
+        # Verify the message body is preserved (now also carries an author anchor)
         msg_event = adapter_with_session_store.handle_message.call_args[0][0]
-        assert msg_event.text == "Follow-up question"
+        assert "Follow-up question" in msg_event.text
 
     @pytest.mark.asyncio
     async def test_thread_reply_with_mention_strips_bot_id(
@@ -2597,7 +2600,7 @@ class TestThreadReplyHandling:
 
         msg_event = adapter_with_session_store.handle_message.call_args[0][0]
         assert "<@U_BOT>" not in msg_event.text
-        assert msg_event.text == "thanks for the help"
+        assert "thanks for the help" in msg_event.text
 
     @pytest.mark.asyncio
     async def test_top_level_message_requires_mention_even_with_session(

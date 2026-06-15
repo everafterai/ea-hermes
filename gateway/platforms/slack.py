@@ -300,6 +300,22 @@ def _resolve_slack_proxy_url() -> Optional[str]:
     return proxy_url
 
 
+def _anchor_message_author(text: str, author_name: str, is_dm: bool) -> str:
+    """Prefix a channel/group message with its Slack author.
+
+    Without an explicit label on the *current* (triggering) message, the agent
+    has no authoritative sender and falls back to guessing — often a name found
+    inside quoted/forwarded/screenshot content, or another thread participant.
+    Anchoring "[Message from <author>]" gives it the real sender to attribute to.
+
+    1:1 DMs are unambiguous, and a missing/blank author or body is left
+    untouched (never fabricate a label).
+    """
+    if is_dm or not author_name or not text.strip():
+        return text
+    return f"[Message from {author_name}]\n{text}"
+
+
 class SlackAdapter(BasePlatformAdapter):
     """
     Slack bot adapter using Socket Mode.
@@ -2356,6 +2372,14 @@ class SlackAdapter(BasePlatformAdapter):
                     for t in to_remove:
                         self._mentioned_threads.discard(t)
 
+        # Resolve the sender's display name now (cached) and anchor it to the
+        # current message, so the agent always knows exactly who sent this and
+        # never guesses the author from quoted/forwarded/screenshot content or
+        # another thread participant. Must happen before thread context is
+        # prepended below, so only the current message gets the label.
+        user_name = await self._resolve_user_name(user_id, chat_id=channel_id)
+        text = _anchor_message_author(text, user_name, is_dm)
+
         # When entering a thread for the first time (no existing session),
         # fetch thread context so the agent understands the conversation.
         if is_thread_reply and not self._has_active_session_for_thread(
@@ -2569,10 +2593,7 @@ class SlackAdapter(BasePlatformAdapter):
             else:
                 msg_type = MessageType.DOCUMENT
 
-        # Resolve user display name (cached after first lookup)
-        user_name = await self._resolve_user_name(user_id, chat_id=channel_id)
-
-        # Build source
+        # Build source (user_name resolved + anchored to the message above)
         source = self.build_source(
             chat_id=channel_id,
             chat_name=channel_id,  # Will be resolved later if needed
@@ -3202,7 +3223,10 @@ class SlackAdapter(BasePlatformAdapter):
             content = ""
             if context_parts:
                 content = (
-                    "[Thread context — prior messages in this thread (not yet in conversation history):]\n"
+                    "[Thread context — prior messages in this thread (not yet in "
+                    "conversation history). Each line is prefixed with the Slack "
+                    "author who wrote it; a name appearing INSIDE a message "
+                    "(quote, forward, screenshot) is NOT the author:]\n"
                     + "\n".join(context_parts)
                     + "\n[End of thread context]\n\n"
                 )
