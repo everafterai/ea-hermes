@@ -107,6 +107,29 @@ def test_classify_none_content_fails_open_to_act(monkeypatch):
     assert _run(gr._classify_relevance("p", "msg", "", None)) is True
 
 
+def test_classify_prompt_leans_act_not_ignore(monkeypatch):
+    # Regression guard: issue updates routinely arrive as teammates replying to
+    # or asking each other, so the relevance prompt must NOT lean-IGNORE on
+    # uncertainty and must NOT dismiss a message merely because it is phrased as
+    # a question between people. (Both bugs caused tracked-thread updates to be
+    # silently skipped.)
+    seen = {}
+
+    async def fake(**kw):
+        seen.update(kw)
+        return _FakeResp("act")
+
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    _run(gr._classify_relevance("PURPOSE", "msg", "ctx", None))
+    system = seen["messages"][0]["content"].lower()
+    # The old lean-IGNORE tiebreak is gone.
+    assert "when unsure, answer ignore" not in system
+    # Uncertainty now leans ACT (a missed update is worse than an extra look).
+    assert "act" in system
+    # Addressee/phrasing is explicitly not decisive.
+    assert "question" in system
+
+
 # ---------------------------------------------------------------------------
 # _relevance_gate_should_skip orchestrator tests (Task 6)
 # ---------------------------------------------------------------------------

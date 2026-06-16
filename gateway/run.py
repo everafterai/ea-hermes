@@ -1665,19 +1665,31 @@ def _relevance_gate_purpose(source, cfg: dict):
 async def _classify_relevance(purpose: str, message_text: str, thread_context: str, model) -> bool:
     """Return True ('act') unless the classifier clearly says 'ignore'.
 
-    Lean-silent is enforced via the prompt (the model answers 'ignore' when
-    unsure). Parse-level uncertainty (empty/garbage) returns True (act) so a
-    real message is never silently dropped — fail-open. Raises propagate to the
-    orchestrator, which also fails open.
+    The prompt leans ACT: it judges a message by what it conveys for the
+    channel's purpose (using the thread context), NOT by whether it is phrased
+    as people talking to each other — issue updates routinely arrive as
+    inter-human Q&A. The model answers 'ignore' only for clearly-unrelated
+    chatter, and on a genuine tie it answers 'act' (a missed update is worse
+    than an extra look). Parse-level uncertainty (empty/garbage) returns True
+    (act) so a real message is never silently dropped — fail-open. Raises
+    propagate to the orchestrator, which also fails open.
     """
     from agent.auxiliary_client import async_call_llm
     system = (
         "You are a relevance filter for a Slack channel. Channel purpose: "
-        f"{purpose}\n"
-        "Decide if the assistant must ACT on the latest message (e.g. "
-        "track/update/resolve something this channel is for) or IGNORE it "
-        "(chatter, questions directed at people, general discussion). When "
-        "unsure, answer IGNORE. Reply with exactly one word: act or ignore."
+        f"{purpose}\n\n"
+        "Decide whether the assistant must ACT on the latest message or may "
+        "IGNORE it. ACT when the message does anything the channel purpose "
+        "cares about — reports, updates, clarifies, answers, adds a finding to, "
+        "escalates, or resolves something the channel tracks. Updates routinely "
+        "arrive as teammates replying to or asking each other, so a message "
+        "phrased as a question or addressed to a person can STILL be an update "
+        "— judge by what it conveys for the channel's purpose, using the thread "
+        "context, not by who it is addressed to. Only answer IGNORE when the "
+        "message is clearly unrelated to that purpose: pure social chatter, "
+        "greetings, thanks-only, or off-topic banter. When it is genuinely "
+        "unclear whether the message affects something the channel tracks, "
+        "answer ACT. Reply with exactly one word: act or ignore."
     )
     user = f"Recent thread context:\n{thread_context}\n\nLatest message:\n{message_text}"
     resp = await async_call_llm(
