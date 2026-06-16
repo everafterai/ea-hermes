@@ -63,9 +63,9 @@ def test_post_serializes_body_to_stdin(monkeypatch, ntn_ok):
                  "body": {"parent": {"database_id": "d"}}})
     assert out["ok"] is True and out["data"] == {"id": "p1"}
     argv = captured["argv"]
-    assert argv[:3] == ["ntn", "api", "v1/pages"]
-    assert "-X" in argv and argv[argv.index("-X") + 1] == "POST"
-    assert argv[-2:] == ["--json", "-"]
+    assert argv == ["ntn", "api", "v1/pages", "-X", "POST"]
+    # ntn 0.15.x reads the request body from stdin — there is NO --json flag.
+    assert "--json" not in argv
     assert json.loads(captured["input"]) == {"parent": {"database_id": "d"}}
 
 

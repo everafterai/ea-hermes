@@ -4,7 +4,8 @@ The model calls ``notion_api(path, method, body)`` with structured arguments and
 gets parsed JSON back. It never writes shell, never writes python, never parses
 JSON itself — which is what keeps quiet Slack channels silent (no interpreter
 trips the security-scan approval prompt). Internals run a FIXED argv
-(``ntn api <path> -X <METHOD> [--json -]``) with the JSON body on stdin and
+(``ntn api <path> -X <METHOD>``) with the JSON body piped to the process's
+stdin — ntn 0.15.x reads the request body from stdin with no flag — and
 ``shell=False``, so nothing the model supplies can become a shell token. ``ntn``
 is wrapped (rather than calling api.notion.com directly) to reuse its
 Markdown->Notion-blocks conversion (the ``markdown`` body field and the
@@ -112,10 +113,11 @@ def _notion_api_handler(args: dict, **_kw) -> str:
     stdin_data = None
     if body is not None:
         try:
+            # ntn 0.15.x takes the request body from stdin JSON (no flag);
+            # subprocess feeds this via input= below.
             stdin_data = json.dumps(body)
         except (TypeError, ValueError) as e:
             return tool_error(f"body is not JSON-serializable: {e}")
-        argv += ["--json", "-"]
 
     try:
         proc = subprocess.run(
