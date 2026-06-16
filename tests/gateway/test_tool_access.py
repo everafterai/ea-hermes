@@ -309,6 +309,25 @@ class TestChannelRoles:
         assert p.allowed_toolsets("U_stranger", ALL_TOOLSETS, "C_track") == ALL_TOOLSETS
 
 
+class TestNotionGrant:
+    def test_operator_grants_notion(self):
+        p = policy_from_extra({"user_roles": {"U_OP": "operator"}})
+        assert p.can_use_tool("U_OP", "notion") is True
+        assert p.can_use_tool("U_OP", "terminal") is True  # retained
+
+    def test_channel_operator_grants_notion_to_any_poster(self):
+        # An issue channel maps every poster to operator; a roleless poster must
+        # get notion (and still terminal) there.
+        p = policy_from_extra({
+            "user_roles": {"U_ADMIN": "admin"},          # activates RBAC
+            "channel_roles": {"C_ISSUES": "operator"},
+        })
+        toolsets = frozenset({"notion", "terminal", "web"})
+        got = p.allowed_toolsets("U_RANDO", toolsets, chat_id="C_ISSUES")
+        assert "notion" in got
+        assert "terminal" in got
+
+
 class TestChannelRolesConfigBridge:
     def test_channel_roles_reach_slack_extra(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"

@@ -78,6 +78,7 @@ CONFIGURABLE_TOOLSETS = [
     ("spotify",          "🎵 Spotify",                  "playback, search, playlists, library"),
     ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
     ("slack",           "💬 Slack (reactions)",          "react to Slack messages with emoji"),
+    ("notion",          "🗒️  Notion",                   "read/write Notion pages & databases"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("yuanbao",          "🤖 Yuanbao",                  "group info, member queries, DM"),
     ("computer_use",     "🖱️  Computer Use (macOS)",     "background desktop control via cua-driver"),

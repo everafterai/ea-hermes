@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
     "admin": frozenset({"*"}),
     "operator": frozenset(
-        {"terminal", "file", "web", "browser", "vision", "memory", "delegation"}
+        {"terminal", "file", "web", "browser", "vision", "memory", "delegation", "notion"}
     ),
     "readonly": frozenset({"web", "vision", "session_search", "memory"}),
     "chat_only": frozenset(),
