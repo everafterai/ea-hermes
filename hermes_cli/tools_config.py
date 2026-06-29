@@ -80,6 +80,7 @@ CONFIGURABLE_TOOLSETS = [
     ("slack",           "💬 Slack (reactions)",          "react to Slack messages with emoji"),
     ("notion",          "🗒️  Notion",                   "read/write Notion pages & databases"),
     ("jira",            "🎫  JIRA",                    "read JIRA issues, statuses & JQL search"),
+    ("slack_post",      "💬  Slack thread post",       "post a message into a specific Slack thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("yuanbao",          "🤖 Yuanbao",                  "group info, member queries, DM"),
     ("computer_use",     "🖱️  Computer Use (macOS)",     "background desktop control via cua-driver"),
