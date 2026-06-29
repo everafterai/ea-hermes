@@ -40,8 +40,14 @@ logger = logging.getLogger(__name__)
 # Built-in roles. Operators get these without writing a ``roles:`` block.
 BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
     "admin": frozenset({"*"}),
+    # ``operator`` intentionally excludes ``terminal``: notion/file/web/browser
+    # cover its work without a shell, and dropping the shell stops an operator
+    # (including channel-role posters in issue-tracking channels) from reading
+    # host secrets via ``printenv`` / ``cat ~/.hermes/.env``. ``session_search``
+    # is granted so operators can recall prior work in their own session scope.
     "operator": frozenset(
-        {"terminal", "file", "web", "browser", "vision", "memory", "delegation", "notion"}
+        {"file", "web", "browser", "vision", "memory", "delegation",
+         "notion", "session_search"}
     ),
     "readonly": frozenset({"web", "vision", "session_search", "memory"}),
     "chat_only": frozenset(),
