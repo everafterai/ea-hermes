@@ -1826,6 +1826,15 @@ def terminal_tool(
                 "status": "error",
             }, ensure_ascii=False)
 
+        # Audit (log-only) references to cross-user session/memory stores.
+        # Never blocks — a shell reads them regardless of any in-process
+        # check; this makes the access visible in the audit trail.
+        try:
+            from agent.data_access_audit import record_command_access
+            record_command_access(command, tool="terminal")
+        except Exception:
+            pass
+
         # Get configuration
         config = _get_env_config()
         env_type = config["env_type"]

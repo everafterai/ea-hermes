@@ -1093,6 +1093,14 @@ def execute_code(
     if not code or not code.strip():
         return tool_error("No code provided.")
 
+    # Audit (log-only) references to cross-user session/memory stores in the
+    # sandbox script. Never blocks; best-effort.
+    try:
+        from agent.data_access_audit import record_command_access
+        record_command_access(code, tool="code_execution")
+    except Exception:
+        pass
+
     # Dispatch: remote backends use file-based RPC, local uses UDS
     from tools.terminal_tool import _get_env_config
     env_type = _get_env_config()["env_type"]
