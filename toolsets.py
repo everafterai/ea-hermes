@@ -298,6 +298,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "jira": {
+        "description": "JIRA Cloud REST API access (read-only: issues, statuses, JQL search)",
+        "tools": ["jira_api"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [
