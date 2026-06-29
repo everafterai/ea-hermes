@@ -298,6 +298,18 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "jira": {
+        "description": "JIRA Cloud REST API access (read-only: issues, statuses, JQL search)",
+        "tools": ["jira_api"],
+        "includes": [],
+    },
+
+    "slack_post": {
+        "description": "Post a text message into a specific Slack thread (explicit chat_id + thread_ts)",
+        "tools": ["slack_post_thread"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [
