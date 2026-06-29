@@ -90,6 +90,29 @@ inherited into compression + branch sessions to preserve self-recall. When
 touching session search/resume/scoping, preserve these isolation guarantees — they
 have end-to-end tests under [tests/](tests/) (e.g. multi-user `session_search` isolation).
 
+### Cross-user data-access protection — [agent/file_safety.py](agent/file_safety.py) + [agent/data_access_audit.py](agent/data_access_audit.py)
+
+App-layer session/memory isolation never touches bytes on disk, and the gateway
+runs as one OS uid, so a filesystem-capable tool can read other users' data.
+Two controls (design:
+[docs/superpowers/specs/2026-06-29-cross-user-data-access-protection-design.md](docs/superpowers/specs/2026-06-29-cross-user-data-access-protection-design.md)):
+
+- **Close (file tool):** `is_protected_data_path` recognizes the session DB
+  (`state.db`), memory DBs (`memory_store.db`, `memories/holographic/*.db`),
+  and **plaintext session snapshots** (`sessions/session_*.json`, `*.jsonl`,
+  `request_dump_*.json`) under any Hermes home/root/profile — while keeping the
+  shared `memories/MEMORY.md` / `USER.md` readable. `read_file`/`search_files`/
+  `patch` deny these (the `.db` files would otherwise be caught by the
+  pre-existing binary-extension guard, but the matcher runs first so the
+  message says "other users' data" rather than "use terminal").
+- **Detect (all three tools):** `agent/data_access_audit.record_access` appends
+  JSONL to `${HERMES_HOME}/audit/data-access.log`; `terminal`/`code_execution`
+  log (never block) when a command/script references a protected path. Config
+  under the top-level `data_access_audit:` block (`enabled`, default true;
+  `path`). **Not a security boundary** — a determined admin with a shell
+  bypasses it; the audit catches accidental/operator access and makes casual
+  admin access visible. The log is local and same-uid-writable.
+
 ### Slack quiet channels + `slack_react`
 
 For low-noise "hidden assistant" channels. Config under the top-level `slack:`

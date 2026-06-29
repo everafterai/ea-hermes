@@ -8,7 +8,7 @@ import os
 import threading
 from pathlib import Path
 
-from agent.file_safety import get_read_block_error
+from agent.file_safety import get_read_block_error, is_protected_data_path
 from tools.binary_extensions import has_binary_extension
 from tools.file_operations import (
     ShellFileOperations,
@@ -707,6 +707,18 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
 
         _resolved = _resolve_path_for_task(path, task_id)
 
+        # ── Cross-user data guard ─────────────────────────────────────
+        # Block reads of other users' session/memory stores BEFORE the
+        # binary-extension guard, so a protected .db returns a
+        # "this is other users' data" message instead of the binary
+        # message that points at the terminal bypass. Audited regardless
+        # of role. NOT a security boundary — the terminal tool bypasses it.
+        _protected = is_protected_data_path(str(_resolved))
+        if _protected:
+            from agent.data_access_audit import record_access
+            record_access(tool="read_file", action="blocked-read", target=str(_resolved))
+            return json.dumps({"error": _protected})
+
         # ── Binary file guard ─────────────────────────────────────────
         # Block binary files by extension (no I/O).
         if has_binary_extension(str(_resolved)):
@@ -1050,6 +1062,17 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     Pass ``True`` after explicit user direction — same shape as ``force``
     on the terminal tool.
     """
+    _protected = is_protected_data_path(path)
+    if _protected:
+        from agent.data_access_audit import record_access
+        record_access(tool="write_file", action="blocked-write", target=str(path))
+        return tool_error(
+            f"Access denied: {path} is a Hermes session/memory data store shared "
+            "across users and must not be written via the file tool — doing so "
+            "would corrupt other users' data. The app manages these files through "
+            "internal connections. (Defense-in-depth — not a security boundary; "
+            "the terminal tool can still bypass.)"
+        )
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
@@ -1152,6 +1175,11 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                 )
             _paths_to_check.append(v4a_path)
     for _p in _paths_to_check:
+        _prot = is_protected_data_path(_p)
+        if _prot:
+            from agent.data_access_audit import record_access
+            record_access(tool="patch", action="blocked-read", target=str(_p))
+            return tool_error(_prot)
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
@@ -1297,6 +1325,13 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
     try:
         offset, limit = normalize_search_pagination(offset, limit)
 
+        # Deny searching a protected store directly (e.g. path=<state.db>).
+        _root_protected = is_protected_data_path(path)
+        if _root_protected:
+            from agent.data_access_audit import record_access
+            record_access(tool="search_files", action="blocked-read", target=str(path))
+            return json.dumps({"error": _root_protected})
+
         # Track searches to detect *consecutive* repeated search loops.
         # Include pagination args so users can page through truncated
         # results without tripping the repeated-search guard.
@@ -1336,6 +1371,49 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
             pattern=pattern, path=path, target=target, file_glob=file_glob,
             limit=limit, offset=offset, output_mode=output_mode, context=context
         )
+
+        # Drop any matches/files that resolve to a protected data store
+        # (e.g. plaintext session snapshots picked up by a recursive search).
+        _dropped = 0
+        if getattr(result, "matches", None):
+            _kept = []
+            for _m in result.matches:
+                if getattr(_m, "path", None) and is_protected_data_path(_m.path):
+                    _dropped += 1
+                    continue
+                _kept.append(_m)
+            result.matches = _kept
+        if getattr(result, "files", None):
+            _kept_f = []
+            for _f in result.files:
+                if is_protected_data_path(_f):
+                    _dropped += 1
+                else:
+                    _kept_f.append(_f)
+            result.files = _kept_f
+        if getattr(result, "counts", None):
+            _kept_counts = {}
+            for _k, _v in result.counts.items():
+                if is_protected_data_path(_k):
+                    _dropped += 1
+                else:
+                    _kept_counts[_k] = _v
+            result.counts = _kept_counts
+            # count-mode total_count IS the sum of per-file counts — recompute
+            # exactly so dropped files' hits don't inflate the reported total.
+            result.total_count = sum(_kept_counts.values())
+        if _dropped:
+            # matches/files modes: total_count is the (pre-pagination) total;
+            # subtract the dropped count so the model isn't told a number that
+            # still includes protected hits (exact when results fit one page).
+            if not getattr(result, "counts", None):
+                result.total_count = max(0, (getattr(result, "total_count", 0) or 0) - _dropped)
+            from agent.data_access_audit import record_access
+            record_access(
+                tool="search_files", action="blocked-read",
+                target=f"{_dropped} protected file(s) under {path}",
+            )
+
         if hasattr(result, 'matches'):
             for m in result.matches:
                 if hasattr(m, 'content') and m.content:

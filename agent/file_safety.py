@@ -162,6 +162,121 @@ _BLOCKED_PROJECT_ENV_BASENAMES: set[str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Cross-user data stores — session DBs, memory DBs, and plaintext session
+# snapshots. Unlike the credential read-block above, these are not secrets:
+# they are OTHER USERS' conversation/memory data. App-layer scoping
+# (hermes_state.build_visibility_where) never touches these bytes, so a file
+# tool that reads them bypasses isolation. Anchored to the Hermes home / root
+# (and sibling profiles) so an unrelated project file named "state.db" is NOT
+# matched.  NOT a security boundary — the terminal tool bypasses it; this
+# gates the file tool and gives the audit layer one definition of "protected".
+# ---------------------------------------------------------------------------
+
+_PROTECTED_DATA_MSG = (
+    "Access denied: {path} is a Hermes {kind} containing other users' "
+    "session/memory data and cannot be read via the file tool. App-layer "
+    "isolation does not apply to raw file reads. (Defense-in-depth — not a "
+    "security boundary; the terminal tool can still bypass, and such access "
+    "is audited.)"
+)
+
+
+def _hermes_anchor_dirs() -> list[Path]:
+    """Resolved Hermes home, root, and any sibling profiles under <root>/profiles/*.
+
+    Anchoring protected-path detection here keeps it from matching arbitrary
+    project files that merely share a name (e.g. a project's own ``state.db``),
+    while still catching another profile's data.
+    """
+    anchors: list[Path] = []
+    for base in (_hermes_home_path(), _hermes_root_path()):
+        try:
+            real = base.resolve()
+        except Exception:
+            continue
+        if real not in anchors:
+            anchors.append(real)
+    try:
+        profiles_dir = (_hermes_root_path().resolve()) / "profiles"
+        if profiles_dir.is_dir():
+            for child in profiles_dir.iterdir():
+                try:
+                    if not child.is_dir():
+                        continue
+                    real = child.resolve()
+                    if real not in anchors:
+                        anchors.append(real)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return anchors
+
+
+def is_protected_data_path(path) -> Optional[str]:
+    """Return a denial reason if *path* is a cross-user session/memory store.
+
+    Matches, under any Hermes home/root/profile anchor:
+      * ``state.db``                    — session DB
+      * ``memory_store.db``             — shared holographic memory store
+      * ``memories/holographic/*.db``   — per-scope memory DBs
+      * ``sessions/session_*.json``,
+        ``sessions/*.jsonl``,
+        ``sessions/request_dump_*.json`` — plaintext session snapshots
+
+    Returns ``None`` for everything else, including the intentionally shared
+    ``memories/MEMORY.md`` / ``USER.md``. NOT a security boundary.
+    """
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except Exception:
+        return None
+
+    name = resolved.name
+    suffix = resolved.suffix.lower()
+
+    for anchor in _hermes_anchor_dirs():
+        try:
+            if resolved == (anchor / "state.db").resolve():
+                return _PROTECTED_DATA_MSG.format(path=path, kind="session database")
+            if resolved == (anchor / "memory_store.db").resolve():
+                return _PROTECTED_DATA_MSG.format(path=path, kind="memory store")
+        except Exception:
+            pass
+
+        # Per-scope memory DBs under <anchor>/memories/holographic/*.db
+        if suffix == ".db":
+            try:
+                holo = (anchor / "memories" / "holographic").resolve()
+                resolved.relative_to(holo)
+                return _PROTECTED_DATA_MSG.format(
+                    path=path, kind="per-scope memory database"
+                )
+            except ValueError:
+                pass
+            except Exception:
+                pass
+
+        # Plaintext session snapshots under <anchor>/sessions/
+        try:
+            sessions = (anchor / "sessions").resolve()
+            resolved.relative_to(sessions)
+            is_snap = (
+                (name.startswith("session_") and suffix == ".json")
+                or suffix == ".jsonl"
+                or (name.startswith("request_dump_") and suffix == ".json")
+            )
+            if is_snap:
+                return _PROTECTED_DATA_MSG.format(path=path, kind="session snapshot")
+        except ValueError:
+            pass
+        except Exception:
+            pass
+
+    return None
+
+
 def get_read_block_error(path: str) -> Optional[str]:
     """Return an error message when a read targets a denied Hermes path.
 
@@ -304,6 +419,11 @@ def get_read_block_error(path: str) -> Optional[str]:
             "If you need to check the file structure, read .env.example instead. "
             "(Defense-in-depth — not a security boundary; the terminal tool can still bypass.)"
         )
+
+    # Cross-user session/memory data stores (other users' data, not secrets).
+    protected = is_protected_data_path(resolved)
+    if protected:
+        return protected
 
     return None
 
