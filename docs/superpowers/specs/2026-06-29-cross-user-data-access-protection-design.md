@@ -24,29 +24,52 @@ disk. The underlying storage has no per-user partitioning:
   users (`gateway/session_context.py`); identity is carried in task-local contextvars,
   not separate processes — so POSIX file permissions cannot separate users.
 
-Any tool that can read files off the host therefore bypasses all app-layer scoping:
+Any tool that can read files off the host therefore bypasses all app-layer scoping —
+but the size of each tool's hole differs, and an earlier read of this codebase
+over-stated the `file`-tool hole. The verified picture:
 
 - **`terminal`** (`tools/terminal_tool.py`) defaults to the `local` backend — a real
-  host shell with full filesystem access (`sqlite3 ~/.hermes/state.db`, `strings`, …).
-  Granted only to the **admin** role.
-- **`file`** / `read_file` (`tools/file_tools.py`) accepts absolute paths and is **not**
-  blocked from reading `state.db` or the memory DBs. The existing read-block
-  (`agent/file_safety.py`) covers credentials (`.env`, `auth.json`, …) but **not** the
-  data stores. The `file` toolset is granted to **operator** *and* admin — so an
-  **operator (a non-shell role) can already read other users' messages** via
-  `read_file ~/.hermes/state.db`.
+  host shell with full filesystem access (`sqlite3 ~/.hermes/state.db`, `strings`,
+  copy-then-read, …). Binary guards do not apply to a shell. Granted only to the
+  **admin** role. **This is the wide-open, primary exposure**, and the only lever
+  against it is detection (auditing), since blocking a shell is futile.
+- **`file`** tool (`tools/file_tools.py`) — the `.db` stores are **already effectively
+  closed** by pre-existing guards, *not* by the credential read-block:
+  - `read_file` blocks any binary-extension file at `tools/file_tools.py:712`
+    (`.db`/`.sqlite`/`.sqlite3` ∈ `tools/binary_extensions.py`), *before* the
+    credential read-block at line 728. So `read_file ~/.hermes/state.db` already
+    fails today — but with a misleading message that says *"Use … terminal to
+    inspect binary files,"* i.e. it points at the bypass.
+  - `search_files` runs `rg`/`grep` **without** `-a`/`--text`
+    (`tools/file_operations.py:2072`), so they skip binary `.db` files by default —
+    grep cannot dump rows either.
+  - **The one genuine `file`-tool hole is plaintext session snapshots**, written under
+    `~/.hermes/sessions/` as `session_<sid>.json`, `<sid>.jsonl`, and
+    `request_dump_<sid>_*.json` (`agent/agent_init.py:1030`; opt-in
+    `sessions.write_json_snapshots`, default off; request dumps appear during
+    debugging). These are plaintext JSON — `read_file`/`search_files` read them
+    fine, for **any** role holding the `file` toolset (operator included).
 
-The user framed this as "mainly an admin capability," but the operator/`file` path is a
-genuine non-admin leak.
+So the non-admin (`operator`) tier is, in practice, **already unable to exfiltrate the
+session/memory DBs** — the earlier "operator can `read_file state.db`" claim was wrong
+(it missed the binary guard). The residual exposures are: (1) the admin `terminal`
+(detection only), and (2) plaintext session snapshots via the `file` tool when that
+opt-in feature or request-dumping is active.
 
 ## Goals
 
-- **Close the non-admin path:** make the `file` tool deny reads of the session DB and
-  the per-scope/shared memory DBs. For roles without a shell (`operator`, and anything
-  short of admin), this is a *real* boundary.
-- **Detect the admin path:** create an auditable trail whenever any tool reads or
-  references those protected data stores, turning silent cross-user access into a
-  logged event.
+- **Detect the admin path (primary):** create an auditable trail whenever any tool
+  reads or references the protected data stores, turning silent cross-user access via
+  `terminal`/`code_execution` into a logged event. This is the main value, because a
+  shell can't be blocked.
+- **Close the one real `file`-tool hole:** deny `read_file`/`search_files`/`patch` on
+  the plaintext session snapshots under `~/.hermes/sessions/`
+  (`session_*.json` / `*.jsonl` / `request_dump_*.json`). For roles without a shell
+  (`operator`, and anything short of admin), this is a *real* boundary.
+- **Fix the misleading `.db` message + harden:** run the protected-path check *before*
+  the binary-extension guard so a `read_file` on `state.db`/memory DBs returns a
+  "this is other users' data" message instead of "use terminal," and add an explicit
+  policy deny (defense-in-depth, not reliant on the binary heuristic).
 - **Role-independent:** the controls live in the tool execution path and apply whether
   or not RBAC is active (when `user_roles` is empty, everyone has every toolset — these
   controls still apply).
@@ -95,32 +118,44 @@ def is_protected_data_path(path: str | Path) -> str | None:
 ```
 
 Matches the **resolved** path (so `..`/symlink/relative forms normalize) against
-patterns, covering cross-profile locations:
+patterns, covering cross-profile locations. Two tiers:
 
+**Plaintext session snapshots — the real `file`-tool hole:**
+- `**/sessions/session_*.json`     — per-session JSON snapshot
+- `**/sessions/*.jsonl`            — per-session JSONL transcript
+- `**/sessions/request_dump_*.json` — gateway request dumps
+
+**Data DBs — already binary-blocked; matcher gives a correct message + defense-in-depth:**
 - `**/state.db`              — session DB, incl. `profiles/*/state.db`
 - `**/memory_store.db`       — shared holographic store
 - `**/memories/holographic/*.db` — per-scope memory DBs
 
 Explicitly **excludes** `memories/MEMORY.md` and `memories/USER.md` (shared global
 memory — must stay readable). Matching is on filename + parent-dir shape, not anchored
-to the current `HERMES_HOME`, so other profiles' DBs are also recognized.
+to the current `HERMES_HOME`, so other profiles' files are also recognized.
 
-### 2. Close — extend the `file` read-block
+### 2. Close — wire the matcher into the `file` tool
 
-Wire `is_protected_data_path` into the existing read-block path
-(`get_read_block_error`, applied at `tools/file_tools.py:728`) so:
+Wire `is_protected_data_path` into `get_read_block_error` (applied at
+`tools/file_tools.py:728`) **and call it before the binary-extension guard** at
+`tools/file_tools.py:712`, so a protected `.db` returns the protected-data message
+rather than the misleading "use terminal" binary message. Then:
 
-- `read_file` on a protected path returns a read-block error (reusing the existing
-  honest "defense-in-depth — the terminal tool can still bypass" framing).
-- `search_files` skips/denies protected files so grep can't dump rows out of the
-  binary DBs.
-- `patch` refuses protected targets (these files are never legitimately edited via the
-  file tool).
+- `read_file` on a protected path returns the protected-data read-block error (reusing
+  the honest "defense-in-depth — the terminal tool can still bypass" framing).
+- `search_files` skips/denies protected files (defense-in-depth beyond ripgrep's
+  binary heuristic, and the actual close for the plaintext snapshots, which `rg` would
+  otherwise happily grep).
+- `patch` refuses protected targets (never legitimately edited via the file tool).
+
+The plaintext-snapshot patterns are where this is a *new* boundary; the `.db` patterns
+are message-correction + an explicit policy block that no longer relies on the binary
+heuristic.
 
 **No functional breakage:** `SessionDB.__init__` and the read-only cross-profile
-aggregation open these DBs through direct `sqlite3` connections, not the file tool, so
-blocking the *file tool* does not affect session search, `/resume`, the sidebar, or
-memory.
+aggregation open the DBs through direct `sqlite3` connections, not the file tool;
+snapshot writing uses its own writer — so blocking the *file tool* does not affect
+session search, `/resume`, the sidebar, memory, or snapshot generation.
 
 ### 3. Detect — local append-only audit log
 
@@ -167,10 +202,14 @@ still applies regardless, since it is a safety control, not telemetry.
 ## Testing (via `scripts/run_tests.sh`)
 
 - **Matcher** (`is_protected_data_path`): positives — `state.db`,
-  `profiles/p1/state.db`, `memory_store.db`, `memories/holographic/U123.db`; negatives —
-  `memories/MEMORY.md`, `memories/USER.md`, an arbitrary `notes.db` outside the memory
-  dir, a source file.
-- **Close:** `read_file` / `search_files` / `patch` denied on each protected path;
+  `profiles/p1/state.db`, `memory_store.db`, `memories/holographic/U123.db`,
+  `sessions/session_abc.json`, `sessions/abc.jsonl`, `sessions/request_dump_abc_1.json`;
+  negatives — `memories/MEMORY.md`, `memories/USER.md`, an arbitrary `notes.db` outside
+  the memory dir, a source file, a `sessions/` markdown file.
+- **Close:** `read_file` / `search_files` / `patch` denied on each protected path; the
+  **plaintext snapshot** path returns the protected-data message (the key new boundary,
+  since it is not binary-blocked); a protected `.db` returns the protected-data message
+  rather than the "use terminal" binary message (ordering before the binary guard);
   `MEMORY.md` / `USER.md` still readable; cross-profile `profiles/*/state.db` denied.
 - **Detect:** a file-tool block and a terminal/code-exec command-scan hit each write one
   well-formed JSONL line carrying the identity fields; `enabled: false` writes nothing;
@@ -180,10 +219,11 @@ still applies regardless, since it is a safety control, not telemetry.
 
 ## Files touched
 
-- `agent/file_safety.py` — add `is_protected_data_path`; wire into the read-block.
+- `agent/file_safety.py` — add `is_protected_data_path`; wire into `get_read_block_error`.
 - `agent/data_access_audit.py` — **new**, the audit module.
-- `tools/file_tools.py` — apply the matcher across `read_file` / `search_files` /
-  `patch`; emit `blocked-read` audit events.
+- `tools/file_tools.py` — call the matcher **before** the binary-extension guard
+  (line 712) in `read_file_tool`; apply it across `search_files` / `patch`; emit
+  `blocked-read` audit events.
 - `tools/terminal_tool.py`, `tools/code_execution_tool.py` — pre-exec command/script
   scan + `exec` audit events.
 - config loader — surface the `data_access_audit` block.
