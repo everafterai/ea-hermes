@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
-
 from hermes_constants import get_hermes_home
 
 
@@ -101,8 +99,7 @@ _PROTECTED_REFERENCE_MARKERS = (
     "memory_store.db",
     "memories/holographic",
     "request_dump_",
-    "sessions/session_",
-    ".jsonl",
+    "sessions/",
 )
 
 

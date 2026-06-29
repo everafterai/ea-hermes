@@ -35,3 +35,33 @@ def test_scan_logs_code_execution_reference(monkeypatch):
     lines = _audit_lines()
     assert len(lines) == 1
     assert lines[0]["tool"] == "code_execution"
+
+
+def test_terminal_handler_invokes_scanner(monkeypatch):
+    import tools.terminal_tool as tt
+    from unittest.mock import MagicMock
+    spy = MagicMock()
+    monkeypatch.setattr("agent.data_access_audit.record_command_access", spy)
+    def _boom():
+        raise RuntimeError("stop-after-audit")
+    monkeypatch.setattr(tt, "_get_env_config", _boom)
+    # Call terminal_tool directly — it contains the record_command_access call.
+    # The outer try/except catches the RuntimeError from _get_env_config and
+    # returns an error JSON, but the scanner has already been invoked.
+    tt.terminal_tool(command="sqlite3 ~/.hermes/state.db .dump")
+    assert spy.called
+    assert spy.call_args.kwargs.get("tool") == "terminal"
+
+
+def test_execute_code_handler_invokes_scanner(monkeypatch):
+    import tools.code_execution_tool as cet
+    from unittest.mock import MagicMock
+    spy = MagicMock()
+    monkeypatch.setattr("agent.data_access_audit.record_command_access", spy)
+    monkeypatch.setattr(cet, "SANDBOX_AVAILABLE", True)
+    # Deny at the approval guard (runs AFTER the audit call) so no sandbox spawns.
+    monkeypatch.setattr("tools.approval.check_execute_code_guard",
+                        lambda code, env_type: {"approved": False, "message": "blocked-for-test"})
+    cet.execute_code(code="cat ~/.hermes/state.db")
+    assert spy.called
+    assert spy.call_args.kwargs.get("tool") == "code_execution"

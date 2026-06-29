@@ -102,9 +102,9 @@ Two controls (design:
   and **plaintext session snapshots** (`sessions/session_*.json`, `*.jsonl`,
   `request_dump_*.json`) under any Hermes home/root/profile — while keeping the
   shared `memories/MEMORY.md` / `USER.md` readable. `read_file`/`search_files`/
-  `patch` deny these (the `.db` files are also caught earlier by the
-  binary-extension guard; the matcher runs *before* it so the message says
-  "other users' data" rather than "use terminal").
+  `patch` deny these (the `.db` files would otherwise be caught by the
+  pre-existing binary-extension guard, but the matcher runs first so the
+  message says "other users' data" rather than "use terminal").
 - **Detect (all three tools):** `agent/data_access_audit.record_access` appends
   JSONL to `${HERMES_HOME}/audit/data-access.log`; `terminal`/`code_execution`
   log (never block) when a command/script references a protected path. Config

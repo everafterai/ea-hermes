@@ -38,7 +38,7 @@ def test_read_file_state_db_message_is_protected_not_terminal(monkeypatch):
     assert "other users" in out["error"].lower()
 
 
-def test_search_filters_protected_snapshot(monkeypatch):
+def test_search_filters_protected_snapshot_and_count(monkeypatch):
     monkeypatch.setattr(audit, "_audit_config", lambda: {"enabled": True})
     _touch(get_hermes_home() / "sessions" / "session_abc.json",
            "uniqueneedle12345 in another users chat")
@@ -47,8 +47,25 @@ def test_search_filters_protected_snapshot(monkeypatch):
         path=str(get_hermes_home() / "sessions"),
         target="content",
     ))
-    blob = json.dumps(out)
-    assert "uniqueneedle12345" not in blob or out.get("matches") in (None, [])
+    # No protected content leaks, no matches surface, and the count does not over-report.
+    assert "uniqueneedle12345" not in json.dumps(out)
+    assert out.get("matches") in (None, [])
+    assert out.get("total_count", 0) == 0
+    # The drop is audited.
+    assert any(ev["action"] == "blocked-read" and ev["tool"] == "search_files"
+               for ev in _audit_lines())
+
+
+def test_write_file_denies_protected_db(monkeypatch):
+    monkeypatch.setattr(audit, "_audit_config", lambda: {"enabled": True})
+    db = _touch(get_hermes_home() / "state.db")  # _touch default content = "secret-conversation"
+    out = json.loads(ft.write_file_tool(str(db), "corrupt"))
+    assert "error" in out
+    assert "security boundary" in out["error"].lower()
+    # write was refused — original content intact
+    assert db.read_text(encoding="utf-8") == "secret-conversation"
+    assert any(ev["action"] == "blocked-write" and ev["tool"] == "write_file"
+               for ev in _audit_lines())
 
 
 def test_patch_denies_protected_db(monkeypatch):

@@ -1062,6 +1062,17 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     Pass ``True`` after explicit user direction — same shape as ``force``
     on the terminal tool.
     """
+    _protected = is_protected_data_path(path)
+    if _protected:
+        from agent.data_access_audit import record_access
+        record_access(tool="write_file", action="blocked-write", target=str(path))
+        return tool_error(
+            f"Access denied: {path} is a Hermes session/memory data store shared "
+            "across users and must not be written via the file tool — doing so "
+            "would corrupt other users' data. The app manages these files through "
+            "internal connections. (Defense-in-depth — not a security boundary; "
+            "the terminal tool can still bypass.)"
+        )
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
@@ -1381,11 +1392,22 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                     _kept_f.append(_f)
             result.files = _kept_f
         if getattr(result, "counts", None):
-            result.counts = {
-                _k: _v for _k, _v in result.counts.items()
-                if not is_protected_data_path(_k)
-            }
+            _kept_counts = {}
+            for _k, _v in result.counts.items():
+                if is_protected_data_path(_k):
+                    _dropped += 1
+                else:
+                    _kept_counts[_k] = _v
+            result.counts = _kept_counts
+            # count-mode total_count IS the sum of per-file counts — recompute
+            # exactly so dropped files' hits don't inflate the reported total.
+            result.total_count = sum(_kept_counts.values())
         if _dropped:
+            # matches/files modes: total_count is the (pre-pagination) total;
+            # subtract the dropped count so the model isn't told a number that
+            # still includes protected hits (exact when results fit one page).
+            if not getattr(result, "counts", None):
+                result.total_count = max(0, (getattr(result, "total_count", 0) or 0) - _dropped)
             from agent.data_access_audit import record_access
             record_access(
                 tool="search_files", action="blocked-read",
