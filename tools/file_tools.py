@@ -1052,8 +1052,44 @@ def _check_file_staleness(filepath: str, task_id: str) -> str | None:
     return None
 
 
+def _automation_ownership_check(path, confirm, *, is_write: bool):
+    """For a managed automation path, return (error, pending_notify, nudge).
+
+    - error: deny string, or None to allow.
+    - pending_notify: (key, editor, record) to fire after a successful confirmed
+      cross-user edit, else None.
+    - nudge: claim hint to append to a successful result for unowned items, else None.
+    Registers the creator when a brand-new managed file is written. Fails open.
+    """
+    try:
+        from agent import automation_ownership as _ao
+        if not _ao.is_enabled():
+            return None, None, None
+        cls = _ao.path_to_artifact_key(path)
+        if not cls:
+            return None, None, None
+        key, kind = cls
+        ident = _ao.current_identity()
+        from pathlib import Path as _P
+        exists = _P(path).expanduser().exists()
+        if is_write and not exists and _ao.get_record(key) is None:
+            _ao.register_creator(key, kind, ident)
+            return None, None, None
+        res = _ao.check_edit(key, ident, confirm=confirm)
+        if not res.allowed:
+            return res.message, None, None
+        pending = None
+        if res.decision == _ao.EditDecision.CROSS_USER and res.record and ident:
+            pending = (key, ident, res.record)
+        nudge = res.message if res.decision == _ao.EditDecision.UNOWNED and res.message else None
+        return None, pending, nudge
+    except Exception:
+        return None, None, None
+
+
 def write_file_tool(path: str, content: str, task_id: str = "default",
-                    cross_profile: bool = False) -> str:
+                    cross_profile: bool = False,
+                    confirm_cross_user_owner: str = None) -> str:
     """Write content to a file.
 
     ``cross_profile`` opts out of the soft cross-Hermes-profile guard. The
@@ -1073,6 +1109,10 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             "internal connections. (Defense-in-depth — not a security boundary; "
             "the terminal tool can still bypass.)"
         )
+    _own_err, _own_pending, _own_nudge = _automation_ownership_check(
+        path, confirm_cross_user_owner, is_write=True)
+    if _own_err:
+        return json.dumps({"error": _own_err})
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
@@ -1102,6 +1142,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             if stale_warning:
                 result_dict["_warning"] = stale_warning
             _update_read_timestamp(path, task_id)
+            if _own_pending and not result_dict.get("error"):
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_own_pending)
             return json.dumps(result_dict, ensure_ascii=False)
 
         # Serialize the read→modify→write region per-path so concurrent
@@ -1132,6 +1175,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             _update_read_timestamp(path, task_id)
             if not result_dict.get("error"):
                 file_state.note_write(task_id, _resolved)
+        if _own_pending and not result_dict.get("error"):
+            from agent.automation_ownership import record_and_notify
+            record_and_notify(*_own_pending)
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         if _is_expected_write_exception(e):
@@ -1143,7 +1189,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
 
 def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                new_string: str = None, replace_all: bool = False, patch: str = None,
-               task_id: str = "default", cross_profile: bool = False) -> str:
+               task_id: str = "default", cross_profile: bool = False,
+               confirm_cross_user_owner: str = None) -> str:
     """Patch a file using replace mode or V4A patch format.
 
     ``cross_profile`` opts out of the soft cross-Hermes-profile guard for
@@ -1174,12 +1221,19 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     "path in '*** Update File:' / '*** Add File:' / '*** Delete File:' headers."
                 )
             _paths_to_check.append(v4a_path)
+    _own_pending = None
     for _p in _paths_to_check:
         _prot = is_protected_data_path(_p)
         if _prot:
             from agent.data_access_audit import record_access
             record_access(tool="patch", action="blocked-read", target=str(_p))
             return tool_error(_prot)
+        _p_own_err, _p_own_pending, _p_own_nudge = _automation_ownership_check(
+            _p, confirm_cross_user_owner, is_write=False)
+        if _p_own_err:
+            return tool_error(_p_own_err)
+        if _p_own_pending and _own_pending is None:
+            _own_pending = _p_own_pending
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
@@ -1312,6 +1366,9 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     "old_string not found. Use read_file to verify the current "
                     "content, or search_files to locate the text."
                 )
+        if _own_pending and not result_dict.get("error"):
+            from agent.automation_ownership import record_and_notify
+            record_and_notify(*_own_pending)
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))
@@ -1477,6 +1534,14 @@ WRITE_FILE_SCHEMA = {
                 "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Hermes profile's skills/plugins/cron/memories — by default these writes are blocked with a warning because they affect a different profile than the one this session is running under.",
                 "default": False,
             },
+            "confirm_cross_user_owner": {
+                "type": "string",
+                "description": (
+                    "Acknowledge editing a script/skill/automation file owned by "
+                    "another user. Pass the owner's name (or id) from the ownership "
+                    "warning, ONLY after the user explicitly confirms. Omit otherwise."
+                ),
+            },
         },
         "required": ["path", "content"]
     }
@@ -1527,6 +1592,14 @@ PATCH_SCHEMA = {
                 "type": "boolean",
                 "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Hermes profile's skills/plugins/cron/memories.",
                 "default": False,
+            },
+            "confirm_cross_user_owner": {
+                "type": "string",
+                "description": (
+                    "Acknowledge editing a script/skill/automation file owned by "
+                    "another user. Pass the owner's name (or id) from the ownership "
+                    "warning, ONLY after the user explicitly confirms. Omit otherwise."
+                ),
             },
         },
         "required": ["mode"],
@@ -1581,6 +1654,7 @@ def _handle_write_file(args, **kw):
     return write_file_tool(
         path=args["path"], content=args["content"], task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
+        confirm_cross_user_owner=args.get("confirm_cross_user_owner"),
     )
 
 
@@ -1591,6 +1665,7 @@ def _handle_patch(args, **kw):
         old_string=args.get("old_string"), new_string=args.get("new_string"),
         replace_all=args.get("replace_all", False), patch=args.get("patch"), task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
+        confirm_cross_user_owner=args.get("confirm_cross_user_owner"),
     )
 
 
