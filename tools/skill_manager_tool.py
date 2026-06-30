@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import tempfile
+from contextvars import ContextVar
 from pathlib import Path
 from hermes_constants import get_hermes_home, display_hermes_home
 from typing import Dict, Any, List, Optional, Tuple
@@ -46,6 +47,9 @@ from utils import atomic_replace, is_truthy_value
 from hermes_cli.config import cfg_get
 
 logger = logging.getLogger(__name__)
+
+# Carries the confirm_cross_user_owner token for the duration of a skill_manage call.
+_CONFIRM_OWNER: ContextVar = ContextVar("_skill_confirm_owner", default=None)
 
 # Import security scanner — external hub installs always get scanned;
 # agent-created skills only get scanned when skills.guard_agent_created is on.
@@ -479,6 +483,32 @@ def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -
 
 
 # =============================================================================
+# Ownership gate
+# =============================================================================
+
+def _ownership_gate(key: str):
+    """Return (error_str, pending_notify) for an edit of *key* by the current user.
+
+    error_str is non-None when the edit must be refused. pending_notify is a
+    (key, editor, record) tuple to fire after a successful confirmed cross-user
+    edit, else None. Fails open: any internal error -> allow.
+    """
+    try:
+        from agent import automation_ownership as _ao
+        if not _ao.is_enabled():
+            return None, None
+        ident = _ao.current_identity()
+        res = _ao.check_edit(key, ident, confirm=_CONFIRM_OWNER.get())
+        if not res.allowed:
+            return res.message, None
+        if res.decision == _ao.EditDecision.CROSS_USER and res.record is not None and ident is not None:
+            return None, (key, ident, res.record)
+        return None, None
+    except Exception:
+        return None, None
+
+
+# =============================================================================
 # Core actions
 # =============================================================================
 
@@ -553,6 +583,11 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
     if not existing:
         return {"success": False, "error": _skill_not_found_error(name)}
 
+    from agent.automation_ownership import artifact_key
+    _err, _pending = _ownership_gate(artifact_key("skill", name))
+    if _err:
+        return {"error": _err}
+
     skill_md = existing["path"] / "SKILL.md"
     # Back up original content for rollback
     original_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else None
@@ -564,6 +599,10 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
         if original_content is not None:
             _atomic_write_text(skill_md, original_content)
         return {"success": False, "error": scan_error}
+
+    if _pending:
+        from agent.automation_ownership import record_and_notify
+        record_and_notify(*_pending)
 
     return {
         "success": True,
@@ -592,6 +631,11 @@ def _patch_skill(
     existing = _find_skill(name)
     if not existing:
         return {"success": False, "error": _skill_not_found_error(name)}
+
+    from agent.automation_ownership import artifact_key
+    _err, _pending = _ownership_gate(artifact_key("skill", name))
+    if _err:
+        return {"error": _err}
 
     skill_dir = existing["path"]
 
@@ -660,6 +704,10 @@ def _patch_skill(
         _atomic_write_text(target, original_content)
         return {"success": False, "error": scan_error}
 
+    if _pending:
+        from agent.automation_ownership import record_and_notify
+        record_and_notify(*_pending)
+
     return {
         "success": True,
         "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({match_count} replacement{'s' if match_count > 1 else ''}).",
@@ -685,6 +733,11 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     pinned_err = _pinned_guard(name)
     if pinned_err:
         return {"success": False, "error": pinned_err}
+
+    from agent.automation_ownership import artifact_key
+    _err, _pending = _ownership_gate(artifact_key("skill", name))
+    if _err:
+        return {"error": _err}
 
     # Validate absorbed_into target when declared non-empty
     if absorbed_into is not None and isinstance(absorbed_into, str) and absorbed_into.strip():
@@ -716,6 +769,10 @@ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> Dict[str, A
     message = f"Skill '{name}' deleted."
     if absorbed_into is not None and isinstance(absorbed_into, str) and absorbed_into.strip():
         message += f" Content absorbed into '{absorbed_into.strip()}'."
+
+    if _pending:
+        from agent.automation_ownership import record_and_notify
+        record_and_notify(*_pending)
 
     return {
         "success": True,
@@ -751,6 +808,11 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
     if not existing:
         return {"success": False, "error": _skill_not_found_error(name, " Create it first with action='create'.")}
 
+    from agent.automation_ownership import artifact_key
+    _err, _pending = _ownership_gate(artifact_key("skill", name))
+    if _err:
+        return {"error": _err}
+
     target, err = _resolve_skill_target(existing["path"], file_path)
     if err:
         return {"success": False, "error": err}
@@ -768,6 +830,10 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
             target.unlink(missing_ok=True)
         return {"success": False, "error": scan_error}
 
+    if _pending:
+        from agent.automation_ownership import record_and_notify
+        record_and_notify(*_pending)
+
     return {
         "success": True,
         "message": f"File '{file_path}' written to skill '{name}'.",
@@ -784,6 +850,11 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
     existing = _find_skill(name)
     if not existing:
         return {"success": False, "error": _skill_not_found_error(name)}
+
+    from agent.automation_ownership import artifact_key
+    _err, _pending = _ownership_gate(artifact_key("skill", name))
+    if _err:
+        return {"error": _err}
 
     skill_dir = existing["path"]
 
@@ -812,6 +883,10 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
     if parent != skill_dir and parent.exists() and not any(parent.iterdir()):
         parent.rmdir()
 
+    if _pending:
+        from agent.automation_ownership import record_and_notify
+        record_and_notify(*_pending)
+
     return {
         "success": True,
         "message": f"File '{file_path}' removed from skill '{name}'.",
@@ -822,7 +897,7 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
 # Main entry point
 # =============================================================================
 
-def skill_manage(
+def _skill_manage_inner(
     action: str,
     name: str,
     content: str = None,
@@ -900,6 +975,44 @@ def skill_manage(
             pass
 
     return json.dumps(result, ensure_ascii=False)
+
+
+def skill_manage(
+    action: str,
+    name: str,
+    content: str = None,
+    category: str = None,
+    file_path: str = None,
+    file_content: str = None,
+    old_string: str = None,
+    new_string: str = None,
+    replace_all: bool = False,
+    absorbed_into: str = None,
+    confirm_cross_user_owner: str = None,
+) -> str:
+    """Public entry point for skill_manage.
+
+    Sets the cross-user confirm token for the duration of the call, delegates
+    to ``_skill_manage_inner``, and registers the creator on successful create.
+    """
+    _tok = _CONFIRM_OWNER.set(confirm_cross_user_owner)
+    try:
+        result = _skill_manage_inner(
+            action=action, name=name, content=content, category=category,
+            file_path=file_path, file_content=file_content, old_string=old_string,
+            new_string=new_string, replace_all=replace_all, absorbed_into=absorbed_into,
+        )
+        try:
+            import json as _json
+            from agent import automation_ownership as _ao
+            if action == "create" and "error" not in _json.loads(result):
+                _ao.register_creator(_ao.artifact_key("skill", name), "skill",
+                                     _ao.current_identity())
+        except Exception:
+            pass
+        return result
+    finally:
+        _CONFIRM_OWNER.reset(_tok)
 
 
 # =============================================================================
@@ -1015,6 +1128,14 @@ SKILL_MANAGE_SCHEMA = {
                     "rewriting) will have to guess at intent."
                 )
             },
+            "confirm_cross_user_owner": {
+                "type": "string",
+                "description": (
+                    "Acknowledge editing a skill owned by another user. Pass the "
+                    "owner's name (or id) exactly as shown in the ownership warning, "
+                    "and ONLY after the user explicitly confirms. Omit otherwise."
+                ),
+            },
         },
         "required": ["action", "name"],
     },
@@ -1038,6 +1159,7 @@ registry.register(
         old_string=args.get("old_string"),
         new_string=args.get("new_string"),
         replace_all=args.get("replace_all", False),
-        absorbed_into=args.get("absorbed_into")),
+        absorbed_into=args.get("absorbed_into"),
+        confirm_cross_user_owner=args.get("confirm_cross_user_owner")),
     emoji="📝",
 )
