@@ -478,9 +478,31 @@ def cronjob(
     profile: Optional[str] = None,
     no_agent: Optional[bool] = None,
     task_id: str = None,
+    confirm_cross_user_owner: Optional[str] = None,
 ) -> str:
     """Unified cron job management tool."""
     del task_id  # unused but kept for handler signature compatibility
+
+    def _gate(job_id_or_ref):
+        """(error, pending_notify) for editing an existing job. Fails open."""
+        try:
+            from agent import automation_ownership as _ao
+            from cron.jobs import resolve_job_ref
+            if not _ao.is_enabled():
+                return None, None
+            job = resolve_job_ref(job_id_or_ref)
+            if not job:
+                return None, None
+            key = _ao.artifact_key("cron", job["id"])
+            ident = _ao.current_identity()
+            res = _ao.check_edit(key, ident, confirm=confirm_cross_user_owner)
+            if not res.allowed:
+                return res.message, None
+            if res.decision == _ao.EditDecision.CROSS_USER and res.record and ident:
+                return None, (key, ident, res.record)
+            return None, None
+        except Exception:
+            return None, None
 
     try:
         normalized = (action or "").strip().lower()
@@ -545,6 +567,12 @@ def cronjob(
                 profile=_normalize_optional_job_value(profile),
                 no_agent=_no_agent,
             )
+            try:
+                from agent import automation_ownership as _ao
+                _ao.register_creator(_ao.artifact_key("cron", job["id"]), "cron",
+                                     _ao.current_identity())
+            except Exception:
+                pass
             return json.dumps(
                 {
                     "success": True,
@@ -597,9 +625,15 @@ def cronjob(
         job_id = job["id"]
 
         if normalized == "remove":
+            _err, _pending = _gate(job_id)
+            if _err:
+                return json.dumps({"error": _err})
             removed = remove_job(job_id)
             if not removed:
                 return tool_error(f"Failed to remove job '{job_id}'", success=False)
+            if _pending:
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_pending)
             return json.dumps(
                 {
                     "success": True,
@@ -614,7 +648,13 @@ def cronjob(
             )
 
         if normalized == "pause":
+            _err, _pending = _gate(job_id)
+            if _err:
+                return json.dumps({"error": _err})
             updated = pause_job(job_id, reason=reason)
+            if _pending:
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_pending)
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         if normalized == "resume":
@@ -626,6 +666,9 @@ def cronjob(
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         if normalized == "update":
+            _err, _pending = _gate(job_id)
+            if _err:
+                return json.dumps({"error": _err})
             updates: Dict[str, Any] = {}
             if prompt is not None:
                 scan_error = _scan_cron_prompt(prompt)
@@ -711,6 +754,9 @@ def cronjob(
             if not updates:
                 return tool_error("No updates provided.", success=False)
             updated = update_job(job_id, updates)
+            if _pending:
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_pending)
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         return tool_error(f"Unknown cron action '{action}'", success=False)
@@ -838,6 +884,14 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
                 "type": "string",
                 "description": "Optional Hermes profile name to run the job under. When set, the scheduler resolves that profile, applies a context-local Hermes home override, loads that profile's config/.env for the run, and bridges HERMES_HOME into subprocesses. Any temporary process-environment changes from profile .env loading are restored after the job exits. Use 'default' for the root Hermes profile. Named profiles must already exist. When unset (default), preserves the scheduler's existing profile. On update, pass an empty string to clear. Jobs with profile run sequentially (not parallel) to keep profile-scoped runtime state isolated."
             },
+            "confirm_cross_user_owner": {
+                "type": "string",
+                "description": (
+                    "Acknowledge editing/removing a cron job owned by another user. "
+                    "Pass the owner's name (or id) exactly as shown in the ownership "
+                    "warning, and ONLY after the user explicitly confirms. Omit otherwise."
+                ),
+            },
         },
         "required": ["action"]
     }
@@ -895,6 +949,7 @@ registry.register(
         profile=args.get("profile"),
         no_agent=args.get("no_agent"),
         task_id=kw.get("task_id"),
+        confirm_cross_user_owner=args.get("confirm_cross_user_owner"),
     ))(),
     check_fn=check_cronjob_requirements,
     emoji="⏰",
