@@ -43,6 +43,17 @@ from agent.prompt_builder import (
 )
 from agent.runtime_cwd import resolve_context_cwd
 
+AUTOMATION_OWNERSHIP_GUIDANCE = (
+    "AUTOMATION OWNERSHIP: Skills, cron jobs, scripts, and automation bundles may "
+    "be owned by a specific teammate. The tools enforce this — when a tool reports "
+    "an automation is owned by someone else, relay the warning and get the user's "
+    "explicit confirmation, then re-invoke with confirm_cross_user_owner set to the "
+    "owner's name. Never confirm on the user's behalf. When a tool reports an "
+    "automation is unowned, offer to claim it (`hermes own claim <key>`). Owners and "
+    "collaborators edit freely. Build new multi-part automations under "
+    "automations/<name>/ via `hermes own init`."
+)
+
 
 def _ra():
     """Lazy reference to the ``run_agent`` module.
@@ -131,6 +142,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(KANBAN_GUIDANCE)
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
+
+    try:
+        from agent.automation_ownership import is_enabled as _ao_enabled
+        _editing_tools = {"skill_manage", "cronjob", "write_file", "patch"}
+        if _ao_enabled() and (_editing_tools & set(agent.valid_tool_names)):
+            stable_parts.append(AUTOMATION_OWNERSHIP_GUIDANCE)
+    except Exception:
+        pass
 
     # Steering only lands inside tool results, so it's only reachable when the
     # agent has tools. Static text → byte-stable prompt (no cache hit).
