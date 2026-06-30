@@ -6536,6 +6536,13 @@ def cmd_cron(args):
     cron_command(args)
 
 
+def cmd_own(args):
+    """Manage automation ownership and scaffold bundles."""
+    from hermes_cli.own import run_own
+
+    raise SystemExit(run_own(args.own_argv))
+
+
 def cmd_webhook(args):
     """Webhook subscription management."""
     from hermes_cli.webhook import webhook_command
@@ -12530,7 +12537,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
-        "model", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
+        "model", "own", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
         "prompt-size",
         "send", "sessions", "setup",
         "skills", "slack", "status", "tools", "uninstall", "update",
@@ -14848,6 +14855,18 @@ Examples:
     # =========================================================================
     from hermes_cli.users import register_users_subcommands
     register_users_subcommands(subparsers)
+
+    # =========================================================================
+    # own command — manage automation ownership; scaffold bundles
+    # =========================================================================
+    own_parser = subparsers.add_parser(
+        "own",
+        help="Manage automation ownership and scaffold bundles",
+        description="Claim, transfer, and inspect automation ownership; scaffold bundles.",
+        add_help=False,
+    )
+    own_parser.add_argument("own_argv", nargs=argparse.REMAINDER)
+    own_parser.set_defaults(func=cmd_own)
 
     # =========================================================================
     # computer-use command — manage Computer Use (cua-driver) on macOS
