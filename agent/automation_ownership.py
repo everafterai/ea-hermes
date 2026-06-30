@@ -365,3 +365,60 @@ def list_for_user(user_id: str) -> dict:
         elif any(c.get("user_id") == user_id for c in rec.get("collaborators", [])):
             collab.append(key)
     return {"owned": owned, "collaborator": collab}
+
+
+# --------------------------------------------------------------------------- #
+# Notification + audit
+# --------------------------------------------------------------------------- #
+def _send_dm(platform: str, user_id: str, message: str) -> bool:
+    """Best-effort DM to a platform user. Returns True on apparent success.
+
+    Reuses send_message_tool, which resolves a Slack U-id to a DM channel via
+    conversations.open. Isolated in its own function so tests can stub it.
+    """
+    try:
+        from tools.send_message_tool import send_message_tool
+
+        out = send_message_tool({
+            "action": "send",
+            "target": f"{platform}:{user_id}",
+            "message": message,
+        })
+        try:
+            return "error" not in json.loads(out)
+        except Exception:
+            return True
+    except Exception:
+        return False
+
+
+def record_and_notify(key: str, editor: Identity, record: dict) -> None:
+    """Audit a confirmed cross-user edit and DM the owner. Best-effort; never raises."""
+    try:
+        from agent.data_access_audit import record_access
+
+        record_access(
+            tool="automation_ownership",
+            action="automation_edit",
+            target=key,
+        )
+    except Exception:
+        pass
+
+    try:
+        if not notify_enabled():
+            return
+        owner = record.get("owner") or {}
+        platform = owner.get("platform") or editor.platform
+        owner_id = owner.get("user_id") or ""
+        if not owner_id:
+            return
+        editor_name = editor.display_name or editor.user_id
+        msg = (
+            f":warning: {editor_name} edited your automation `{key}`. "
+            "— via Hermes automation ownership"
+        )
+        _send_dm(platform, owner_id, msg)
+    except Exception:
+        # Notification is best-effort; never reverse or block the edit.
+        pass
