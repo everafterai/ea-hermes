@@ -29,6 +29,40 @@ from typing import FrozenSet, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def cron_owner_grant(job: dict) -> Optional[FrozenSet[str]]:
+    """Resolve the toolset grant of the job creator's current RBAC role.
+
+    Returns None ("no ceiling applies") when ownership is disabled, the job has
+    no owner record, RBAC is inactive for the owner's platform, or the owner is
+    roleless / has an undefined role. Returns the role's grant frozenset
+    otherwise (admin's grant contains "*"). Fail-open on any internal error.
+    """
+    try:
+        from agent import automation_ownership as ao
+
+        if not ao.is_enabled():
+            return None
+        job_id = job.get("id")
+        if not job_id:
+            return None
+        record = ao.get_record(ao.artifact_key("cron", str(job_id)))
+        owner = (record or {}).get("owner") or {}
+        user_id = owner.get("user_id")
+        platform = owner.get("platform")
+        if not user_id or not platform:
+            return None
+        from gateway.tool_access import policy_for_platform
+
+        policy = policy_for_platform(str(platform))
+        if policy is None or not policy.enabled:
+            return None
+        chat_id = (job.get("origin") or {}).get("chat_id")
+        return policy.grant_for(str(user_id), str(chat_id) if chat_id else None)
+    except Exception as err:  # pragma: no cover - defensive, fail-open
+        logger.debug("cron_owner_grant failed (fail-open): %s", err)
+        return None
+
+
 def apply_cron_toolset_ceiling(
     resolved: Optional[List[str]], grant: Optional[FrozenSet[str]]
 ) -> Optional[List[str]]:
