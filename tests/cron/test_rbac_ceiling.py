@@ -77,3 +77,25 @@ def test_owner_grant_resolves_role(monkeypatch):
         lambda name: _FakePolicy(frozenset({"web"})),
     )
     assert ceiling.cron_owner_grant({"id": "abc"}) == frozenset({"web"})
+
+
+def test_audit_ownerless_elevated_logs_when_elevated(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "agent.data_access_audit.record_access",
+        lambda **kw: calls.append(kw),
+    )
+    ceiling.audit_ownerless_elevated({"id": "abc"}, ["terminal", "todo"])
+    assert len(calls) == 1
+    assert calls[0]["tool"] == "cron"
+    assert "terminal" in calls[0]["target"]
+
+
+def test_audit_ownerless_elevated_silent_when_floor_only(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "agent.data_access_audit.record_access",
+        lambda **kw: calls.append(kw),
+    )
+    ceiling.audit_ownerless_elevated({"id": "abc"}, ["todo"])
+    assert calls == []

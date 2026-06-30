@@ -92,3 +92,28 @@ def apply_cron_toolset_ceiling(
     except Exception as err:  # pragma: no cover - defensive, fail-open
         logger.debug("apply_cron_toolset_ceiling failed (fail-open): %s", err)
         return resolved
+
+
+def audit_ownerless_elevated(job: dict, resolved: Optional[List[str]]) -> None:
+    """Append one data-access audit line when a job with no resolvable creator
+    role runs with toolsets beyond the floor. Visibility only; never raises,
+    never blocks."""
+    try:
+        from gateway.tool_access import FLOOR_TOOLSETS
+
+        if resolved is None:
+            elevated, shown = True, "ALL_DEFAULT"
+        else:
+            elevated = bool(set(resolved) - set(FLOOR_TOOLSETS))
+            shown = ",".join(resolved)
+        if not elevated:
+            return
+        from agent.data_access_audit import record_access
+
+        record_access(
+            tool="cron",
+            action="ownerless-elevated",
+            target=f"cron:{job.get('id', '?')} toolsets={shown}",
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass

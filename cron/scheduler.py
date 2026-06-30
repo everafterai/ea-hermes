@@ -112,6 +112,29 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
         )
         return None
 
+
+def _cron_enabled_toolsets_with_ceiling(job: dict, cfg: dict) -> list[str] | None:
+    """Resolve the cron job's enabled toolsets, then cap them to the creator's
+    current RBAC role (see cron/rbac_ceiling). Fail-open: any error returns the
+    uncapped resolution so a transient failure can't strip a legitimate job's
+    tools. Audits ownerless/roleless jobs that run elevated."""
+    resolved = _resolve_cron_enabled_toolsets(job, cfg)
+    try:
+        from cron.rbac_ceiling import (
+            apply_cron_toolset_ceiling,
+            audit_ownerless_elevated,
+            cron_owner_grant,
+        )
+
+        grant = cron_owner_grant(job)
+        if grant is None:
+            audit_ownerless_elevated(job, resolved)
+        return apply_cron_toolset_ceiling(resolved, grant)
+    except Exception as exc:  # pragma: no cover - defensive, fail-open
+        logger.debug("Job '%s': toolset ceiling skipped (%s)", job.get("id"), exc)
+        return resolved
+
+
 # Valid delivery platforms — used to validate user-supplied platform names
 # in cron delivery targets, preventing env var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
@@ -1840,7 +1863,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             providers_order=pr.get("order"),
             provider_sort=pr.get("sort"),
             openrouter_min_coding_score=(_cfg.get("openrouter") or {}).get("min_coding_score"),
-            enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
+            enabled_toolsets=_cron_enabled_toolsets_with_ceiling(job, _cfg),
             disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),
             quiet_mode=True,
             # Cron jobs should always inherit the user's SOUL.md identity from
