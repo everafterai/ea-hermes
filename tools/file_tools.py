@@ -1142,9 +1142,15 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             if stale_warning:
                 result_dict["_warning"] = stale_warning
             _update_read_timestamp(path, task_id)
-            if _own_pending and not result_dict.get("error"):
-                from agent.automation_ownership import record_and_notify
-                record_and_notify(*_own_pending)
+            if not result_dict.get("error"):
+                if _own_pending:
+                    from agent.automation_ownership import record_and_notify
+                    record_and_notify(*_own_pending)
+                if _own_nudge:
+                    try:
+                        result_dict["ownership_notice"] = _own_nudge
+                    except Exception:
+                        pass
             return json.dumps(result_dict, ensure_ascii=False)
 
         # Serialize the read→modify→write region per-path so concurrent
@@ -1175,9 +1181,15 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             _update_read_timestamp(path, task_id)
             if not result_dict.get("error"):
                 file_state.note_write(task_id, _resolved)
-        if _own_pending and not result_dict.get("error"):
-            from agent.automation_ownership import record_and_notify
-            record_and_notify(*_own_pending)
+        if not result_dict.get("error"):
+            if _own_pending:
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_own_pending)
+            if _own_nudge:
+                try:
+                    result_dict["ownership_notice"] = _own_nudge
+                except Exception:
+                    pass
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         if _is_expected_write_exception(e):
@@ -1222,6 +1234,7 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                 )
             _paths_to_check.append(v4a_path)
     _own_pending = None
+    _own_nudge = None
     for _p in _paths_to_check:
         _prot = is_protected_data_path(_p)
         if _prot:
@@ -1234,6 +1247,8 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
             return tool_error(_p_own_err)
         if _p_own_pending and _own_pending is None:
             _own_pending = _p_own_pending
+        if _p_own_nudge and _own_nudge is None:
+            _own_nudge = _p_own_nudge
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
@@ -1366,9 +1381,15 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     "old_string not found. Use read_file to verify the current "
                     "content, or search_files to locate the text."
                 )
-        if _own_pending and not result_dict.get("error"):
-            from agent.automation_ownership import record_and_notify
-            record_and_notify(*_own_pending)
+        if not result_dict.get("error"):
+            if _own_pending:
+                from agent.automation_ownership import record_and_notify
+                record_and_notify(*_own_pending)
+            if _own_nudge:
+                try:
+                    result_dict["ownership_notice"] = _own_nudge
+                except Exception:
+                    pass
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))

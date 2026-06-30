@@ -314,11 +314,16 @@ def register_creator(key: str, kind: str, identity: Optional[Identity]) -> None:
 
 
 def claim(key: str, kind: str, identity: Identity) -> dict:
-    rec = get_record(key) or {"kind": kind, "collaborators": []}
-    rec["kind"] = rec.get("kind", kind)
-    rec["owner"] = _ident_dict(identity)
-    rec.setdefault("collaborators", [])
-    rec["source"] = "claim"
+    if get_record(key) is not None:
+        raise PermissionError(
+            f"{key} is already owned; use `hermes own transfer {key} --to <id>` to reassign."
+        )
+    rec = {
+        "kind": kind,
+        "owner": _ident_dict(identity),
+        "collaborators": [],
+        "source": "claim",
+    }
     _put_record(key, rec)
     return rec
 

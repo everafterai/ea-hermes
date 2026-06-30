@@ -484,25 +484,26 @@ def cronjob(
     del task_id  # unused but kept for handler signature compatibility
 
     def _gate(job_id_or_ref):
-        """(error, pending_notify) for editing an existing job. Fails open."""
+        """(error, pending_notify, notice) for editing an existing job. Fails open."""
         try:
             from agent import automation_ownership as _ao
             from cron.jobs import resolve_job_ref
             if not _ao.is_enabled():
-                return None, None
+                return None, None, None
             job = resolve_job_ref(job_id_or_ref)
             if not job:
-                return None, None
+                return None, None, None
             key = _ao.artifact_key("cron", job["id"])
             ident = _ao.current_identity()
             res = _ao.check_edit(key, ident, confirm=confirm_cross_user_owner)
             if not res.allowed:
-                return res.message, None
+                return res.message, None, None
+            notice = res.message if (res.allowed and res.decision == _ao.EditDecision.UNOWNED and res.message) else None
             if res.decision == _ao.EditDecision.CROSS_USER and res.record and ident:
-                return None, (key, ident, res.record)
-            return None, None
+                return None, (key, ident, res.record), None
+            return None, None, notice
         except Exception:
-            return None, None
+            return None, None, None
 
     try:
         normalized = (action or "").strip().lower()
@@ -625,7 +626,7 @@ def cronjob(
         job_id = job["id"]
 
         if normalized == "remove":
-            _err, _pending = _gate(job_id)
+            _err, _pending, _notice = _gate(job_id)
             if _err:
                 return json.dumps({"error": _err})
             removed = remove_job(job_id)
@@ -634,21 +635,24 @@ def cronjob(
             if _pending:
                 from agent.automation_ownership import record_and_notify
                 record_and_notify(*_pending)
-            return json.dumps(
-                {
-                    "success": True,
-                    "message": f"Cron job '{job['name']}' removed.",
-                    "removed_job": {
-                        "id": job_id,
-                        "name": job["name"],
-                        "schedule": job.get("schedule_display"),
-                    },
+            resp = {
+                "success": True,
+                "message": f"Cron job '{job['name']}' removed.",
+                "removed_job": {
+                    "id": job_id,
+                    "name": job["name"],
+                    "schedule": job.get("schedule_display"),
                 },
-                indent=2,
-            )
+            }
+            if _notice:
+                try:
+                    resp["ownership_notice"] = _notice
+                except Exception:
+                    pass
+            return json.dumps(resp, indent=2)
 
         if normalized == "pause":
-            _err, _pending = _gate(job_id)
+            _err, _pending, _notice = _gate(job_id)
             if _err:
                 return json.dumps({"error": _err})
             updated = pause_job(job_id, reason=reason)
@@ -657,7 +661,13 @@ def cronjob(
             if _pending:
                 from agent.automation_ownership import record_and_notify
                 record_and_notify(*_pending)
-            return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
+            resp = {"success": True, "job": _format_job(updated)}
+            if _notice:
+                try:
+                    resp["ownership_notice"] = _notice
+                except Exception:
+                    pass
+            return json.dumps(resp, indent=2)
 
         if normalized == "resume":
             updated = resume_job(job_id)
@@ -668,7 +678,7 @@ def cronjob(
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         if normalized == "update":
-            _err, _pending = _gate(job_id)
+            _err, _pending, _notice = _gate(job_id)
             if _err:
                 return json.dumps({"error": _err})
             updates: Dict[str, Any] = {}
@@ -759,7 +769,13 @@ def cronjob(
             if _pending:
                 from agent.automation_ownership import record_and_notify
                 record_and_notify(*_pending)
-            return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
+            resp = {"success": True, "job": _format_job(updated)}
+            if _notice:
+                try:
+                    resp["ownership_notice"] = _notice
+                except Exception:
+                    pass
+            return json.dumps(resp, indent=2)
 
         return tool_error(f"Unknown cron action '{action}'", success=False)
 

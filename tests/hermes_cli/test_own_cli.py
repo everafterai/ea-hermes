@@ -32,3 +32,15 @@ def test_init_scaffolds_bundle_and_registers_owner():
     assert (base / "workflow.md").exists()
     assert (base / "scripts").is_dir() and (base / "assets").is_dir()
     assert ao.get_record("automation:weekly-report")["owner"]["user_id"] == "U_ALICE"
+
+
+def test_claim_already_owned_returns_1():
+    assert run_own(["claim", "cron:owned-key", "--user", "U_ALICE", "--name", "Alice"]) == 0
+    assert run_own(["claim", "cron:owned-key", "--user", "U_BOB", "--name", "Bob"]) == 1
+
+
+def test_claim_without_user_uses_current_identity(monkeypatch):
+    from agent.automation_ownership import Identity
+    monkeypatch.setattr(ao, "current_identity", lambda: Identity("cli", "U_CLI", "CLI User"))
+    assert run_own(["claim", "script:x.sh"]) == 0
+    assert ao.get_record("script:x.sh")["owner"]["user_id"] == "U_CLI"

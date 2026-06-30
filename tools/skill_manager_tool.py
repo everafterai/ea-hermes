@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 # Carries the confirm_cross_user_owner token for the duration of a skill_manage call.
 _CONFIRM_OWNER: ContextVar = ContextVar("_skill_confirm_owner", default=None)
+# Carries the UNOWNED claim-nudge message to be surfaced on success.
+_OWNERSHIP_NOTICE: ContextVar = ContextVar("_skill_ownership_notice", default=None)
 
 # Import security scanner — external hub installs always get scanned;
 # agent-created skills only get scanned when skills.guard_agent_created is on.
@@ -492,6 +494,7 @@ def _ownership_gate(key: str):
     error_str is non-None when the edit must be refused. pending_notify is a
     (key, editor, record) tuple to fire after a successful confirmed cross-user
     edit, else None. Fails open: any internal error -> allow.
+    Sets _OWNERSHIP_NOTICE when the item is unowned (claim nudge).
     """
     try:
         from agent import automation_ownership as _ao
@@ -501,6 +504,8 @@ def _ownership_gate(key: str):
         res = _ao.check_edit(key, ident, confirm=_CONFIRM_OWNER.get())
         if not res.allowed:
             return res.message, None
+        if res.decision == _ao.EditDecision.UNOWNED and res.message:
+            _OWNERSHIP_NOTICE.set(res.message)
         if res.decision == _ao.EditDecision.CROSS_USER and res.record is not None and ident is not None:
             return None, (key, ident, res.record)
         return None, None
@@ -996,6 +1001,7 @@ def skill_manage(
     to ``_skill_manage_inner``, and registers the creator on successful create.
     """
     _tok = _CONFIRM_OWNER.set(confirm_cross_user_owner)
+    _notice_tok = _OWNERSHIP_NOTICE.set(None)
     try:
         result = _skill_manage_inner(
             action=action, name=name, content=content, category=category,
@@ -1010,9 +1016,20 @@ def skill_manage(
                                      _ao.current_identity())
         except Exception:
             pass
+        try:
+            notice = _OWNERSHIP_NOTICE.get()
+            if notice:
+                import json as _json2
+                parsed = _json2.loads(result)
+                if not parsed.get("error"):
+                    parsed["ownership_notice"] = notice
+                    result = _json2.dumps(parsed, ensure_ascii=False)
+        except Exception:
+            pass
         return result
     finally:
         _CONFIRM_OWNER.reset(_tok)
+        _OWNERSHIP_NOTICE.reset(_notice_tok)
 
 
 # =============================================================================

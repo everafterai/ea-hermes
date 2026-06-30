@@ -43,7 +43,7 @@ def run_own(argv: List[str]) -> int:
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("key")
-    p_claim.add_argument("--user", required=True)
+    p_claim.add_argument("--user", default=None)
     p_claim.add_argument("--name", default=None)
 
     p_tr = sub.add_parser("transfer")
@@ -62,7 +62,7 @@ def run_own(argv: List[str]) -> int:
 
     p_init = sub.add_parser("init")
     p_init.add_argument("name")
-    p_init.add_argument("--user", required=True)
+    p_init.add_argument("--user", default=None)
     p_init.add_argument("--name", dest="display", default=None)
 
     args = parser.parse_args(argv)
@@ -76,7 +76,19 @@ def run_own(argv: List[str]) -> int:
         return 0
 
     if args.cmd == "claim":
-        rec = claim(args.key, args.key.split(":", 1)[0], _ident(args.user, args.name))
+        if args.user:
+            ident = _ident(args.user, args.name)
+        else:
+            import agent.automation_ownership as _ao_mod
+            ident = _ao_mod.current_identity()
+            if ident is None:
+                print("could not determine your identity; pass --user <id>")
+                return 1
+        try:
+            rec = claim(args.key, args.key.split(":", 1)[0], ident)
+        except PermissionError as e:
+            print(f"Error: {e}")
+            return 1
         print(f"Claimed {args.key} for {rec['owner']['display_name']}")
         return 0
 
@@ -108,7 +120,14 @@ def run_own(argv: List[str]) -> int:
         base = get_hermes_home() / "automations" / args.name
         (base / "scripts").mkdir(parents=True, exist_ok=True)
         (base / "assets").mkdir(parents=True, exist_ok=True)
-        owner = _ident(args.user, args.display)
+        if args.user:
+            owner = _ident(args.user, args.display)
+        else:
+            import agent.automation_ownership as _ao_mod
+            owner = _ao_mod.current_identity()
+            if owner is None:
+                print("could not determine your identity; pass --user <id>")
+                return 1
         (base / "automation.yaml").write_text(
             _BUNDLE_MANIFEST.format(name=args.name, owner=owner.display_name), encoding="utf-8")
         (base / "workflow.md").write_text(

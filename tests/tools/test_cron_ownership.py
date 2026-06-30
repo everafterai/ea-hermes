@@ -60,3 +60,15 @@ def test_list_is_ungated(monkeypatch):
     _as(BOB, monkeypatch)
     res = json.loads(cjt.cronjob(action="list"))
     assert "error" not in res
+
+
+def test_unowned_job_update_surfaces_notice(monkeypatch):
+    """Legacy unowned job: Bob's update succeeds and includes an ownership_notice."""
+    out = _create_as_alice(monkeypatch)
+    job_id = out.get("job_id") or (out["job"]["job_id"] if "job" in out else None)
+    ao._delete_record(f"cron:{job_id}")
+    _as(BOB, monkeypatch)
+    res = json.loads(cjt.cronjob(action="update", job_id=job_id, prompt="updated prompt"))
+    assert "error" not in res
+    assert "ownership_notice" in res
+    assert "claim" in res["ownership_notice"].lower()

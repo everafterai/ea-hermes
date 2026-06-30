@@ -51,3 +51,18 @@ def test_unrelated_file_is_untouched(monkeypatch):
     p = get_hermes_home() / "workspace" / "notes.txt"
     out = json.loads(ft.write_file_tool(str(p), "hello\n"))
     assert "error" not in out  # not a managed automation path -> no gate
+
+
+def test_unowned_script_patch_surfaces_notice(monkeypatch):
+    """Script on disk with no ownership record: patch succeeds with ownership_notice."""
+    p = get_hermes_home() / "scripts" / "foo.sh"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("echo hi\n", encoding="utf-8")
+    # No ownership record registered (written directly, not via tool).
+    assert ao.get_record("script:foo.sh") is None
+    _as(BOB, monkeypatch)
+    out = json.loads(ft.patch_tool(mode="replace", path=str(p),
+                                   old_string="echo hi", new_string="echo bye"))
+    assert "error" not in out
+    assert "ownership_notice" in out
+    assert "claim" in out["ownership_notice"].lower()

@@ -89,6 +89,15 @@ def test_claim_assigns_owner():
     assert rec["owner"]["user_id"] == "U_BOB" and rec["source"] == "claim"
 
 
+def test_claim_raises_if_already_owned():
+    _own(key="cron:claimed-j1", owner=ALICE)
+    try:
+        ao.claim("cron:claimed-j1", "cron", BOB)
+        assert False, "expected PermissionError"
+    except PermissionError as e:
+        assert "already owned" in str(e)
+
+
 def test_transfer_by_owner():
     k = _own()
     rec = ao.transfer(k, BOB, by=ALICE)

@@ -72,3 +72,17 @@ def test_owner_edits_freely(tmp_path, monkeypatch):
         smt.skill_manage(action="create", name="weekly-report", content=_SKILL)
         out = json.loads(smt.skill_manage(action="edit", name="weekly-report", content=_SKILL_V2))
     assert "error" not in out
+
+
+def test_unowned_skill_edit_surfaces_notice(tmp_path, monkeypatch):
+    """Legacy unowned skill: Bob's edit succeeds and includes an ownership_notice."""
+    with _skill_dir(tmp_path):
+        _as(ALICE, monkeypatch)
+        smt.skill_manage(action="create", name="weekly-report", content=_SKILL)
+        # Simulate a legacy skill with no ownership record.
+        ao._delete_record("skill:weekly-report")
+        _as(BOB, monkeypatch)
+        out = json.loads(smt.skill_manage(action="edit", name="weekly-report", content=_SKILL_V2))
+    assert "error" not in out
+    assert "ownership_notice" in out
+    assert "claim" in out["ownership_notice"].lower()
