@@ -403,6 +403,27 @@ def policy_for_platform(platform_name: str) -> Optional[ToolAccessPolicy]:
     return _policy_for_current_platform(platform_name)
 
 
+def rbac_active_anywhere() -> bool:
+    """True if RBAC is active for at least one configured platform.
+
+    Used to suppress cron ownerless-elevated audit noise on installs that never
+    opted into RBAC: when no platform sets ``user_roles``, the cron toolset
+    ceiling is inert and behavior must be byte-for-byte unchanged (no new audit
+    writes). Cached via ``_load_config_cached`` (config-mtime memoized).
+    """
+    config = _load_config_cached()
+    if config is None:
+        return False
+    platforms = getattr(config, "platforms", {}) or {}
+    for pconfig in platforms.values():
+        try:
+            if policy_from_extra(_platform_extra(pconfig)).enabled:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def denial_for_current_tool(tool_name: str) -> Optional[str]:
     """Return a denial message if the current user may not use ``tool_name``,
     else None. Fail-open on any internal error (RBAC is a backstop; the
@@ -466,6 +487,7 @@ __all__ = [
     "policy_from_extra",
     "policy_for_source",
     "policy_for_platform",
+    "rbac_active_anywhere",
     "denial_for_current_tool",
     "filter_enabled_toolsets",
 ]

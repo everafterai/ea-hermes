@@ -369,3 +369,35 @@ def test_policy_for_platform_delegates(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(ta, "_policy_for_current_platform", lambda name: sentinel)
     assert ta.policy_for_platform("slack") is sentinel
+
+
+def test_rbac_active_anywhere_true_when_a_platform_has_user_roles(monkeypatch):
+    import gateway.tool_access as ta
+
+    class _P:
+        extra = {"user_roles": {"U1": "admin"}}
+
+    class _Cfg:
+        platforms = {"slack": _P()}
+
+    monkeypatch.setattr(ta, "_load_config_cached", lambda: _Cfg())
+    assert ta.rbac_active_anywhere() is True
+
+
+def test_rbac_active_anywhere_false_when_no_user_roles(monkeypatch):
+    import gateway.tool_access as ta
+
+    class _P:
+        extra = {}
+
+    class _Cfg:
+        platforms = {"slack": _P()}
+
+    monkeypatch.setattr(ta, "_load_config_cached", lambda: _Cfg())
+    assert ta.rbac_active_anywhere() is False
+
+
+def test_rbac_active_anywhere_false_when_no_config(monkeypatch):
+    import gateway.tool_access as ta
+    monkeypatch.setattr(ta, "_load_config_cached", lambda: None)
+    assert ta.rbac_active_anywhere() is False

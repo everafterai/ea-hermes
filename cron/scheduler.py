@@ -125,9 +125,10 @@ def _cron_enabled_toolsets_with_ceiling(job: dict, cfg: dict) -> list[str] | Non
             audit_ownerless_elevated,
             cron_owner_grant,
         )
+        from gateway.tool_access import rbac_active_anywhere
 
         grant = cron_owner_grant(job)
-        if grant is None:
+        if grant is None and rbac_active_anywhere():
             audit_ownerless_elevated(job, resolved)
         return apply_cron_toolset_ceiling(resolved, grant)
     except Exception as exc:  # pragma: no cover - defensive, fail-open
