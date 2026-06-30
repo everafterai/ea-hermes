@@ -211,3 +211,157 @@ def path_to_artifact_key(path) -> Optional[Tuple[str, str]]:
         pass
 
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Decision logic
+# --------------------------------------------------------------------------- #
+class EditDecision(Enum):
+    OWNER = "owner"
+    COLLABORATOR = "collaborator"
+    UNOWNED = "unowned"
+    CROSS_USER = "cross_user"
+    NO_IDENTITY = "no_identity"
+
+
+@dataclass
+class EditResult:
+    decision: EditDecision
+    allowed: bool
+    message: str = ""
+    record: Optional[dict] = None
+
+
+def _ident_dict(ident: Identity) -> dict:
+    return {"platform": ident.platform, "user_id": ident.user_id, "display_name": ident.display_name}
+
+
+def _ack_matches(record: dict, confirm: str) -> bool:
+    owner = record.get("owner") or {}
+    c = (confirm or "").strip().lower()
+    if not c:
+        return False
+    return c == (owner.get("user_id") or "").lower() or c == (owner.get("display_name") or "").lower()
+
+
+def _cross_user_message(record: dict) -> str:
+    owner = record.get("owner") or {}
+    who = owner.get("display_name") or owner.get("user_id") or "another user"
+    return (
+        f"This automation is owned by {who}. You are not an owner or collaborator. "
+        f"Confirm with the user first, then re-invoke the SAME call with "
+        f'confirm_cross_user_owner="{who}" to proceed (the owner will be notified). '
+        "Do not confirm on the user's behalf. (Ownership is an awareness layer, "
+        "not a hard permission — but cross-user edits are gated and logged.)"
+    )
+
+
+def _claim_nudge(key: str) -> str:
+    return (
+        f"This automation ({key}) has no recorded owner. If it's yours, offer to "
+        f'claim it: `hermes own claim {key}`. Proceeding with the edit.'
+    )
+
+
+def check_edit(key: str, identity: Optional[Identity], *, confirm: Optional[str] = None) -> "EditResult":
+    """Decide whether *identity* may edit the automation at *key*. Pure; no I/O side effects."""
+    try:
+        record = get_record(key)
+    except Exception:
+        record = None
+
+    if record is None:
+        if identity is None:
+            return EditResult(EditDecision.UNOWNED, True, "", None)
+        return EditResult(EditDecision.UNOWNED, True, _claim_nudge(key), None)
+
+    if identity is None:
+        return EditResult(
+            EditDecision.NO_IDENTITY, False,
+            f"Refusing autonomous edit of an owned automation ({key}); no acting user "
+            "identity to confirm the change. Run this interactively to proceed.",
+            record,
+        )
+
+    owner = record.get("owner") or {}
+    if identity.user_id and identity.user_id == owner.get("user_id"):
+        return EditResult(EditDecision.OWNER, True, "", record)
+    if any(identity.user_id == (c or {}).get("user_id") for c in record.get("collaborators", [])):
+        return EditResult(EditDecision.COLLABORATOR, True, "", record)
+
+    if confirm and _ack_matches(record, confirm):
+        return EditResult(EditDecision.CROSS_USER, True, "", record)
+    return EditResult(EditDecision.CROSS_USER, False, _cross_user_message(record), record)
+
+
+# --------------------------------------------------------------------------- #
+# Mutations
+# --------------------------------------------------------------------------- #
+def register_creator(key: str, kind: str, identity: Optional[Identity]) -> None:
+    """Record *identity* as owner of a freshly created automation. No-op if the
+    automation already has a record, or there is no acting identity."""
+    try:
+        if identity is None or get_record(key) is not None:
+            return
+        _put_record(key, {
+            "kind": kind,
+            "owner": _ident_dict(identity),
+            "collaborators": [],
+            "source": "creator",
+        })
+    except Exception:
+        pass
+
+
+def claim(key: str, kind: str, identity: Identity) -> dict:
+    rec = get_record(key) or {"kind": kind, "collaborators": []}
+    rec["kind"] = rec.get("kind", kind)
+    rec["owner"] = _ident_dict(identity)
+    rec.setdefault("collaborators", [])
+    rec["source"] = "claim"
+    _put_record(key, rec)
+    return rec
+
+
+def transfer(key: str, new_owner: Identity, *, by: Identity, by_is_admin: bool = False) -> dict:
+    rec = get_record(key)
+    if rec is None:
+        raise KeyError(f"No ownership record for {key}")
+    owner = rec.get("owner") or {}
+    if not by_is_admin and by.user_id != owner.get("user_id"):
+        raise PermissionError("Only the current owner or an admin may transfer ownership.")
+    rec["owner"] = _ident_dict(new_owner)
+    rec["source"] = "transfer"
+    _put_record(key, rec)
+    return rec
+
+
+def add_collaborator(key: str, ident: Identity) -> dict:
+    rec = get_record(key)
+    if rec is None:
+        raise KeyError(f"No ownership record for {key}")
+    rec.setdefault("collaborators", [])
+    if not any(c.get("user_id") == ident.user_id for c in rec["collaborators"]):
+        rec["collaborators"].append(_ident_dict(ident))
+        _put_record(key, rec)
+    return rec
+
+
+def remove_collaborator(key: str, user_id: str) -> dict:
+    rec = get_record(key)
+    if rec is None:
+        raise KeyError(f"No ownership record for {key}")
+    rec["collaborators"] = [c for c in rec.get("collaborators", []) if c.get("user_id") != user_id]
+    _put_record(key, rec)
+    return rec
+
+
+def list_for_user(user_id: str) -> dict:
+    owned: List[str] = []
+    collab: List[str] = []
+    for key, rec in _load_registry()["automations"].items():
+        if (rec.get("owner") or {}).get("user_id") == user_id:
+            owned.append(key)
+        elif any(c.get("user_id") == user_id for c in rec.get("collaborators", [])):
+            collab.append(key)
+    return {"owned": owned, "collaborator": collab}
