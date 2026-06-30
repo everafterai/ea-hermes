@@ -456,6 +456,60 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _rbac_creation_error(
+    *, enabled_toolsets, has_script: bool, is_no_agent: bool
+) -> Optional[str]:
+    """Return an error string if the acting user's RBAC role may not create a
+    cron job with these capabilities, else None.
+
+    Enforced only when a human identity is present (CLI / local / autonomous
+    jobs are trusted) and RBAC is active for that platform. Mirrors the runtime
+    toolset ceiling so an over-privileged request fails fast instead of being
+    silently stripped, and is the ONLY enforcement for the script gate (a
+    no_agent job never builds an agent to cap). Fail-open on any error — the
+    runtime ceiling remains the hard control.
+    """
+    try:
+        from agent.automation_ownership import current_identity
+
+        identity = current_identity()
+        if identity is None:
+            return None  # CLI / local / autonomous — trusted
+        from gateway import tool_access
+
+        policy = tool_access.policy_for_platform(identity.platform)
+        if policy is None or not policy.enabled:
+            return None
+        from gateway.session_context import get_session_env
+
+        user_id = identity.user_id
+        chat_id = get_session_env("HERMES_SESSION_CHAT_ID") or None
+
+        if enabled_toolsets:
+            allowed = policy.allowed_toolsets(user_id, frozenset(enabled_toolsets), chat_id)
+            denied = sorted(set(enabled_toolsets) - set(allowed))
+            if denied:
+                return (
+                    "Your role does not permit granting these toolset(s) to a "
+                    f"cron job: {', '.join(denied)}. Ask an admin to adjust your "
+                    "role if you need them."
+                )
+
+        if is_no_agent or has_script:
+            if not (
+                policy.can_use_tool(user_id, "terminal", chat_id)
+                or policy.can_use_tool(user_id, "code_execution", chat_id)
+            ):
+                return (
+                    "Creating a script or no_agent cron job requires a role that "
+                    "grants 'terminal' or 'code_execution' (running a script is "
+                    "shell-equivalent). Ask an admin if you need this."
+                )
+        return None
+    except Exception:
+        return None  # fail-open — runtime ceiling remains the hard control
+
+
 def cronjob(
     action: str,
     job_id: Optional[str] = None,
@@ -549,6 +603,14 @@ def cronjob(
                             "Use cronjob(action='list') to see available jobs.",
                             success=False,
                         )
+
+            _rbac_err = _rbac_creation_error(
+                enabled_toolsets=enabled_toolsets,
+                has_script=bool(script),
+                is_no_agent=bool(no_agent),
+            )
+            if _rbac_err:
+                return tool_error(_rbac_err, success=False)
 
             job = create_job(
                 prompt=prompt or "",
@@ -765,6 +827,20 @@ def cronjob(
                     updates["enabled"] = True
             if not updates:
                 return tool_error("No updates provided.", success=False)
+            _eff_toolsets = (
+                updates["enabled_toolsets"]
+                if "enabled_toolsets" in updates
+                else job.get("enabled_toolsets")
+            )
+            _eff_script = updates["script"] if "script" in updates else job.get("script")
+            _eff_no_agent = updates["no_agent"] if "no_agent" in updates else job.get("no_agent")
+            _rbac_err = _rbac_creation_error(
+                enabled_toolsets=_eff_toolsets,
+                has_script=bool(_eff_script),
+                is_no_agent=bool(_eff_no_agent),
+            )
+            if _rbac_err:
+                return tool_error(_rbac_err, success=False)
             updated = update_job(job_id, updates)
             if _pending:
                 from agent.automation_ownership import record_and_notify
