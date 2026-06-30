@@ -345,3 +345,27 @@ class TestChannelRolesConfigBridge:
         assert config.platforms[Platform.SLACK].extra["channel_roles"] == {
             "C03B4BC9D2P": "operator"
         }
+
+
+def test_grant_for_returns_none_for_roleless():
+    policy = policy_from_extra({"user_roles": {"U1": "readonly"}})
+    assert policy.grant_for("U_UNKNOWN") is None
+
+
+def test_grant_for_returns_role_grant():
+    policy = policy_from_extra({"user_roles": {"U1": "readonly"}})
+    grant = policy.grant_for("U1")
+    assert grant is not None
+    assert "web" in grant and "terminal" not in grant
+
+
+def test_grant_for_chat_only_is_empty_not_none():
+    policy = policy_from_extra({"user_roles": {"U1": "chat_only"}})
+    assert policy.grant_for("U1") == frozenset()
+
+
+def test_policy_for_platform_delegates(monkeypatch):
+    import gateway.tool_access as ta
+    sentinel = object()
+    monkeypatch.setattr(ta, "_policy_for_current_platform", lambda name: sentinel)
+    assert ta.policy_for_platform("slack") is sentinel

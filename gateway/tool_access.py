@@ -219,6 +219,18 @@ class ToolAccessPolicy:
             return grants[0]
         return frozenset().union(*grants)
 
+    def grant_for(
+        self, user_id: Optional[str], chat_id: Optional[str] = None
+    ) -> Optional[FrozenSet[str]]:
+        """Public accessor for the user's effective toolset grant.
+
+        Returns None when the user resolves to no role (roleless / undefined
+        role) — distinct from a defined role that grants nothing (e.g.
+        ``chat_only`` returns an empty frozenset). Used by the cron toolset
+        ceiling to decide whether a cap applies at all.
+        """
+        return self._effective_grant(user_id, chat_id)
+
     def is_authorized(
         self, user_id: Optional[str], chat_id: Optional[str] = None
     ) -> bool:
@@ -381,6 +393,16 @@ def _policy_for_current_platform(platform_name: str) -> Optional[ToolAccessPolic
     return policy_from_extra(_platform_extra(platforms.get(platform)))
 
 
+def policy_for_platform(platform_name: str) -> Optional[ToolAccessPolicy]:
+    """Resolve the RBAC policy for a named platform from the cached gateway
+    config. Returns None when config is unavailable or the platform is invalid.
+
+    Public wrapper over the dispatch backstop's resolver, for callers (e.g. the
+    cron toolset ceiling) that resolve a policy outside a live inbound request.
+    """
+    return _policy_for_current_platform(platform_name)
+
+
 def denial_for_current_tool(tool_name: str) -> Optional[str]:
     """Return a denial message if the current user may not use ``tool_name``,
     else None. Fail-open on any internal error (RBAC is a backstop; the
@@ -443,6 +465,7 @@ __all__ = [
     "ToolAccessPolicy",
     "policy_from_extra",
     "policy_for_source",
+    "policy_for_platform",
     "denial_for_current_tool",
     "filter_enabled_toolsets",
 ]
