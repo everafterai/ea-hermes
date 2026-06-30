@@ -113,6 +113,33 @@ Two controls (design:
   bypasses it; the audit catches accidental/operator access and makes casual
   admin access visible. The log is local and same-uid-writable.
 
+### Automation ownership — [agent/automation_ownership.py](agent/automation_ownership.py)
+
+Records who owns each user-built automation (skill, cron, script, automation
+bundle) so a teammate editing another's work hits a code-enforced confirmation
+gate, the owner is DM'd on a confirmed edit, and unowned legacy items prompt a
+claim (design:
+[docs/superpowers/specs/2026-06-30-automation-ownership-design.md](docs/superpowers/specs/2026-06-30-automation-ownership-design.md)).
+
+- **Registry (canonical):** `${HERMES_HOME}/ownership/registry.json`, keyed
+  `skill:<name>` / `cron:<job_id>` / `script:<relpath>` / `automation:<bundle>`,
+  each `{owner, collaborators, source}`. Atomic writes, profile-aware.
+- **Gate (soft, code-enforced):** the `skill_manage`, `cronjob`, and
+  `write_file`/`patch` tools call `check_edit` before mutating. A non-owner edit
+  is refused until re-invoked with `confirm_cross_user_owner="<owner>"`; **admins
+  are not exempt**; autonomous (no-identity) edits of owned items are refused.
+  Creating an automation registers the creator as owner. `record_and_notify`
+  DMs the owner (via `send_message`) and logs an `automation_edit` event to the
+  `data_access_audit` trail. Config under the top-level `automation_ownership:`
+  block (`enabled`, default true; `notify_owner`; `registry_path`). **Not a
+  security boundary** — RBAC ([gateway/tool_access.py](gateway/tool_access.py))
+  remains the real boundary; this is awareness + collaboration.
+- **Always-on guidance:** `AUTOMATION_OWNERSHIP_GUIDANCE` is appended to the
+  cached `stable` system-prompt segment ([agent/system_prompt.py](agent/system_prompt.py))
+  when enabled + an editing tool is available — present every turn, no `SOUL.md` edit.
+- **CLI:** `hermes own list|claim|transfer|collab|init` ([hermes_cli/own.py](hermes_cli/own.py));
+  `init` scaffolds an optional `${HERMES_HOME}/automations/<name>/` bundle.
+
 ### Slack quiet channels + `slack_react`
 
 For low-noise "hidden assistant" channels. Config under the top-level `slack:`
