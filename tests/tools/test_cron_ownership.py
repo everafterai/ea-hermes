@@ -47,6 +47,14 @@ def test_cross_user_remove_allowed_with_confirm(monkeypatch):
     assert "error" not in res
 
 
+def test_cross_user_pause_blocked_without_confirm(monkeypatch):
+    out = _create_as_alice(monkeypatch)
+    job_id = out.get("job_id") or (out["job"]["job_id"] if "job" in out else None)
+    _as(BOB, monkeypatch)
+    res = json.loads(cjt.cronjob(action="pause", job_id=job_id))
+    assert "error" in res and "owned by Alice" in res["error"]
+
+
 def test_list_is_ungated(monkeypatch):
     _create_as_alice(monkeypatch)
     _as(BOB, monkeypatch)

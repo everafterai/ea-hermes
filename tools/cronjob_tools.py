@@ -652,6 +652,8 @@ def cronjob(
             if _err:
                 return json.dumps({"error": _err})
             updated = pause_job(job_id, reason=reason)
+            if not updated:
+                return tool_error(f"Failed to pause job '{job_id}'", success=False)
             if _pending:
                 from agent.automation_ownership import record_and_notify
                 record_and_notify(*_pending)
