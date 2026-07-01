@@ -71,15 +71,16 @@ Behavior:
 
 ## Application points
 
-Traced through the code, user-facing text reaches a platform via four distinct
+Traced through the code, user-facing text reaches a platform via five distinct
 boundaries. The helper is applied at each:
 
 | # | Spot | File | Covers |
 |---|------|------|--------|
 | 1 | `build_tool_preview` | [agent/display.py](../../../agent/display.py) | The tool-call preview line (e.g. `read_file <path>`) — CLI/TUI display and the source for gateway progress lines |
-| 2 | `_progress_text` | [gateway/run.py](../../../gateway/run.py) (~17899) | The Slack/etc. tool-progress bubble (previews **and** any inlined tool output), sent raw via `_send_progress_text` / `edit_message` — this path bypasses the sanitizers below, so it needs its own hook |
-| 3 | `_prepare_gateway_status_message` | [gateway/run.py](../../../gateway/run.py) (line 306) | Status / context-pressure messages — generalized from Telegram-only to collapse for **all** platforms |
-| 4 | `_sanitize_gateway_final_response` | [gateway/run.py](../../../gateway/run.py) (line 288, called at ~9896) | Final replies — generalized from Telegram-only to collapse for **all** platforms |
+| 2 | tool-progress **enqueue source** + `_progress_text` | [gateway/run.py](../../../gateway/run.py) | The Slack/etc. tool-progress bubble. The message is collapsed where it is put on the queue (verbose path + normal path before dedup), so **every** downstream render/send (the direct `"\n".join(progress_lines)` sends, the `content=msg` flood fallback, the dedup counter, and `_progress_text`) ships `~`. This closes **verbose mode**, whose raw `json.dumps(args)` is not pre-collapsed by spot 1. `_progress_text` keeps a collapse too as an idempotent backstop. |
+| 3 | `_prepare_gateway_status_message` | [gateway/run.py](../../../gateway/run.py) | Status / context-pressure messages — generalized from Telegram-only to collapse for **all** platforms |
+| 4 | `_sanitize_gateway_final_response` | [gateway/run.py](../../../gateway/run.py) | Final replies — generalized from Telegram-only to collapse for **all** platforms |
+| 5 | `_approval_notify_sync` (dangerous-command approval prompt) | [gateway/run.py](../../../gateway/run.py) | The approval prompt shown before a dangerous `terminal` command runs — the **display copy** of the command (both the interactive `send_exec_approval` button prompt and the plain-text `/approve` fallback). Collapsed at the single caller so it covers every adapter. The **real** command used for execution and `/approve session` pattern matching is untouched — matching is keyed by `session_key` + a server-side `pattern_key`, never the displayed string. |
 
 Spots 3 and 4 currently no-op for non-Telegram platforms (they return the text
 unchanged). We keep their Telegram-specific provider-error mapping exactly as-is
@@ -87,7 +88,7 @@ and only add the universal home-collapse so it runs for every platform.
 
 Spots 1 and 2 overlap on previews; because the helper is idempotent, the overlap
 is harmless. Each spot covers a surface the others do not (local CLI/TUI vs. the
-gateway progress bubble vs. status vs. final reply).
+gateway progress bubble vs. status vs. final reply vs. the approval prompt).
 
 ## Decisions
 
@@ -137,5 +138,17 @@ change:
 - **Reasoning prepend.** When `show_reasoning` is enabled (off by default), the
   reasoning block is prepended to the reply *after* line 9896, so a path inside
   reasoning text would bypass the collapse. Edge case; left as a follow-up.
+- **Final-reply fallback transcript persist.** `_sanitize_gateway_final_response`
+  reassigns `response` in place, and one rare fallback path (taken only when a
+  turn produced no distinguishable new messages) writes that collapsed
+  `response` to the JSONL transcript, which can re-enter model context on
+  JSONL-based resume. This is pre-existing behavior (Telegram's provider-error
+  remapping already flowed through the same fallback), doubly narrow, and benign
+  (`~` is model-interpretable; the simple fallback carries no tool-call args to
+  corrupt). Noted for honesty, not fixed.
+- **`.bak`-sibling over-collapse.** Because the right boundary treats `.` as a
+  non-username char, a sibling dir like `/home/<user>.bak/x` collapses to
+  `~.bak/x`. Display-only, extremely rare, and `[A-Za-z0-9_-]` is a defensible
+  username charset. Noted only.
 
 Neither gap affects the tool-call display the user reported, nor Slack.
