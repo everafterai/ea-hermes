@@ -10,6 +10,7 @@ the first 6 and last 4 characters for debuggability.
 import logging
 import os
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,54 @@ def _mask_token(token: str) -> str:
     if not token:
         return "***"
     return mask_secret(token, head=6, tail=4, floor=18)
+
+
+# ── OS home-dir collapse (display-only) ──────────────────────────────────
+# Memoized (home_str -> compiled regex | None) so the hot progress/preview
+# paths don't recompile. Keyed on the resolved home so a monkeypatched HOME
+# in tests, or a profile switch, picks up a fresh pattern.
+_HOME_COLLAPSE_CACHE: "dict[str, re.Pattern[str] | None]" = {}
+
+
+def _home_collapse_pattern(home: str) -> "re.Pattern[str] | None":
+    """Compiled regex matching the home prefix at a username boundary.
+
+    Returns None when *home* is unsafe to collapse (empty, ``/``, or shorter
+    than 4 chars) so we never rewrite unrelated paths.
+    """
+    if home not in _HOME_COLLAPSE_CACHE:
+        h = home.rstrip("/")
+        if not h or h == "/" or len(h) < 4:
+            _HOME_COLLAPSE_CACHE[home] = None
+        else:
+            # Collapse the prefix only when the next char is NOT a
+            # username-continuation char, so /home/bob2 (a different user
+            # sharing the prefix) is left untouched.
+            _HOME_COLLAPSE_CACHE[home] = re.compile(
+                re.escape(h) + r"(?![A-Za-z0-9_-])"
+            )
+    return _HOME_COLLAPSE_CACHE[home]
+
+
+def collapse_home_path(text: str) -> str:
+    """Replace the OS home-dir prefix with ``~`` in user-facing display text.
+
+    Display-only: hides the OS username (e.g. ``/home/shaidiamant/.hermes`` ->
+    ``~/.hermes``) from people the gateway serves. Never mutates paths passed
+    to tools, written to logs, or fed into model context. Idempotent.
+    """
+    if not text:
+        return text
+    if not isinstance(text, str):
+        text = str(text)
+    try:
+        home = str(Path.home())
+    except Exception:
+        return text
+    pattern = _home_collapse_pattern(home)
+    if pattern is None:
+        return text
+    return pattern.sub("~", text)
 
 
 def _redact_query_string(query: str) -> str:

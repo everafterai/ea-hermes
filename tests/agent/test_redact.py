@@ -482,3 +482,54 @@ class TestXaiToken:
     def test_prefix_visible_in_masked_output(self):
         result = redact_sensitive_text(self.KEY, force=True)
         assert result.startswith("xai-AB")
+
+
+class TestCollapseHomePath:
+    def test_collapses_hermes_home(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("/home/testuser/.hermes/config.yaml") == "~/.hermes/config.yaml"
+
+    def test_collapses_non_hermes_home_path(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("/home/testuser/repos/x") == "~/repos/x"
+
+    def test_collapses_bare_home_at_boundary(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("cwd is /home/testuser") == "cwd is ~"
+
+    def test_collapses_home_embedded_in_sentence(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path('saved to "/home/testuser/.hermes/x"') == 'saved to "~/.hermes/x"'
+
+    def test_different_user_sharing_prefix_untouched(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("/home/testuser2/x") == "/home/testuser2/x"
+        assert collapse_home_path("/home/testuserfoo") == "/home/testuserfoo"
+
+    def test_non_home_absolute_path_untouched(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("/opt/hermes/data") == "/opt/hermes/data"
+
+    def test_idempotent(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        once = collapse_home_path("/home/testuser/.hermes/x")
+        assert collapse_home_path(once) == once == "~/.hermes/x"
+
+    def test_root_home_guard_no_collapse(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("/etc/passwd") == "/etc/passwd"
+        assert collapse_home_path("/home/x") == "/home/x"
+
+    def test_empty_and_none_safe(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        assert collapse_home_path("") == ""
+        assert collapse_home_path(None) is None
