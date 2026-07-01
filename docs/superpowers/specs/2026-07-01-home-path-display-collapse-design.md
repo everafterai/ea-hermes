@@ -116,9 +116,26 @@ Via `scripts/run_tests.sh`, monkeypatching `HOME` for a deterministic home:
   while preserving Telegram provider-error behavior.
 - `_sanitize_gateway_final_response` collapses for a non-Telegram platform (slack).
 
-## Residual risk to verify during implementation
+## Verified residuals / known limitations
 
-Confirm that `_sanitize_gateway_final_response` (line ~9896) is the **sole**
-final-reply send path for Slack — i.e. no streaming or split-message path
-delivers final text while bypassing it. If another final-send path exists, hook
-the helper there too.
+Tracing the delivery paths confirmed the four spots above fully cover **Slack**
+(the target platform) and cover **tool-call previews on every platform** (the
+stated concern). Two narrow gaps remain, deliberately out of scope for this
+change:
+
+- **Streamed prose on streaming platforms (e.g. Telegram).** When per-platform
+  streaming is enabled, `GatewayStreamConsumer`
+  ([gateway/stream_consumer.py](../../../gateway/stream_consumer.py)) delivers
+  the model's prose incrementally *before* `_sanitize_gateway_final_response`
+  (line ~9896) runs, through ~6 buffered `adapter.send` sites with no single
+  chokepoint. So a **path mentioned in the model's prose** could leak there.
+  Slack does not stream (Bolt posts can't be edited like the CLI), so this does
+  not affect the target platform, and tool-call previews are unaffected (the
+  progress bubble is separate from streamed content). Covering it would mean
+  routing every consumer send through a shared text hook — a larger, riskier
+  change left as a follow-up.
+- **Reasoning prepend.** When `show_reasoning` is enabled (off by default), the
+  reasoning block is prepended to the reply *after* line 9896, so a path inside
+  reasoning text would bypass the collapse. Edge case; left as a follow-up.
+
+Neither gap affects the tool-call display the user reported, nor Slack.
