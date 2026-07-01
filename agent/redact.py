@@ -252,7 +252,7 @@ def _mask_token(token: str) -> str:
 # ── OS home-dir collapse (display-only) ──────────────────────────────────
 # Memoized (home_str -> compiled regex | None) so the hot progress/preview
 # paths don't recompile. Keyed on the resolved home so a monkeypatched HOME
-# in tests, or a profile switch, picks up a fresh pattern.
+# in tests picks up a fresh pattern.
 _HOME_COLLAPSE_CACHE: "dict[str, re.Pattern[str] | None]" = {}
 
 
@@ -271,7 +271,7 @@ def _home_collapse_pattern(home: str) -> "re.Pattern[str] | None":
             # username-continuation char, so /home/bob2 (a different user
             # sharing the prefix) is left untouched.
             _HOME_COLLAPSE_CACHE[home] = re.compile(
-                re.escape(h) + r"(?![A-Za-z0-9_-])"
+                r"(?<![A-Za-z0-9_-])" + re.escape(h) + r"(?![A-Za-z0-9_-])"
             )
     return _HOME_COLLAPSE_CACHE[home]
 

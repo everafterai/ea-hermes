@@ -516,6 +516,22 @@ class TestCollapseHomePath:
         from agent.redact import collapse_home_path
         assert collapse_home_path("/opt/hermes/data") == "/opt/hermes/data"
 
+    def test_nested_home_substring_untouched(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        from agent.redact import collapse_home_path
+        # A coincidental /home/testuser nested under another path (e.g. a
+        # backup mount) is NOT the user's home and must not be mangled.
+        assert (
+            collapse_home_path("/mnt/backup/home/testuser/data")
+            == "/mnt/backup/home/testuser/data"
+        )
+
+    def test_short_non_root_home_guarded(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/ab")
+        from agent.redact import collapse_home_path
+        # len("/ab") < 4 -> guarded -> returned unchanged.
+        assert collapse_home_path("/ab/x") == "/ab/x"
+
     def test_idempotent(self, monkeypatch):
         monkeypatch.setenv("HOME", "/home/testuser")
         from agent.redact import collapse_home_path
