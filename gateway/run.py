@@ -18737,6 +18737,12 @@ class GatewayRunner:
 
                 cmd = approval_data.get("command", "")
                 desc = approval_data.get("description", "dangerous command")
+                # Collapse the OS home dir to ~ for the DISPLAY copy only.
+                # Approval resolution/matching is keyed by session_key +
+                # server-side pattern_key (not this string), so the real
+                # command used for execution and /approve-session pattern
+                # matching is untouched.
+                cmd_display = collapse_home_path(cmd)
 
                 # Prefer button-based approval when the adapter supports it.
                 # Check the *class* for the method, not the instance — avoids
@@ -18746,7 +18752,7 @@ class GatewayRunner:
                         _approval_fut = safe_schedule_threadsafe(
                             _status_adapter.send_exec_approval(
                                 chat_id=_status_chat_id,
-                                command=cmd,
+                                command=cmd_display,
                                 session_key=_approval_session_key,
                                 description=desc,
                                 metadata=_status_thread_metadata,
@@ -18769,8 +18775,8 @@ class GatewayRunner:
                             "Button-based approval failed, falling back to text: %s", _e
                         )
 
-                # Fallback: plain text approval prompt
-                cmd_preview = cmd[:200] + "..." if len(cmd) > 200 else cmd
+                # Fallback: plain text approval prompt (display copy collapsed)
+                cmd_preview = cmd_display[:200] + "..." if len(cmd_display) > 200 else cmd_display
                 msg = (
                     f"⚠️ **Dangerous command requires approval:**\n"
                     f"```\n{cmd_preview}\n```\n"

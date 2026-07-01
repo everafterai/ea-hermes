@@ -125,6 +125,17 @@ class TestBuildToolPreview:
         assert "/home/testuser" not in result
         assert "~/.hermes/.env" in result
 
+    def test_collapse_precedes_truncation(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        # A long HOME-prefixed path with a small max_len: the collapse must
+        # run BEFORE truncation, so the output starts with ~ and never leaks
+        # the raw /home/... prefix even after truncation.
+        long_path = "/home/testuser/.hermes/a/very/long/nested/path/to/file.txt"
+        result = build_tool_preview("read_file", {"path": long_path}, max_len=20)
+        assert result.startswith("~/")
+        assert "/home/testuser" not in result
+        assert result.endswith("...")
+
 
 class TestCuteToolMessagePreviewLength:
     def test_terminal_preview_unlimited_when_config_is_zero(self):
