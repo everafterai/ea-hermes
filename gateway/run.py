@@ -17777,7 +17777,7 @@ class GatewayRunner:
                     msg = f"{emoji} {tool_name}: \"{preview}\""
                 else:
                     msg = f"{emoji} {tool_name}..."
-                progress_queue.put(msg)
+                progress_queue.put(collapse_home_path(msg))
                 return
             
             # "all" / "new" modes: short preview, respects tool_preview_length
@@ -17796,6 +17796,12 @@ class GatewayRunner:
             # Dedup: collapse consecutive identical progress messages.
             # Common with execute_code where models iterate with the same
             # code (same boilerplate imports → identical previews).
+            # Collapse OS home -> ~ at the enqueue source so EVERY downstream
+            # progress render/send (the direct joins ~18051/18091, the
+            # content=msg flood fallback, the dedup counter, and _progress_text)
+            # ships ~. Verbose mode's raw json.dumps(args) above is not
+            # pre-collapsed the way previews are.
+            msg = collapse_home_path(msg)
             if msg == last_progress_msg[0]:
                 repeat_count[0] += 1
                 # Update the last line in progress_lines with a counter
