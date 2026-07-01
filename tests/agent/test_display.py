@@ -110,6 +110,21 @@ class TestBuildToolPreview:
         assert build_tool_preview("terminal", "") is None
         assert build_tool_preview("terminal", []) is None
 
+    def test_read_file_preview_collapses_home(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        result = build_tool_preview(
+            "read_file", {"path": "/home/testuser/.hermes/config.yaml"}
+        )
+        assert result == "~/.hermes/config.yaml"
+
+    def test_terminal_preview_collapses_home(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/testuser")
+        result = build_tool_preview(
+            "terminal", {"command": "cat /home/testuser/.hermes/.env"}
+        )
+        assert "/home/testuser" not in result
+        assert "~/.hermes/.env" in result
+
 
 class TestCuteToolMessagePreviewLength:
     def test_terminal_preview_unlimited_when_config_is_zero(self):

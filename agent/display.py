@@ -14,6 +14,7 @@ from difflib import unified_diff
 from pathlib import Path
 
 from utils import safe_json_loads
+from agent.redact import collapse_home_path
 from agent.tool_result_classification import file_mutation_result_landed
 
 # ANSI escape codes for coloring tool failure indicators
@@ -257,6 +258,7 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
     preview = _oneline(str(value))
     if not preview:
         return None
+    preview = collapse_home_path(preview)
     if max_len > 0 and len(preview) > max_len:
         preview = preview[:max_len - 3] + "..."
     return preview
