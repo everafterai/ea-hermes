@@ -51,6 +51,7 @@ from typing import Dict, Optional, Any, List, Union
 # gateway is a long-running daemon, so its boot cost matters less than
 # preserving the established test-patch surface.
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
+from agent.redact import collapse_home_path
 from agent.async_utils import safe_schedule_threadsafe
 from agent.i18n import t
 from hermes_cli.config import cfg_get
@@ -294,10 +295,11 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     """
     if not text:
         return text
+    text = collapse_home_path(str(text))
     if _gateway_platform_value(platform) != "telegram":
         return text
 
-    redacted = _redact_gateway_user_facing_secrets(str(text))
+    redacted = _redact_gateway_user_facing_secrets(text)
     if _looks_like_gateway_provider_error(redacted):
         return _gateway_provider_error_reply(redacted)
     return redacted
@@ -308,6 +310,7 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
+    text = collapse_home_path(text)
     if _gateway_platform_value(platform) != "telegram":
         return text
 
@@ -17897,7 +17900,7 @@ class GatewayRunner:
                 return await adapter.edit_message(**kwargs)
 
             def _progress_text(lines: list) -> str:
-                return "\n".join(str(line) for line in lines)
+                return collapse_home_path("\n".join(str(line) for line in lines))
 
             def _split_progress_groups(lines: list) -> list[list]:
                 """Partition progress lines into platform-sized editable bubbles."""
