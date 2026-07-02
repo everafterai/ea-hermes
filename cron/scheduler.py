@@ -42,6 +42,8 @@ from hermes_constants import get_hermes_home
 from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_cli.config import load_config, _expand_env_vars
 from hermes_time import now as _hermes_now
+from cron.rbac_ceiling import cron_owner_grant
+from cron.tool_approval_context import set_cron_tool_context, clear_cron_tool_context
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,23 @@ def _cron_enabled_toolsets_with_ceiling(job: dict, cfg: dict) -> list[str] | Non
     except Exception as exc:  # pragma: no cover - defensive, fail-open
         logger.debug("Job '%s': toolset ceiling skipped (%s)", job.get("id"), exc)
         return resolved
+
+
+def _enter_cron_tool_context(job: dict):
+    """Export the job owner's toolset grant + acknowledged tools for the
+    per-tool approval gate (cron/tool_approval_context.py), which runs deep
+    inside model_tools and has no other way to see cron identity. Uses the
+    SAME owner grant `_cron_enabled_toolsets_with_ceiling` computes via
+    `cron_owner_grant`. `cron_owner_grant` can raise (e.g. registry/config
+    errors); swallow it so a lookup failure can't crash the job run — an
+    absent grant just means the approval gate falls back to deny-by-default
+    for that run."""
+    try:
+        grant = cron_owner_grant(job)
+    except Exception:
+        grant = None
+    acked = job.get("unattended_approved_tools") or []
+    return set_cron_tool_context(owner_grant=grant, acked_tools=acked)
 
 
 # Valid delivery platforms — used to validate user-supplied platform names
@@ -1615,6 +1634,18 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
     # scheduler process — every job this process runs is a cron job.
     os.environ["HERMES_CRON_SESSION"] = "1"
 
+    # Export the job owner's toolset grant + acknowledged tools for the
+    # per-tool approval gate (model_tools reads this via a ContextVar deep
+    # in the tool-call path). Guarded-init/guarded-cleanup, same pattern as
+    # `_session_db` above: init to None, only clear in the finally below if
+    # it was actually set, so a failure here can't crash the job and a run
+    # that never reaches this point has nothing to tear down.
+    _cron_tool_ctx_token = None
+    try:
+        _cron_tool_ctx_token = _enter_cron_tool_context(job)
+    except Exception as e:
+        logger.debug("Job '%s': failed to set cron tool-approval context: %s", job_id, e)
+
     # Use ContextVars for per-job session/delivery state so parallel jobs
     # don't clobber each other's targets (os.environ is process-global).
     from gateway.session_context import set_session_vars, clear_session_vars, _VAR_MAP
@@ -2049,6 +2080,8 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         clear_session_vars(_ctx_tokens)
         for _var_name in _cron_delivery_vars:
             _VAR_MAP[_var_name].set("")
+        if _cron_tool_ctx_token is not None:
+            clear_cron_tool_context(_cron_tool_ctx_token)
         if _session_db:
             # Title the cron session from the job (name → short prompt → id) so
             # sidebars/history show a meaningful label instead of the injected
