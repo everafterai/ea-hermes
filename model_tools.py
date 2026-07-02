@@ -1075,7 +1075,44 @@ def handle_function_call(
                     ensure_ascii=False,
                 )
         except Exception as _appr_err:
-            logger.debug("per-tool approval gate error (fail-open): %s", _appr_err)
+            logger.debug("per-tool approval gate error: %s", _appr_err)
+            # The gate is the ONLY approval enforcement in cron/headless, so a
+            # failure on this path must fail CLOSED there (no human to catch a
+            # wrong approval). Interactively — CLI *or* gateway, since a human
+            # is present either way — we fail OPEN: a gate bug must not block
+            # a tool the user is permitted to run.
+            #
+            # Plain os.environ reads first (they can't raise, so this handler
+            # stays robust even if tools.approval itself is broken). Note the
+            # production Slack gateway (gateway/run.py) does NOT set the
+            # legacy HERMES_GATEWAY_SESSION process env var; it binds
+            # HERMES_SESSION_PLATFORM via per-request contextvars instead
+            # (gateway/session_context.py, for multi-user concurrency safety
+            # — see tools.approval._is_gateway_approval_context). Only the
+            # local TUI gateway sets HERMES_GATEWAY_SESSION=1. So also probe
+            # the contextvar, defensively, so a live Slack gateway session is
+            # still classified as interactive (fails OPEN) rather than
+            # headless. Cron also binds that same contextvar (for delivery
+            # routing) even though it must fail CLOSED, which is why the cron
+            # check below is evaluated first and short-circuits regardless.
+            _env = os.environ
+            _cron = _env.get("HERMES_CRON_SESSION") == "1"
+            _interactive = (
+                _env.get("HERMES_INTERACTIVE") not in (None, "", "0", "false", "False")
+                or _env.get("HERMES_GATEWAY_SESSION") == "1"
+            )
+            if not _interactive:
+                try:
+                    from gateway.session_context import get_session_env
+                    _interactive = bool(get_session_env("HERMES_SESSION_PLATFORM", ""))
+                except Exception:
+                    pass
+            if _cron or not _interactive:
+                return json.dumps(
+                    {"error": "Tool approval check failed (headless — fail-closed)",
+                     "status": "blocked"},
+                    ensure_ascii=False,
+                )
 
         # ACP/Zed edit approval runs before any file mutation.  The requester
         # is bound via ContextVar only for ACP sessions, so CLI/gateway paths
