@@ -1060,6 +1060,23 @@ def handle_function_call(
         except Exception as _rbac_err:
             logger.debug("tool_access backstop import error: %s", _rbac_err)
 
+        # Per-tool approval gate: block gated tools until the user confirms.
+        # Runs AFTER the RBAC hard-deny (may-you) and before execution (confirm-you).
+        try:
+            from tools.approval import check_tool_approval, get_current_session_key
+            _approval = check_tool_approval(
+                function_name, function_args,
+                get_current_session_key(default=session_id or ""),
+            )
+            if not _approval.get("approved", True):
+                return json.dumps(
+                    {"error": _approval.get("message", "Tool approval denied"),
+                     "status": "blocked"},
+                    ensure_ascii=False,
+                )
+        except Exception as _appr_err:
+            logger.debug("per-tool approval gate error (fail-open): %s", _appr_err)
+
         # ACP/Zed edit approval runs before any file mutation.  The requester
         # is bound via ContextVar only for ACP sessions, so CLI/gateway paths
         # are unaffected when it is unset.
