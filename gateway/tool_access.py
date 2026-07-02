@@ -45,9 +45,23 @@ BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
     # (including channel-role posters in issue-tracking channels) from reading
     # host secrets via ``printenv`` / ``cat ~/.hermes/.env``. ``session_search``
     # is granted so operators can recall prior work in their own session scope.
+    # ``stripe`` / ``mcp-stripe``: grant BOTH forms of the Stripe MCP toolset.
+    # MCP servers register their canonical toolset as ``mcp-{server}`` (here
+    # ``mcp-stripe``) and a bare-name alias (``stripe``) via
+    # ``registry.register_toolset_alias`` — see ``tools/mcp_tool.py``. The
+    # toolset FILTER (``filter_enabled_toolsets`` / ``allowed_toolsets``)
+    # typically sees whatever name ``enabled_toolsets`` config uses, commonly
+    # the alias ``stripe``. But the execution BACKSTOP
+    # (``denial_for_current_tool`` -> ``_toolset_for_tool`` ->
+    # ``registry.get_toolset_for_tool``) reads ``ToolEntry.toolset`` directly,
+    # which is set to the CANONICAL ``mcp-stripe`` at registration time — it
+    # does NOT resolve through the alias table. Granting only ``stripe`` would
+    # pass the filter but fail the backstop for real Stripe MCP tool calls, so
+    # both names are granted here (harmless — an unregistered MCP toolset
+    # string in a frozenset is inert until that server exists).
     "operator": frozenset(
         {"file", "web", "browser", "vision", "memory", "delegation",
-         "notion", "session_search"}
+         "notion", "session_search", "stripe", "mcp-stripe"}
     ),
     "readonly": frozenset({"web", "vision", "session_search", "memory"}),
     "chat_only": frozenset(),

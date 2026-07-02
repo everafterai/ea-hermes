@@ -8,6 +8,7 @@ from __future__ import annotations
 from gateway.tool_access import (
     BUILTIN_ROLES,
     ToolAccessPolicy,
+    _granted,
     policy_from_extra,
     policy_for_source,
 )
@@ -327,6 +328,29 @@ class TestNotionGrant:
         got = p.allowed_toolsets("U_RANDO", toolsets, chat_id="C_ISSUES")
         assert "notion" in got
         assert "terminal" not in got
+
+
+class TestStripeGrant:
+    """Stripe's MCP server registers its toolset canonically as ``mcp-stripe``
+    with a bare ``stripe`` alias (see ``tools/mcp_tool.py``:
+    ``register_toolset_alias``). The RBAC filter and the execution backstop
+    resolve tools to toolsets differently, so ``operator`` must grant BOTH
+    names for the grant to hold at every enforcement point.
+    """
+
+    def test_operator_and_admin_grant_stripe(self):
+        assert _granted(BUILTIN_ROLES["operator"], "stripe")
+        assert _granted(BUILTIN_ROLES["admin"], "stripe")
+
+    def test_operator_and_admin_grant_mcp_stripe(self):
+        assert _granted(BUILTIN_ROLES["operator"], "mcp-stripe")
+        assert _granted(BUILTIN_ROLES["admin"], "mcp-stripe")
+
+    def test_restricted_roles_do_not_grant_stripe(self):
+        assert not _granted(BUILTIN_ROLES["readonly"], "stripe")
+        assert not _granted(BUILTIN_ROLES["chat_only"], "stripe")
+        assert not _granted(BUILTIN_ROLES["readonly"], "mcp-stripe")
+        assert not _granted(BUILTIN_ROLES["chat_only"], "mcp-stripe")
 
 
 class TestChannelRolesConfigBridge:
