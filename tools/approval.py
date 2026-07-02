@@ -646,6 +646,42 @@ def resolve_gateway_approval(session_key: str, choice: str,
     return len(targets)
 
 
+def _await_tool_gateway_decision(session_key: str, tool_name: str,
+                                 description: str, timeout_seconds: int) -> str:
+    """Prompt the session's gateway user to approve a gated tool and BLOCK
+    the calling (agent) thread until they answer or the timeout elapses.
+    Returns 'once', 'session', or 'deny'."""
+    approval_data = {
+        "tool_name": tool_name,
+        "description": description,
+        "pattern_keys": [f"tool:{tool_name}"],
+        "kind": "tool_approval",
+    }
+    entry = _ApprovalEntry(approval_data)
+    with _lock:
+        notify_cb = _gateway_notify_cbs.get(session_key)
+        if notify_cb is None:
+            return "deny"
+        _gateway_queues.setdefault(session_key, []).append(entry)
+    try:
+        notify_cb(approval_data)
+    except Exception as err:
+        logger.error("tool approval notify_cb failed: %s", err, exc_info=True)
+        with _lock:
+            queue = _gateway_queues.get(session_key) or []
+            if entry in queue:
+                queue.remove(entry)
+        return "deny"
+    if entry.event.wait(timeout=timeout_seconds):
+        return entry.result or "deny"
+    # Timed out — remove our entry so a late resolve doesn't target a dead wait.
+    with _lock:
+        queue = _gateway_queues.get(session_key) or []
+        if entry in queue:
+            queue.remove(entry)
+    return "deny"
+
+
 def has_blocking_approval(session_key: str) -> bool:
     """Check if a session has one or more blocking gateway approvals waiting."""
     with _lock:

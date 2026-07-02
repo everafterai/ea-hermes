@@ -1,3 +1,5 @@
+import threading
+
 import tools.approval as ap
 
 
@@ -40,3 +42,28 @@ def test_redact_tool_args_hides_secrets_and_truncates():
 def test_redact_tool_args_empty():
     from tools.approval import _redact_tool_args
     assert _redact_tool_args({}) == "(no arguments)"
+
+
+def test_await_tool_gateway_decision_blocks_then_resolves():
+    sk = "sess-xyz"
+    seen = {}
+    ap.register_gateway_notify(sk, lambda data: seen.update(data))
+    try:
+        # Resolve from another thread shortly after the wait begins.
+        t = threading.Timer(0.2, lambda: ap.resolve_gateway_approval(sk, "session"))
+        t.start()
+        choice = ap._await_tool_gateway_decision(sk, "stripe_api_write", "money movement", timeout_seconds=5)
+        assert choice == "session"
+        assert seen.get("tool_name") == "stripe_api_write"
+        assert seen.get("description") == "money movement"
+    finally:
+        ap.unregister_gateway_notify(sk)
+
+
+def test_await_tool_gateway_decision_times_out_to_deny():
+    sk = "sess-timeout"
+    ap.register_gateway_notify(sk, lambda data: None)
+    try:
+        assert ap._await_tool_gateway_decision(sk, "t", "d", timeout_seconds=0.1) == "deny"
+    finally:
+        ap.unregister_gateway_notify(sk)
