@@ -1005,11 +1005,15 @@ mcp_servers:
 
 approvals:
   require_for_tools:
-    - stripe_api_write
-    - create_refund
+    - "*stripe_api_write"     # MCP tools dispatch as mcp_{server}_{tool}: the real
+    - "*create_refund"        # name is mcp_stripe_stripe_api_write — bare names never
+                              # match (gate silently inert). Confirm exact names via
+                              # `hermes mcp test stripe`; suffix globs are robust.
 ```
 
 `~/.hermes/.env`: `STRIPE_API_KEY=rk_live_...` — a **least-privilege restricted key** (write only on the resources actually needed; no Connect / payout / key-management scopes).
+
+> **MCP tool-name prefix (load-bearing):** MCP tools are registered/dispatched as `mcp_{server}_{tool}` ([tools/mcp_tool.py:3133](../../../tools/mcp_tool.py) `prefixed_name`). So `require_for_tools` globs and a cron job's `unattended_approved_tools` MUST use the prefixed name (`mcp_stripe_stripe_api_write`) or a suffix glob (`"*stripe_api_write"`), never the bare Stripe tool name — otherwise the gate is configured but silently does nothing. Verify the exact dispatched names in Step 2 (`hermes mcp test stripe`) before setting these.
 
 - [ ] **Step 2: Verify the MCP connection (operator runs on the VM)**
 

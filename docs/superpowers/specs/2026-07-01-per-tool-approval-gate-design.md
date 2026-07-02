@@ -70,14 +70,19 @@ approvals:
   timeout: 30                  # existing — reused for the tool-approval prompt
   cron_mode: deny              # existing — reused for the cron fallback (see §5)
   require_for_tools:           # NEW — tool-name globs that require approval
-    - stripe_api_write
-    - create_refund
+    - "*stripe_api_write"      # MCP tools dispatch as mcp_{server}_{tool} — see note
+    - "*create_refund"
     - "send_*"
 ```
 
 `require_for_tools` is a list of `fnmatch` globs matched (case-insensitively)
-against the resolved tool name. Absent or empty → the gate is **inert** (no code
-path changes for existing installs). It is **orthogonal** to `approvals.mode`:
+against the **dispatched** tool name. Absent or empty → the gate is **inert** (no code
+path changes for existing installs). **Note (MCP naming):** MCP tools are dispatched
+under an `mcp_{server}_{tool}` prefix ([tools/mcp_tool.py:3133](../../../tools/mcp_tool.py)),
+so an MCP tool's dispatched name is e.g. `mcp_stripe_stripe_api_write` — a bare
+`stripe_api_write` glob will **never match** and the gate stays silently inert. Use the
+prefixed name or a suffix glob (`"*stripe_api_write"`); native tools (e.g. `send_*`) are
+unprefixed. Confirm exact MCP names via `hermes mcp test <server>`. It is **orthogonal** to `approvals.mode`:
 `mode` governs the command/code content guards; `require_for_tools` governs named
 tools. Setting `mode: off` does **not** disable `require_for_tools` (documented
 explicitly, since it is a plausible surprise).
@@ -206,9 +211,14 @@ validator (`_rbac_creation_error`) is extended so that, on **create and update**
   acknowledge a tool they could not invoke themselves). This reuses the role→toolset
   resolution already in the creation validator.
 
-Mapping a `require_for_tools` tool name to its toolset uses the registry (an MCP
-tool `stripe_api_write` resolves to toolset `mcp-stripe`; see
-[tools/mcp_tool.py:3365](../../../tools/mcp_tool.py) `toolset_name = f"mcp-{name}"`).
+Mapping a `require_for_tools` tool name to its toolset uses the registry. **MCP
+tools are registered/dispatched under an `mcp_{server}_{tool}` prefix**
+([tools/mcp_tool.py:3133](../../../tools/mcp_tool.py) `prefixed_name`), so the tool
+seen everywhere (config match, registry lookup, dispatcher) is
+`mcp_stripe_stripe_api_write`, not `stripe_api_write`; the registry resolves that
+prefixed name to toolset `mcp-stripe` (a bare `stripe_api_write` lookup returns
+`None`). `require_for_tools` globs and `unattended_approved_tools` entries MUST use
+the prefixed name (or a suffix glob like `"*stripe_api_write"`).
 The acknowledgment is stored on the job and surfaced to the owner on the confirmed
 edit (the automation-ownership `record_and_notify` path).
 
@@ -251,7 +261,9 @@ Rides on the gate above; mostly ops/config plus one RBAC edit:
   **replaces** a role's toolset set (`_coerce_roles`,
   [gateway/tool_access.py:134](../../../gateway/tool_access.py)) and would silently
   fork `operator`'s whole list.
-- **Approval** — `approvals.require_for_tools: [stripe_api_write, create_refund]`.
+- **Approval** — `approvals.require_for_tools: ["*stripe_api_write", "*create_refund"]`
+  (MCP tools dispatch under an `mcp_{server}_{tool}` prefix, so bare `stripe_api_write`
+  never matches — see §6; confirm exact names via `hermes mcp test stripe`).
 - **Cron** — any job that should call those must list them in
   `unattended_approved_tools`, and its owner must hold the `stripe` grant.
 - **Memory note** — document the recipe (mirrors the existing GitHub remote-MCP note).
