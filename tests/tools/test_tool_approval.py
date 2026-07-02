@@ -26,11 +26,15 @@ def test_redact_tool_args_hides_secrets_and_truncates():
         "authorization": "Bearer x",
         "body": "y" * 500,
     })
+    # Every key is preserved — an approval prompt must not silently drop args.
     assert "method=POST" in out
     assert "path=v1/refunds" in out
-    assert "sk_live_deadbeef" not in out and "api_key=<redacted>" in out
+    assert "api_key=<redacted>" in out and "sk_live_deadbeef" not in out
     assert "authorization=<redacted>" in out
-    assert len(out) <= 200 + 40   # body value truncated, not the whole map dropped
+    # The long body VALUE is truncated (not the full 500 chars); map kept whole.
+    assert "body=" in out
+    assert "y" * 500 not in out
+    assert out.count("y") < 500  # value was significantly truncated
 
 
 def test_redact_tool_args_empty():

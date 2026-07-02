@@ -959,7 +959,12 @@ _SENSITIVE_ARG_PATTERNS = ("*key*", "*token*", "*secret*", "*password*", "*autho
 
 
 def _redact_tool_args(args: dict, *, max_len: int = 200) -> str:
-    """One-line, secret-redacted summary of tool args for an approval prompt."""
+    """One-line, secret-redacted summary of tool args for an approval prompt.
+
+    Every key is preserved — an approval prompt must never silently drop a
+    later argument — so only long VALUES are truncated, and secret values are
+    replaced wholesale.
+    """
     if not isinstance(args, dict) or not args:
         return "(no arguments)"
     parts = []
@@ -972,10 +977,7 @@ def _redact_tool_args(args: dict, *, max_len: int = 200) -> str:
         if len(v) > max_len:
             v = v[:max_len] + "…"
         parts.append(f"{k}={v}")
-    result = ", ".join(parts)
-    if len(result) > max_len:
-        result = result[:max_len] + "…"
-    return result
+    return ", ".join(parts)
 
 
 def _smart_approve(command: str, description: str) -> str:
