@@ -9,6 +9,7 @@ This module is the single source of truth for the dangerous command system:
 """
 
 import contextvars
+import fnmatch
 import logging
 import os
 import re
@@ -938,6 +939,20 @@ def _get_cron_approval_mode() -> str:
         return "deny"
     except Exception:
         return "deny"
+
+
+def _get_require_for_tools() -> list[str]:
+    """Read the ``approvals.require_for_tools`` globs (lowercased). Empty when unset."""
+    raw = _get_approval_config().get("require_for_tools") or []
+    if isinstance(raw, str):
+        raw = [s.strip() for s in raw.split(",")]
+    return [str(g).strip().lower() for g in raw if str(g).strip()]
+
+
+def tool_requires_approval(tool_name: str) -> bool:
+    """True if *tool_name* matches any ``require_for_tools`` glob (case-insensitive)."""
+    name = (tool_name or "").lower()
+    return any(fnmatch.fnmatchcase(name, glob) for glob in _get_require_for_tools())
 
 
 def _smart_approve(command: str, description: str) -> str:
