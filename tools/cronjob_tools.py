@@ -449,11 +449,42 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
         result["no_agent"] = True
     if job.get("enabled_toolsets"):
         result["enabled_toolsets"] = job["enabled_toolsets"]
+    if job.get("unattended_approved_tools"):
+        result["unattended_approved_tools"] = job["unattended_approved_tools"]
     if job.get("workdir"):
         result["workdir"] = job["workdir"]
     if job.get("profile"):
         result["profile"] = job["profile"]
     return result
+
+
+def _registry_tools_for_toolset(toolset: str) -> list[str]:
+    """Return the tool names registered under *toolset*, or [] on any error."""
+    try:
+        from tools.registry import get_registry
+        return get_registry().get_tool_names_for_toolset(toolset)
+    except Exception:
+        return []
+
+
+def _unattended_ack_error(*, enabled_toolsets, unattended_approved_tools) -> Optional[str]:
+    """Reject creation/update when a gated tool is callable but not acknowledged
+    for unattended (cron) execution. Returns an error string, or None if OK."""
+    from tools.approval import tool_requires_approval
+    acked = set(unattended_approved_tools or [])
+    unacked = []
+    for toolset in (enabled_toolsets or []):
+        for tool_name in _registry_tools_for_toolset(toolset):
+            if tool_requires_approval(tool_name) and tool_name not in acked:
+                unacked.append(tool_name)
+    if unacked:
+        names = ", ".join(sorted(set(unacked)))
+        return (
+            f"This job can call approval-gated tool(s) [{names}] but runs "
+            "unattended. Acknowledge unattended execution by adding them to "
+            "'unattended_approved_tools', or remove the toolset that exposes them."
+        )
+    return None
 
 
 def _rbac_creation_error(
@@ -528,6 +559,7 @@ def cronjob(
     script: Optional[str] = None,
     context_from: Optional[Union[str, List[str]]] = None,
     enabled_toolsets: Optional[List[str]] = None,
+    unattended_approved_tools: Optional[List[str]] = None,
     workdir: Optional[str] = None,
     profile: Optional[str] = None,
     no_agent: Optional[bool] = None,
@@ -612,6 +644,13 @@ def cronjob(
             if _rbac_err:
                 return tool_error(_rbac_err, success=False)
 
+            _ack_err = _unattended_ack_error(
+                enabled_toolsets=enabled_toolsets,
+                unattended_approved_tools=unattended_approved_tools,
+            )
+            if _ack_err:
+                return tool_error(_ack_err, success=False)
+
             job = create_job(
                 prompt=prompt or "",
                 schedule=schedule,
@@ -630,6 +669,12 @@ def cronjob(
                 profile=_normalize_optional_job_value(profile),
                 no_agent=_no_agent,
             )
+            if unattended_approved_tools:
+                # create_job() has no dedicated param for this field; merge it
+                # onto the freshly-created record via the generic update path.
+                job = update_job(job["id"], {
+                    "unattended_approved_tools": list(unattended_approved_tools),
+                }) or job
             try:
                 from agent import automation_ownership as _ao
                 _ao.register_creator(_ao.artifact_key("cron", job["id"]), "cron",
@@ -790,6 +835,8 @@ def cronjob(
                 updates["context_from"] = refs or None
             if enabled_toolsets is not None:
                 updates["enabled_toolsets"] = enabled_toolsets or None
+            if unattended_approved_tools is not None:
+                updates["unattended_approved_tools"] = unattended_approved_tools or None
             if workdir is not None:
                 # Empty string clears the field (restores old behaviour);
                 # otherwise pass raw — update_job() validates / normalizes.
@@ -834,6 +881,11 @@ def cronjob(
             )
             _eff_script = updates["script"] if "script" in updates else job.get("script")
             _eff_no_agent = updates["no_agent"] if "no_agent" in updates else job.get("no_agent")
+            _eff_unattended_approved_tools = (
+                updates["unattended_approved_tools"]
+                if "unattended_approved_tools" in updates
+                else job.get("unattended_approved_tools")
+            )
             _rbac_err = _rbac_creation_error(
                 enabled_toolsets=_eff_toolsets,
                 has_script=bool(_eff_script),
@@ -841,6 +893,12 @@ def cronjob(
             )
             if _rbac_err:
                 return tool_error(_rbac_err, success=False)
+            _ack_err = _unattended_ack_error(
+                enabled_toolsets=_eff_toolsets,
+                unattended_approved_tools=_eff_unattended_approved_tools,
+            )
+            if _ack_err:
+                return tool_error(_ack_err, success=False)
             updated = update_job(job_id, updates)
             if _pending:
                 from agent.automation_ownership import record_and_notify
@@ -970,6 +1028,11 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
                 "items": {"type": "string"},
                 "description": "Optional list of toolset names to restrict the job's agent to (e.g. [\"web\", \"terminal\", \"file\", \"delegation\"]). When set, only tools from these toolsets are loaded, significantly reducing input token overhead. When omitted, all default tools are loaded. Infer from the job's prompt — e.g. use \"web\" if it calls web_search, \"terminal\" if it runs scripts, \"file\" if it reads files, \"delegation\" if it calls delegate_task. On update, pass an empty array to clear."
             },
+            "unattended_approved_tools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of exact tool names this job is explicitly authorized to call WITHOUT a human present, for tools that normally require approval (see approvals.require_for_tools config). If enabled_toolsets exposes an approval-gated tool that is not listed here, create/update is REJECTED — add the tool's exact name here only after the user has explicitly confirmed they want this cron job to call it unattended. On update, pass an empty array to clear."
+            },
             "workdir": {
                 "type": "string",
                 "description": "Optional absolute path to run the job from. When set, AGENTS.md / CLAUDE.md / .cursorrules from that directory are injected into the system prompt, and the terminal/file/code_exec tools use it as their working directory — useful for running a job inside a specific project repo. Must be an absolute path that exists. When unset (default), preserves the original behaviour: no project context files, tools use the scheduler's cwd. On update, pass an empty string to clear. Jobs with workdir run sequentially (not parallel) to keep per-job directories isolated."
@@ -1039,6 +1102,7 @@ registry.register(
         script=args.get("script"),
         context_from=args.get("context_from"),
         enabled_toolsets=args.get("enabled_toolsets"),
+        unattended_approved_tools=args.get("unattended_approved_tools"),
         workdir=args.get("workdir"),
         profile=args.get("profile"),
         no_agent=args.get("no_agent"),
