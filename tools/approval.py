@@ -955,6 +955,29 @@ def tool_requires_approval(tool_name: str) -> bool:
     return any(fnmatch.fnmatchcase(name, glob) for glob in _get_require_for_tools())
 
 
+_SENSITIVE_ARG_PATTERNS = ("*key*", "*token*", "*secret*", "*password*", "*authorization*")
+
+
+def _redact_tool_args(args: dict, *, max_len: int = 200) -> str:
+    """One-line, secret-redacted summary of tool args for an approval prompt."""
+    if not isinstance(args, dict) or not args:
+        return "(no arguments)"
+    parts = []
+    for key, value in args.items():
+        k = str(key)
+        if any(fnmatch.fnmatchcase(k.lower(), p) for p in _SENSITIVE_ARG_PATTERNS):
+            parts.append(f"{k}=<redacted>")
+            continue
+        v = str(value)
+        if len(v) > max_len:
+            v = v[:max_len] + "…"
+        parts.append(f"{k}={v}")
+    result = ", ".join(parts)
+    if len(result) > max_len:
+        result = result[:max_len] + "…"
+    return result
+
+
 def _smart_approve(command: str, description: str) -> str:
     """Use the auxiliary LLM to assess risk and decide approval.
 
