@@ -1817,17 +1817,55 @@ def check_tool_approval(tool_name: str, args: dict, session_key: str) -> dict:
         if choice == "once":
             return {"approved": True, "message": None}
         return _denied_result(tool_name, "user denied")
-    except Exception as err:  # fail-open on internal error (interactive paths)
-        logger.debug("check_tool_approval error (fail-open): %s", err)
-        return {"approved": True, "message": None}
+    except Exception as err:
+        logger.debug("check_tool_approval error: %s", err)
+        # Interactive surfaces fail OPEN (a bug must not block a permitted tool);
+        # headless/cron fails CLOSED (no human present to catch a wrong approval).
+        try:
+            interactive = _is_gateway_approval_context() or env_var_enabled("HERMES_INTERACTIVE")
+        except Exception:
+            interactive = False
+        if interactive:
+            return {"approved": True, "message": None}
+        return _denied_result(tool_name, "approval check failed (headless — fail-closed)")
+
+
+def _toolset_for_tool(tool_name: str):
+    from gateway.tool_access import _toolset_for_tool as _impl
+    return _impl(tool_name)
+
+
+def _audit_cron_tool(tool_name: str, outcome: str) -> None:
+    try:
+        from agent.data_access_audit import record_access
+        record_access(tool=tool_name, action="approval-gated-unattended", target=outcome)
+    except Exception as err:
+        logger.debug("cron approval audit failed: %s", err)
 
 
 def _cron_tool_decision(tool_name: str, pattern_key: str, description: str) -> dict:
-    """Placeholder headless decision — replaced in Task 6. For now fail closed
-    unless cron_mode==approve, matching the command-guard cron fallback."""
-    if _get_cron_approval_mode() == "approve":
-        return {"approved": True, "message": None}
-    return _denied_result(tool_name, "no user present to approve (headless)")
+    """Headless decision for a gated tool. Skip only when the job owner holds
+    the tool's toolset grant AND the tool was acknowledged at creation;
+    otherwise follow approvals.cron_mode (deny by default). Fails CLOSED on any
+    internal error — a bug here must never approve a gated tool."""
+    try:
+        from cron.tool_approval_context import get_cron_tool_context, in_cron_run
+        if in_cron_run():
+            owner_grant, acked = get_cron_tool_context()
+            toolset = _toolset_for_tool(tool_name)
+            granted = owner_grant is not None and (
+                "*" in owner_grant or toolset in owner_grant
+            )
+            if granted and tool_name in acked:
+                _audit_cron_tool(tool_name, "skipped-authorized")
+                return {"approved": True, "message": None}
+        if _get_cron_approval_mode() == "approve":
+            _audit_cron_tool(tool_name, "cron_mode-approve")
+            return {"approved": True, "message": None}
+        return _denied_result(tool_name, "no user present to approve (headless)")
+    except Exception as err:
+        logger.debug("_cron_tool_decision error (fail-closed): %s", err)
+        return _denied_result(tool_name, "headless authorization check failed")
 
 
 # Load permanent allowlist from config on module import

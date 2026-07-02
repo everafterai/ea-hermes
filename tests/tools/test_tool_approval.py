@@ -1,6 +1,7 @@
 import threading
 
 import tools.approval as ap
+from cron.tool_approval_context import set_cron_tool_context, clear_cron_tool_context
 
 
 def test_tool_requires_approval_matches_exact_and_glob(monkeypatch):
@@ -116,3 +117,73 @@ def test_check_tool_approval_gateway_blocks_via_helper(monkeypatch):
                         lambda sk, tool, desc, timeout_seconds: "once")
     res = ap.check_tool_approval("gated_tool", {}, "s4")
     assert res == {"approved": True, "message": None}
+
+
+def test_cron_skips_when_acked_and_owner_has_grant(monkeypatch):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": ["stripe_api_write"]})
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    monkeypatch.setattr(ap, "_toolset_for_tool", lambda name: "mcp-stripe")
+    tok = set_cron_tool_context(owner_grant=frozenset({"mcp-stripe"}),
+                                acked_tools=["stripe_api_write"])
+    try:
+        res = ap.check_tool_approval("stripe_api_write", {"method": "POST"}, "cronsess")
+        assert res == {"approved": True, "message": None}
+    finally:
+        clear_cron_tool_context(tok)
+
+
+def test_cron_denies_when_not_acked(monkeypatch):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": ["stripe_api_write"], "cron_mode": "deny"})
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    monkeypatch.setattr(ap, "_toolset_for_tool", lambda name: "mcp-stripe")
+    tok = set_cron_tool_context(owner_grant=frozenset({"mcp-stripe"}), acked_tools=[])
+    try:
+        res = ap.check_tool_approval("stripe_api_write", {}, "cronsess")
+        assert res["approved"] is False
+    finally:
+        clear_cron_tool_context(tok)
+
+
+def test_cron_denies_when_owner_lacks_grant(monkeypatch):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": ["stripe_api_write"], "cron_mode": "deny"})
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    monkeypatch.setattr(ap, "_toolset_for_tool", lambda name: "mcp-stripe")
+    tok = set_cron_tool_context(owner_grant=frozenset({"web"}), acked_tools=["stripe_api_write"])
+    try:
+        assert ap.check_tool_approval("stripe_api_write", {}, "cronsess")["approved"] is False
+    finally:
+        clear_cron_tool_context(tok)
+
+
+def test_cron_fails_closed_on_internal_error(monkeypatch):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": ["stripe_api_write"], "cron_mode": "deny"})
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    # _toolset_for_tool raising must NOT approve — it must deny (fail closed).
+    monkeypatch.setattr(ap, "_toolset_for_tool",
+                        lambda name: (_ for _ in ()).throw(RuntimeError("boom")))
+    tok = set_cron_tool_context(owner_grant=frozenset({"mcp-stripe"}), acked_tools=["stripe_api_write"])
+    try:
+        res = ap.check_tool_approval("stripe_api_write", {}, "cronsess")
+        assert res["approved"] is False
+    finally:
+        clear_cron_tool_context(tok)
+
+
+def test_headless_outer_exception_fails_closed(monkeypatch):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": ["stripe_api_write"]})
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    # Make an early step raise so the OUTER except is exercised in a headless context.
+    monkeypatch.setattr(ap, "_redact_tool_args",
+                        lambda args, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    res = ap.check_tool_approval("stripe_api_write", {"x": 1}, "cronsess2")
+    assert res["approved"] is False
