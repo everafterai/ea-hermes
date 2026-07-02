@@ -461,9 +461,10 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
 def _registry_tools_for_toolset(toolset: str) -> list[str]:
     """Return the tool names registered under *toolset*, or [] on any error."""
     try:
-        from tools.registry import get_registry
-        return get_registry().get_tool_names_for_toolset(toolset)
-    except Exception:
+        from tools.registry import registry
+        return registry.get_tool_names_for_toolset(toolset)
+    except Exception as err:
+        logger.debug("_registry_tools_for_toolset(%s) failed: %s", toolset, err)
         return []
 
 
