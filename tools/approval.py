@@ -1773,5 +1773,62 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
             "user_approved": True, "description": description}
 
 
+def _denied_result(tool_name: str, reason: str) -> dict:
+    return {
+        "approved": False,
+        "message": (
+            f"BLOCKED: '{tool_name}' requires approval and it was not granted "
+            f"({reason}). Do NOT retry — ask the user to approve it."
+        ),
+    }
+
+
+def check_tool_approval(tool_name: str, args: dict, session_key: str) -> dict:
+    """Gate *tool_name* behind human approval when it matches
+    ``approvals.require_for_tools``. Blocks in-thread on interactive surfaces."""
+    try:
+        if not tool_requires_approval(tool_name):
+            return {"approved": True, "message": None}
+
+        pattern_key = f"tool:{tool_name}"
+        if is_approved(session_key, pattern_key):
+            return {"approved": True, "message": None}
+
+        description = f"{tool_name}({_redact_tool_args(args)})"
+        timeout = _get_approval_timeout()
+
+        # Interactive gateway (Slack/TUI): block until the user answers.
+        if _is_gateway_approval_context():
+            submit_pending(session_key, {"tool_name": tool_name,
+                                         "pattern_key": pattern_key,
+                                         "description": description})
+            choice = _await_tool_gateway_decision(session_key, tool_name, description, timeout)
+        elif env_var_enabled("HERMES_INTERACTIVE"):
+            choice = prompt_dangerous_approval(
+                description, f"Tool '{tool_name}' requires approval",
+                timeout_seconds=timeout, allow_permanent=False)
+        else:
+            # Headless: cron authorization (Task 6) or fail-closed via cron_mode.
+            return _cron_tool_decision(tool_name, pattern_key, description)
+
+        if choice == "session":
+            approve_session(session_key, pattern_key)
+            return {"approved": True, "message": None}
+        if choice == "once":
+            return {"approved": True, "message": None}
+        return _denied_result(tool_name, "user denied")
+    except Exception as err:  # fail-open on internal error (interactive paths)
+        logger.debug("check_tool_approval error (fail-open): %s", err)
+        return {"approved": True, "message": None}
+
+
+def _cron_tool_decision(tool_name: str, pattern_key: str, description: str) -> dict:
+    """Placeholder headless decision — replaced in Task 6. For now fail closed
+    unless cron_mode==approve, matching the command-guard cron fallback."""
+    if _get_cron_approval_mode() == "approve":
+        return {"approved": True, "message": None}
+    return _denied_result(tool_name, "no user present to approve (headless)")
+
+
 # Load permanent allowlist from config on module import
 load_permanent_allowlist()

@@ -67,3 +67,52 @@ def test_await_tool_gateway_decision_times_out_to_deny():
         assert ap._await_tool_gateway_decision(sk, "t", "d", timeout_seconds=0.1) == "deny"
     finally:
         ap.unregister_gateway_notify(sk)
+
+
+def _gate_on(monkeypatch, tools_list=("gated_tool",)):
+    monkeypatch.setattr(ap, "_get_approval_config",
+                        lambda: {"require_for_tools": list(tools_list)})
+
+
+def test_check_tool_approval_not_gated(monkeypatch):
+    _gate_on(monkeypatch)
+    assert ap.check_tool_approval("read_file", {}, "s1") == {"approved": True, "message": None}
+
+
+def test_check_tool_approval_cli_session_grants_and_sticks(monkeypatch):
+    _gate_on(monkeypatch)
+    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    calls = {"n": 0}
+
+    def fake_prompt(command, description, timeout_seconds=None, allow_permanent=True, approval_callback=None):
+        calls["n"] += 1
+        assert allow_permanent is False          # gated tools never permanent
+        return "session"
+
+    monkeypatch.setattr(ap, "prompt_dangerous_approval", fake_prompt)
+    first = ap.check_tool_approval("gated_tool", {"path": "v1/refunds"}, "s2")
+    assert first == {"approved": True, "message": None}
+    second = ap.check_tool_approval("gated_tool", {"path": "v1/refunds"}, "s2")
+    assert second == {"approved": True, "message": None}
+    assert calls["n"] == 1                         # session approval reused, no re-prompt
+
+
+def test_check_tool_approval_cli_deny_blocks(monkeypatch):
+    _gate_on(monkeypatch)
+    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: False)
+    monkeypatch.setattr(ap, "prompt_dangerous_approval",
+                        lambda *a, **k: "deny")
+    res = ap.check_tool_approval("gated_tool", {}, "s3")
+    assert res["approved"] is False and "BLOCKED" in res["message"]
+
+
+def test_check_tool_approval_gateway_blocks_via_helper(monkeypatch):
+    _gate_on(monkeypatch)
+    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setattr(ap, "_is_gateway_approval_context", lambda: True)
+    monkeypatch.setattr(ap, "_await_tool_gateway_decision",
+                        lambda sk, tool, desc, timeout_seconds: "once")
+    res = ap.check_tool_approval("gated_tool", {}, "s4")
+    assert res == {"approved": True, "message": None}
