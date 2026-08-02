@@ -33,7 +33,7 @@ import logging
 import threading
 import types
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Mapping, Optional
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +119,38 @@ def _coerce_channel_roles(raw: Any) -> Dict[str, str]:
     return out
 
 
+def _coerce_extends(raw: Any) -> List[str]:
+    """Normalize a role's ``extends`` value to a list of parent role names.
+
+    Accepts a single name, a comma-separated string, or a sequence. Names are
+    lowercased to match the ``roles`` table. Anything else logs and yields no
+    parents — an unusable ``extends`` must never silently widen a grant.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [s for s in (p.strip().lower() for p in raw.split(",")) if s]
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return [n for n in (_coerce_str(p).lower() for p in raw) if n]
+    logger.warning(
+        "tool_access: unexpected extends type %s — ignoring",
+        type(raw).__name__,
+    )
+    return []
+
+
 def _coerce_roles(raw: Any) -> Dict[str, FrozenSet[str]]:
-    """Normalize a ``roles`` block, merged over the built-in defaults."""
-    resolved: Dict[str, FrozenSet[str]] = dict(BUILTIN_ROLES)
+    """Normalize a ``roles`` block, merged over the built-in defaults.
+
+    Two passes: collect each role's OWN toolsets, then resolve ``extends``
+    against the fully-populated map so a role may extend one defined later in
+    the YAML.
+    """
+    own: Dict[str, FrozenSet[str]] = dict(BUILTIN_ROLES)
+    parents: Dict[str, List[str]] = {}
     if not isinstance(raw, dict):
-        return resolved
+        return own
+
     for name, body in raw.items():
         role_name = _coerce_str(name).lower()
         if not role_name:
@@ -131,6 +158,7 @@ def _coerce_roles(raw: Any) -> Dict[str, FrozenSet[str]]:
         toolsets: Any = None
         if isinstance(body, dict):
             toolsets = body.get("toolsets")
+            parents[role_name] = _coerce_extends(body.get("extends"))
         elif isinstance(body, (list, tuple)):
             toolsets = body
         if isinstance(toolsets, str):
@@ -145,10 +173,52 @@ def _coerce_roles(raw: Any) -> Dict[str, FrozenSet[str]]:
             items = []
         else:
             items = []
-        resolved[role_name] = frozenset(
+        own[role_name] = frozenset(
             _coerce_str(t).lower() for t in items if _coerce_str(t)
         )
-    return resolved
+
+    if not any(parents.values()):
+        return own
+
+    return {
+        role: _resolve_role_extends(role, own, parents, set())
+        for role in own
+    }
+
+
+def _resolve_role_extends(
+    role: str,
+    own: Dict[str, FrozenSet[str]],
+    parents: Dict[str, List[str]],
+    resolving: set,
+) -> FrozenSet[str]:
+    """Union of *role*'s own toolsets and everything it transitively extends.
+
+    ``resolving`` carries the current DFS path so a cycle breaks instead of
+    recursing forever. Deliberately unmemoized: role graphs are a handful of
+    entries, and a memo populated mid-cycle would depend on which role the
+    caller happened to start from.
+    """
+    if role in resolving:
+        logger.warning(
+            "tool_access: role inheritance cycle at '%s' — ignoring this edge",
+            role,
+        )
+        return frozenset()
+    resolving.add(role)
+    try:
+        acc = set(own.get(role, frozenset()))
+        for parent in parents.get(role, []):
+            if parent not in own:
+                logger.warning(
+                    "tool_access: role '%s' extends undefined role '%s' — ignoring",
+                    role, parent,
+                )
+                continue
+            acc |= _resolve_role_extends(parent, own, parents, resolving)
+        return frozenset(acc)
+    finally:
+        resolving.discard(role)
 
 
 def _granted(role_toolsets: FrozenSet[str], toolset: str) -> bool:

@@ -425,3 +425,68 @@ def test_rbac_active_anywhere_false_when_no_config(monkeypatch):
     import gateway.tool_access as ta
     monkeypatch.setattr(ta, "_load_config_cached", lambda: None)
     assert ta.rbac_active_anywhere() is False
+
+
+class TestRoleInheritance:
+    def test_extends_single_parent_unions_toolsets(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "base": {"toolsets": ["web", "notion"]},
+                "publisher": {"extends": "base", "toolsets": ["webflow"]},
+            },
+        })
+        assert p.grant_for("U_pub") == frozenset({"web", "notion", "webflow"})
+
+    def test_extends_accepts_a_list_of_parents(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "base": {"toolsets": ["web"]},
+                "extra": {"toolsets": ["webflow", "mcp-webflow"]},
+                "publisher": {"extends": ["base", "extra"]},
+            },
+        })
+        assert p.grant_for("U_pub") == frozenset({"web", "webflow", "mcp-webflow"})
+
+    def test_extends_is_transitive(self):
+        p = policy_from_extra({
+            "user_roles": {"U_c": "c"},
+            "roles": {
+                "a": {"toolsets": ["web"]},
+                "b": {"extends": "a", "toolsets": ["notion"]},
+                "c": {"extends": "b", "toolsets": ["webflow"]},
+            },
+        })
+        assert p.grant_for("U_c") == frozenset({"web", "notion", "webflow"})
+
+    def test_extends_resolves_forward_references(self):
+        # 'publisher' is defined BEFORE the role it extends. Dict order in YAML
+        # must not affect resolution.
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "publisher": {"extends": "base", "toolsets": ["webflow"]},
+                "base": {"toolsets": ["web"]},
+            },
+        })
+        assert p.grant_for("U_pub") == frozenset({"web", "webflow"})
+
+    def test_extends_with_no_own_toolsets_is_pure_composition(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "base": {"toolsets": ["web"]},
+                "extra": {"toolsets": ["webflow"]},
+                "publisher": {"extends": ["base", "extra"]},
+            },
+        })
+        assert p.grant_for("U_pub") == frozenset({"web", "webflow"})
+
+    def test_role_without_extends_is_unchanged(self):
+        # Regression guard: the existing flat-list form keeps working.
+        p = policy_from_extra({
+            "user_roles": {"U_a": "plain"},
+            "roles": {"plain": {"toolsets": ["web", "notion"]}},
+        })
+        assert p.grant_for("U_a") == frozenset({"web", "notion"})
