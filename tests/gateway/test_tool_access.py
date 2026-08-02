@@ -490,3 +490,89 @@ class TestRoleInheritance:
             "roles": {"plain": {"toolsets": ["web", "notion"]}},
         })
         assert p.grant_for("U_a") == frozenset({"web", "notion"})
+
+    def test_extends_undefined_role_contributes_nothing(self):
+        # A typo'd parent must not silently widen OR silently erase the grant.
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {"publisher": {"extends": "ghost", "toolsets": ["webflow"]}},
+        })
+        assert p.grant_for("U_pub") == frozenset({"webflow"})
+
+    def test_extends_cycle_does_not_hang_and_keeps_own_toolsets(self):
+        p = policy_from_extra({
+            "user_roles": {"U_a": "a", "U_b": "b"},
+            "roles": {
+                "a": {"extends": "b", "toolsets": ["web"]},
+                "b": {"extends": "a", "toolsets": ["notion"]},
+            },
+        })
+        # The cycle is broken, not fatal: each role keeps its own toolsets and
+        # picks up whatever its parent contributes before the edge is cut.
+        assert "web" in p.grant_for("U_a")
+        assert "notion" in p.grant_for("U_b")
+
+    def test_role_extending_itself_is_not_fatal(self):
+        p = policy_from_extra({
+            "user_roles": {"U_a": "a"},
+            "roles": {"a": {"extends": "a", "toolsets": ["web"]}},
+        })
+        assert p.grant_for("U_a") == frozenset({"web"})
+
+    def test_extends_a_builtin_role(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {"publisher": {"extends": "readonly", "toolsets": ["webflow"]}},
+        })
+        grant = p.grant_for("U_pub")
+        assert BUILTIN_ROLES["readonly"] <= grant
+        assert "webflow" in grant
+
+    def test_extends_a_config_overridden_builtin(self):
+        # Overriding a built-in and extending it must see the OVERRIDE, not the
+        # shipped default — both live in the same map.
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "readonly": {"toolsets": ["web", "custom_thing"]},
+                "publisher": {"extends": "readonly"},
+            },
+        })
+        assert p.grant_for("U_pub") == frozenset({"web", "custom_thing"})
+
+    def test_extends_admin_inherits_the_wildcard(self):
+        # Legal and deliberate — asserted so it is never discovered by accident.
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {"publisher": {"extends": "admin"}},
+        })
+        assert p.can_use_tool("U_pub", "terminal") is True
+
+    def test_extends_wrong_type_is_ignored(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {"publisher": {"extends": 42, "toolsets": ["webflow"]}},
+        })
+        assert p.grant_for("U_pub") == frozenset({"webflow"})
+
+    def test_extends_does_not_activate_rbac_on_its_own(self):
+        # Activation stays keyed to user_roles presence — the boundary that
+        # keeps installs which never opted into RBAC byte-for-byte unchanged.
+        p = policy_from_extra({
+            "roles": {
+                "base": {"toolsets": ["web"]},
+                "publisher": {"extends": "base"},
+            },
+        })
+        assert p.enabled is False
+
+    def test_extends_does_not_weaken_deny_until_assigned(self):
+        p = policy_from_extra({
+            "user_roles": {"U_pub": "publisher"},
+            "roles": {
+                "base": {"toolsets": ["web"]},
+                "publisher": {"extends": "base"},
+            },
+        })
+        assert p.is_authorized("U_nobody") is False
+        assert p.grant_for("U_nobody") is None
