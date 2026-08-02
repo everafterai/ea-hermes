@@ -57,6 +57,13 @@ subprocess per gateway start. `_resolve_stdio_command`
 against `~/.hermes/node/bin`, `~/.local/bin`, and `/usr/local/bin`, so a
 Hermes-managed Node install is found without an absolute path.
 
+**Verified on the VM (2026-08-02):** `node v22.22.3`, `npx` at
+`/home/shaidiamant/.local/bin/npx`. That path is one of the explicit fallbacks
+above, so a bare `command: npx` resolves even under a minimal systemd `PATH` —
+*provided the gateway service runs as the `shaidiamant` user*, since the
+fallback is built from `os.path.expanduser("~")` in the gateway process. If the
+service ever runs as a different user, switch to the absolute path.
+
 ## Design
 
 ### 1. MCP server block
@@ -260,8 +267,9 @@ act.
 
 ## Verification
 
-1. **Prerequisite (blocking):** `node --version` ≥ 22.3 on the VM and `npx`
-   resolvable from the gateway's `PATH`.
+1. ~~**Prerequisite (blocking):** `node --version` ≥ 22.3 on the VM and `npx`
+   resolvable from the gateway's `PATH`.~~ **Cleared 2026-08-02** — v22.22.3,
+   `npx` at `/home/shaidiamant/.local/bin/npx`.
 2. `hermes mcp list` shows `webflow` enabled; `hermes mcp test webflow` connects
    without an OAuth prompt and lists exactly the 15 included tools under their
    dispatched `mcp_webflow_*` names.
