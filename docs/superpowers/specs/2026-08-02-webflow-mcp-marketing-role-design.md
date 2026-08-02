@@ -26,10 +26,13 @@ issue-tracking channels) and `readonly` must not get it either.
 
 ## Scope
 
-**No code changes.** Every edit lands in the VM's `~/.hermes/config.yaml`. The
-`marketing` role already exists as a custom role under `slack.roles`, granted to
-user `U02S08M50S3` and to channel `C0BCX83K82V` via `channel_roles`; it stays
-unchanged, and a new single-member role carries the Webflow grant (§4).
+**One small code change plus config.** The code change is role inheritance
+(`extends`) in [gateway/tool_access.py](../../../gateway/tool_access.py) (§4);
+everything else lands in the VM's `~/.hermes/config.yaml`. The `marketing` role
+already exists as a custom role under `slack.roles`, granted to user
+`U02S08M50S3` (Adi Gorelik) and to channel `C0BCX83K82V` via `channel_roles`; it
+stays unchanged, and a new single-member role composed via `extends` carries the
+Webflow grant (§5).
 
 Out of scope for v1: Webflow Designer manipulation (elements, styles, variables,
 components), CMS schema changes, static-page editing, and site custom code.
@@ -191,29 +194,89 @@ never written to the permanent allowlist.
 agent legitimately needs to retract a mistaken draft; destroying a published
 item should still take a human beat.
 
-### 4. RBAC grant — a dedicated single-user role
+### 4. Role inheritance (`extends`) — the one code change
 
-Webflow must reach **one specific user**, not everyone who holds `marketing`.
-This matters because `marketing` is granted two ways: to user `U02S08M50S3` via
-`user_roles`, *and* to every poster in `C0BCX83K82V` via `channel_roles`.
-Adding Webflow to the `marketing` role would hand it to any teammate who posts
-in that channel.
+**Why this is needed.** A user holds exactly one role. `_coerce_user_roles`
+([gateway/tool_access.py](../../../gateway/tool_access.py) l.92-101) maps
+`{user_id: role_name}` through `_coerce_str`, so a YAML list value is
+stringified rather than treated as multiple roles. Verified empirically:
 
-The policy has no per-user toolset list — `user_roles` maps each user to exactly
-one role name — so per-user scoping is expressed as a role with one member:
+```yaml
+user_roles:
+  U02S08M50S3: [marketing, publisher]
+```
+```
+tool_access: user U02S08M50S3 assigned undefined role
+             '['marketing', 'publisher']' — denying
+is_authorized -> False
+```
+
+The user is **denied entirely**, fail-closed but silently — only a log line
+marks it. So composing capabilities by assigning two roles is not possible
+today.
+
+Without inheritance, `marketing_publisher` must hand-copy all 15 of
+`marketing`'s toolsets plus the 2 Webflow entries. That duplication is a
+security-relevant drift hazard, not merely untidy: the failure is silent and
+asymmetric. A toolset added to `marketing` later leaves `marketing_publisher`
+quietly lacking it, so the *more* privileged user appears *less* privileged, and
+nothing in the system flags the divergence.
+
+**Design.** `_coerce_roles`
+([gateway/tool_access.py](../../../gateway/tool_access.py) l.124-151) gains an
+optional `extends` key accepting a role name or a list of them. A role's
+effective toolsets are its own plus the transitive union of everything it
+extends:
 
 ```yaml
 slack:
   roles:
-    marketing:            # unchanged — no Webflow
+    marketing:                    # unchanged
       toolsets: [ web, vision, session_search, memory, image_gen, file,
                   skills, browser, google_docs, google_sheets, google_drive,
                   notion, marketing, slack_post, slack_react ]
-    marketing_publisher:  # marketing + Webflow; exactly one member
-      toolsets: [ web, vision, session_search, memory, image_gen, file,
-                  skills, browser, google_docs, google_sheets, google_drive,
-                  notion, marketing, slack_post, slack_react,
-                  webflow, mcp-webflow ]
+    webflow_publisher:            # small, reusable capability role
+      toolsets: [ webflow, mcp-webflow ]
+    marketing_publisher:          # composition — nothing duplicated
+      extends: [ marketing, webflow_publisher ]
+```
+
+Resolution is two-pass: collect every role's own toolsets first, then resolve
+`extends` against the fully-populated map, so a role may extend one defined
+later in the YAML. This generalizes — `webflow_publisher` can later be attached
+to `operator` or any other role without editing either role's own list.
+
+**Fail-closed semantics for every edge case:**
+
+| Case | Behavior |
+|---|---|
+| `extends` names an **undefined** role | Contributes nothing; logs a warning. Never silently inherit an empty set as though it succeeded. |
+| **Cycle** (`a` extends `b` extends `a`) | Detected and broken; each role resolves to its own toolsets; logs a warning. |
+| `extends` names a **built-in** (`operator`, `readonly`) | Works, and picks up a config override of that built-in when one exists, since built-ins are seeded into the same map first. |
+| `extends: admin` | Inherits `*`. Legal and deliberate — covered by an explicit test so it is never discovered by accident. |
+| `extends` present but empty / wrong type | Contributes nothing; logs. Role keeps its own toolsets. |
+| Role extends itself | Same as a cycle — self-reference contributes nothing extra. |
+
+**Invariants preserved.** This changes only how a role's toolset *set* is
+computed. RBAC activation stays keyed to `user_roles` presence, deny-until-
+assigned is untouched, and a user with an undefined role is still denied. Both
+are explicitly re-asserted in tests.
+
+`gateway/tool_access.py` is a fork-only module, so there is no upstream-merge
+cost to changing it.
+
+### 5. RBAC grant — a dedicated single-user role
+
+Webflow must reach **one specific user** — `U02S08M50S3` (Adi Gorelik) — not
+everyone who holds `marketing`. This matters because `marketing` is granted two
+ways: to that user via `user_roles`, *and* to every poster in `C0BCX83K82V` via
+`channel_roles`. Adding Webflow to the `marketing` role would hand it to any
+teammate who posts in that channel.
+
+Given `extends` from §4, the grant is:
+
+```yaml
+slack:
   user_roles:
     U02S08M50S3: marketing_publisher   # was: marketing
   channel_roles:
@@ -238,14 +301,12 @@ not expressible in the current policy and would require a code change to
 `_effective_grant`. Accepted for v1: the constraint that was asked for is
 *which person*, and that is met exactly.
 
-**Known maintenance cost:** config roles have no inheritance —
-`_coerce_roles` reads only a flat `toolsets` list — so `marketing_publisher`
-duplicates all 15 of `marketing`'s entries. Any future edit to `marketing` must
-be mirrored, or the two silently drift. The alternative (grant on the shared
-role) was rejected because it fails the requirement outright. A YAML anchor
-(`&marketing_ts` / `*marketing_ts` plus the two extras) is not used here because
-`hermes users` rewrites `config.yaml` comment-preservingly and anchor round-trip
-behavior through that path is unverified.
+**Why not YAML anchors instead of §4's code change?** A merge key (`<<`) works
+on mappings, not lists, so there is no way to express "`marketing`'s toolsets
+*plus* two more" by aliasing alone — an anchor can only copy the list wholesale
+and then be overridden entirely. Anchors also round-trip through `hermes users`,
+which rewrites `config.yaml` comment-preservingly, with unverified results.
+`extends` is the smaller and more durable answer.
 
 Assign with `hermes users update U02S08M50S3 --role marketing_publisher`, which
 keeps `allow_admin_from` consistent, rather than hand-editing `user_roles`.
@@ -273,7 +334,7 @@ Roleless users remain denied entirely (deny-until-assigned), and `chat_only`
 resolves to a defined role granting nothing — both distinct from the
 `marketing_publisher` path above.
 
-### 5. CLI exposure (accepted, with an optional mitigation)
+### 6. CLI exposure (accepted, with an optional mitigation)
 
 The same auto-add mechanism means **local `hermes` CLI sessions on the VM also
 receive the Webflow tools**, since RBAC is a messaging-platform control and does
@@ -310,7 +371,8 @@ act.
 |---|---|---|
 | Node missing / < 22.3 on VM | Server fails to connect; MCP discovery failure is non-fatal, server is skipped | Verify before rollout; blocking prerequisite |
 | npm registry unreachable at gateway start | `npx` cannot fetch the package; server skipped, `marketing_publisher` silently loses Webflow tools | Pinned version + npm cache; consider a global pre-install for determinism |
-| `marketing` edited later without mirroring to `marketing_publisher` | The two roles drift; the publisher silently lacks a capability their teammates have | Adjacent placement in config + the comment noted in §4; no code enforces this |
+| `marketing` edited later | `marketing_publisher` inherits the change automatically | None needed — `extends` designs the drift hazard out rather than documenting around it |
+| `extends` typo names a nonexistent role | That parent contributes nothing; role keeps its own toolsets; warning logged. Does **not** silently resolve to everything | Covered by an explicit test (§4) |
 | Upstream renames a publish tool | With a pinned version, cannot happen silently; on a deliberate version bump the tool disappears from `tools.include` and connection logs a warning | Re-run `hermes mcp test webflow` on every version bump |
 | Approval glob typo | Gate silently inert — the worst case | Confirm exact dispatched names via `hermes mcp test webflow` before trusting |
 | Token scoped too broadly | Agent can touch non-marketing sites | Scope the token at issue time |
@@ -334,8 +396,13 @@ act.
    `U02S08M50S3` but also passes for anyone else in that channel, the grant
    landed on the wrong role.
 7. Slack, as the `readonly` user (`U01SN6Y7V8A`): denied on both paths.
-8. `scripts/run_tests.sh tests/gateway/` — no code changed, so this is a
-   regression check only.
+8. `scripts/run_tests.sh tests/gateway/test_tool_access.py` — the new `extends`
+   tests pass alongside the existing RBAC suite, confirming activation and
+   deny-until-assigned are unchanged.
+9. `scripts/run_tests.sh tests/gateway/` — broader regression check.
+10. Sanity-check the composition itself before deploying: `marketing_publisher`
+    resolves to exactly `marketing`'s 15 toolsets plus `webflow` and
+    `mcp-webflow`, and `marketing` still resolves to 15 with no Webflow.
 
 ## Open question (non-blocking)
 
