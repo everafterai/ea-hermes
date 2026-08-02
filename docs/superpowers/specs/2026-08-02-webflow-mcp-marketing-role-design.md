@@ -251,7 +251,7 @@ to `operator` or any other role without editing either role's own list.
 | Case | Behavior |
 |---|---|
 | `extends` names an **undefined** role | Contributes nothing; logs a warning. Never silently inherit an empty set as though it succeeded. |
-| **Cycle** (`a` extends `b` extends `a`) | Detected and broken; each role resolves to its own toolsets; logs a warning. |
+| **Cycle** (`a` extends `b` extends `a`) | Cycle cut when detected; each role unions its own toolsets with parents reachable before the break. Both resolve to their union (e.g., `{web, notion}`); bounded to cycle membership. Logs warning. |
 | `extends` names a **built-in** (`operator`, `readonly`) | Works, and picks up a config override of that built-in when one exists, since built-ins are seeded into the same map first. |
 | `extends: admin` | Inherits `*`. Legal and deliberate — covered by an explicit test so it is never discovered by accident. |
 | `extends` present but empty / wrong type | Contributes nothing; logs. Role keeps its own toolsets. |
