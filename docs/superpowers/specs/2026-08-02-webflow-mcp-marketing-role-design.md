@@ -1,9 +1,9 @@
-# Webflow MCP for the `marketing` Role — Design
+# Webflow MCP for a Single Marketing User — Design
 
 **Date:** 2026-08-02
 **Status:** Approved design, pre-implementation
-**Topic:** Wire Webflow's MCP server into the VM gateway, reachable only by the
-`marketing` RBAC role, draft-first with an approval gate on publish
+**Topic:** Wire Webflow's MCP server into the VM gateway, reachable by exactly
+one user via a dedicated RBAC role, draft-first with an approval gate on publish
 **Related:** [Slack Tool RBAC design](2026-05-31-slack-tool-rbac-design.md),
 [Per-tool approval gate design](2026-07-01-per-tool-approval-gate-design.md)
 
@@ -16,15 +16,20 @@ Webflow CMS.
 
 The agent needs read access to sites and CMS collections, the ability to create
 and update CMS items as drafts, and an explicit, human-approved publish step.
-Access must be confined to the `marketing` role: the `operator` role (reachable
-by *any* poster in the two issue-tracking channels via `channel_roles`) and
-`readonly` must not get it.
+
+**Access must be confined to one named person.** The obvious move — granting
+Webflow to the existing `marketing` role — is wrong: `marketing` is also
+attached to channel `C0BCX83K82V` through `channel_roles`, which equips *every
+poster in that channel*, so the grant would silently extend to any teammate who
+drops a message there. `operator` (likewise reachable by any poster in the two
+issue-tracking channels) and `readonly` must not get it either.
 
 ## Scope
 
 **No code changes.** Every edit lands in the VM's `~/.hermes/config.yaml`. The
 `marketing` role already exists as a custom role under `slack.roles`, granted to
-user `U02S08M50S3` and to channel `C0BCX83K82V` via `channel_roles`.
+user `U02S08M50S3` and to channel `C0BCX83K82V` via `channel_roles`; it stays
+unchanged, and a new single-member role carries the Webflow grant (§4).
 
 Out of scope for v1: Webflow Designer manipulation (elements, styles, variables,
 components), CMS schema changes, static-page editing, and site custom code.
@@ -117,7 +122,7 @@ makes that a connection-time failure instead of a silent authorization hole.
 
 The package registers 42 tools. Trimming is both a safety and a prompt-cache
 decision — every included schema rides in the cached system prompt of every
-marketing-role session.
+`marketing_publisher` session.
 
 **Excluded — Designer-session tools** (`de_component_tool`, `de_page_tool`,
 `de_learn_more_about_styles`, `element_tool`, `element_builder`, `style_tool`,
@@ -186,17 +191,64 @@ never written to the permanent allowlist.
 agent legitimately needs to retract a mistaken draft; destroying a published
 item should still take a human beat.
 
-### 4. RBAC grant — both toolset names
+### 4. RBAC grant — a dedicated single-user role
+
+Webflow must reach **one specific user**, not everyone who holds `marketing`.
+This matters because `marketing` is granted two ways: to user `U02S08M50S3` via
+`user_roles`, *and* to every poster in `C0BCX83K82V` via `channel_roles`.
+Adding Webflow to the `marketing` role would hand it to any teammate who posts
+in that channel.
+
+The policy has no per-user toolset list — `user_roles` maps each user to exactly
+one role name — so per-user scoping is expressed as a role with one member:
 
 ```yaml
 slack:
   roles:
-    marketing:
-      toolsets:
-        # ...existing entries...
-        - webflow
-        - mcp-webflow
+    marketing:            # unchanged — no Webflow
+      toolsets: [ web, vision, session_search, memory, image_gen, file,
+                  skills, browser, google_docs, google_sheets, google_drive,
+                  notion, marketing, slack_post, slack_react ]
+    marketing_publisher:  # marketing + Webflow; exactly one member
+      toolsets: [ web, vision, session_search, memory, image_gen, file,
+                  skills, browser, google_docs, google_sheets, google_drive,
+                  notion, marketing, slack_post, slack_react,
+                  webflow, mcp-webflow ]
+  user_roles:
+    U02S08M50S3: marketing_publisher   # was: marketing
+  channel_roles:
+    C0BCX83K82V: marketing             # unchanged — channel posters get NO Webflow
 ```
+
+Resolution, via `_effective_grant`
+([gateway/tool_access.py](../../../gateway/tool_access.py) l.208-234):
+
+| Identity | Grant | Webflow? |
+|---|---|---|
+| `U02S08M50S3` in `C0BCX83K82V` | `marketing_publisher` ∪ `marketing` | yes |
+| `U02S08M50S3` elsewhere | `marketing_publisher` | yes |
+| Any other poster in `C0BCX83K82V` | `marketing` | no |
+| `operator` / `readonly` | own role | no |
+| `admin` | `*` | yes (wildcard, by design) |
+
+**The grant follows the user, not the channel.** `U02S08M50S3` carries Webflow
+into every channel and DM, because a user's own role applies everywhere and
+`channel_roles` is union-only. "This user, but only while in `C0BCX83K82V`" is
+not expressible in the current policy and would require a code change to
+`_effective_grant`. Accepted for v1: the constraint that was asked for is
+*which person*, and that is met exactly.
+
+**Known maintenance cost:** config roles have no inheritance —
+`_coerce_roles` reads only a flat `toolsets` list — so `marketing_publisher`
+duplicates all 15 of `marketing`'s entries. Any future edit to `marketing` must
+be mirrored, or the two silently drift. The alternative (grant on the shared
+role) was rejected because it fails the requirement outright. A YAML anchor
+(`&marketing_ts` / `*marketing_ts` plus the two extras) is not used here because
+`hermes users` rewrites `config.yaml` comment-preservingly and anchor round-trip
+behavior through that path is unverified.
+
+Assign with `hermes users update U02S08M50S3 --role marketing_publisher`, which
+keeps `allow_admin_from` consistent, rather than hand-editing `user_roles`.
 
 **Both names are required**, for the reason already documented for Stripe at
 [gateway/tool_access.py](../../../gateway/tool_access.py) l.48-61: the two RBAC
@@ -215,17 +267,11 @@ if at least one is present*. `platform_toolsets.slack` currently lists no MCP
 server names, so `explicit_mcp_servers` is empty and the `else` branch adds
 every globally enabled MCP server to the base set under its bare name. Adding
 `webflow` to `mcp_servers` is therefore sufficient to put it in the base set;
-RBAC's intersection with the role grant is what confines it to `marketing`.
+RBAC's intersection with the role grant is what confines it to a single user.
 
-Access consequences, stated explicitly:
-
-- `marketing` (user `U02S08M50S3`, and every poster in `C0BCX83K82V` via the
-  `channel_roles` grant) — full included tool surface, publish gated.
-- `admin` — also gets it, via the `*` wildcard. By design; noted because the
-  requirement was phrased as "marketing only".
-- `operator`, `readonly`, `chat_only` — denied at both the filter and the
-  backstop.
-- Roleless users — denied entirely (deny-until-assigned).
+Roleless users remain denied entirely (deny-until-assigned), and `chat_only`
+resolves to a defined role granting nothing — both distinct from the
+`marketing_publisher` path above.
 
 ### 5. CLI exposure (accepted, with an optional mitigation)
 
@@ -247,8 +293,11 @@ tools, `tools.include` controls *which* operations exist, and the approval gate
 adds a human confirmation on publish — but none of those substitute for a token
 scoped to the single marketing site rather than the whole workspace.
 
-The `marketing` role is reachable by any poster in `C0BCX83K82V` through the
-`channel_roles` grant, so that channel must stay internal.
+Confining the grant to `marketing_publisher` rather than `marketing` is what
+keeps the `channel_roles` attachment on `C0BCX83K82V` from becoming a Webflow
+grant to every poster in that channel. That channel should still stay internal —
+its posters do get the `marketing` toolset — but a message there no longer
+reaches the live website.
 
 Neither the approval gate nor RBAC is a boundary against an admin with a shell:
 `terminal` grants direct access to `.env`. This design closes the
@@ -260,7 +309,8 @@ act.
 | Failure | Behavior | Mitigation |
 |---|---|---|
 | Node missing / < 22.3 on VM | Server fails to connect; MCP discovery failure is non-fatal, server is skipped | Verify before rollout; blocking prerequisite |
-| npm registry unreachable at gateway start | `npx` cannot fetch the package; server skipped, marketing role silently loses Webflow tools | Pinned version + npm cache; consider a global pre-install for determinism |
+| npm registry unreachable at gateway start | `npx` cannot fetch the package; server skipped, `marketing_publisher` silently loses Webflow tools | Pinned version + npm cache; consider a global pre-install for determinism |
+| `marketing` edited later without mirroring to `marketing_publisher` | The two roles drift; the publisher silently lacks a capability their teammates have | Adjacent placement in config + the comment noted in §4; no code enforces this |
 | Upstream renames a publish tool | With a pinned version, cannot happen silently; on a deliberate version bump the tool disappears from `tools.include` and connection logs a warning | Re-run `hermes mcp test webflow` on every version bump |
 | Approval glob typo | Gate silently inert — the worst case | Confirm exact dispatched names via `hermes mcp test webflow` before trusting |
 | Token scoped too broadly | Agent can touch non-marketing sites | Scope the token at issue time |
@@ -274,11 +324,17 @@ act.
    without an OAuth prompt and lists exactly the 15 included tools under their
    dispatched `mcp_webflow_*` names.
 3. Cross-check every name in `approvals.require_for_tools` against that output.
-4. Slack, as `U02S08M50S3` in `C0BCX83K82V`: listing sites and creating a draft
+4. `hermes users list` shows `U02S08M50S3` as `marketing_publisher`.
+5. Slack, as `U02S08M50S3` in `C0BCX83K82V`: listing sites and creating a draft
    CMS item succeed; `sites_publish` prompts in-thread for approval.
-5. Slack, as the `readonly` user (`U01SN6Y7V8A`): Webflow tools are absent and a
-   direct invocation is blocked by the backstop.
-6. `scripts/run_tests.sh tests/gateway/` — no code changed, so this is a
+6. **The single-user check — the point of this revision.** Slack, as a *different*
+   teammate posting in `C0BCX83K82V` (who receives `marketing` via
+   `channel_roles`): Webflow tools are absent from the model's tool list, and a
+   forced invocation is blocked by the execution backstop. If this passes for
+   `U02S08M50S3` but also passes for anyone else in that channel, the grant
+   landed on the wrong role.
+7. Slack, as the `readonly` user (`U01SN6Y7V8A`): denied on both paths.
+8. `scripts/run_tests.sh tests/gateway/` — no code changed, so this is a
    regression check only.
 
 ## Open question (non-blocking)
