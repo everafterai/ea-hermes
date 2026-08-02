@@ -508,9 +508,12 @@ class TestRoleInheritance:
             },
         })
         # The cycle is broken, not fatal: each role keeps its own toolsets and
-        # picks up whatever its parent contributes before the edge is cut.
-        assert "web" in p.grant_for("U_a")
-        assert "notion" in p.grant_for("U_b")
+        # picks up whatever its parent contributes before the shared edge is
+        # cut — exact equality, not membership, so a grant-everything bug
+        # (unioning toolsets across ALL roles instead of just the extends
+        # graph) can't slip through on a fixture with only two toolsets.
+        assert p.grant_for("U_a") == frozenset({"web", "notion"})
+        assert p.grant_for("U_b") == frozenset({"web", "notion"})
 
     def test_role_extending_itself_is_not_fatal(self):
         p = policy_from_extra({
