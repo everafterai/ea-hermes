@@ -711,6 +711,31 @@ class TestLoadGatewayConfig:
             "123456": {"model": "claude-opus-4", "provider": "anthropic"},
         }
 
+    def test_bridges_user_names_from_config_yaml(self, tmp_path, monkeypatch):
+        """``user_names`` must reach ``extra`` beside ``user_roles``.
+
+        The ``ownership`` tool resolves "transfer this to Bob" through this map;
+        without the bridge it silently sees no directory and accepts any string
+        as a user id, writing records nobody can be notified about. Numeric ids
+        are stringified because YAML parses them as ints.
+        """
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "slack:\n"
+            "  user_roles:\n"
+            "    U_ALICE: operator\n"
+            "  user_names:\n"
+            "    U_ALICE: Alice\n"
+            "    123456: Bob\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        extra = load_gateway_config().platforms[Platform.SLACK].extra
+        assert extra["user_names"] == {"U_ALICE": "Alice", "123456": "Bob"}
+        assert extra["user_roles"] == {"U_ALICE": "operator"}
+
     def test_channel_models_not_bridged_for_discord(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

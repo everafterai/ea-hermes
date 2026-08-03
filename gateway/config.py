@@ -910,6 +910,16 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["roles"] = platform_cfg["roles"]
                 if "user_roles" in platform_cfg:
                     bridged["user_roles"] = platform_cfg["user_roles"]
+                if "user_names" in platform_cfg:
+                    # Bridged so runtime code can resolve a user id to the human
+                    # name an operator registered (the ``ownership`` tool accepts
+                    # either). Ids are stringified because YAML parses numeric
+                    # platform ids (Telegram/Discord) as ints.
+                    user_names = platform_cfg["user_names"]
+                    if isinstance(user_names, dict):
+                        bridged["user_names"] = {str(k): v for k, v in user_names.items()}
+                    else:
+                        bridged["user_names"] = user_names
                 if plat == Platform.SLACK and "channel_roles" in platform_cfg:
                     channel_roles = platform_cfg["channel_roles"]
                     if isinstance(channel_roles, dict):
