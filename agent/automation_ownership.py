@@ -252,14 +252,16 @@ def _cross_user_message(record: dict) -> str:
         f"Confirm with the user first, then re-invoke the SAME call with "
         f'confirm_cross_user_owner="{who}" to proceed (the owner will be notified). '
         "Do not confirm on the user's behalf. (Ownership is an awareness layer, "
-        "not a hard permission — but cross-user edits are gated and logged.)"
+        "not a hard permission — but cross-user edits are gated and logged.) "
+        f"For ongoing access, ask {who} to add you as a collaborator."
     )
 
 
 def _claim_nudge(key: str) -> str:
     return (
         f"This automation ({key}) has no recorded owner. If it's yours, offer to "
-        f'claim it: `hermes own claim {key}`. Proceeding with the edit.'
+        f'claim it with the `ownership` tool (action="claim", key="{key}"). '
+        "Proceeding with the edit."
     )
 
 
@@ -314,9 +316,12 @@ def register_creator(key: str, kind: str, identity: Optional[Identity]) -> None:
 
 
 def claim(key: str, kind: str, identity: Identity) -> dict:
-    if get_record(key) is not None:
+    existing = get_record(key)
+    if existing is not None:
+        owner = existing.get("owner") or {}
+        who = owner.get("display_name") or owner.get("user_id") or "another user"
         raise PermissionError(
-            f"{key} is already owned; use `hermes own transfer {key} --to <id>` to reassign."
+            f"{key} is already owned by {who}. Ask them (or an admin) to transfer it."
         )
     rec = {
         "kind": kind,
@@ -341,10 +346,32 @@ def transfer(key: str, new_owner: Identity, *, by: Identity, by_is_admin: bool =
     return rec
 
 
-def add_collaborator(key: str, ident: Identity) -> dict:
+def _require_owner_or_admin(rec: dict, by: Optional[Identity], by_is_admin: bool) -> None:
+    """Raise PermissionError unless *by* owns the record or is an admin.
+
+    Collaborator edits were historically unchecked, which let any caller add
+    themselves to another user's automation — silently bypassing the cross-user
+    gate with no notification to the owner. Enforced here rather than in each
+    caller so every surface (tool, CLI, future slash command) inherits it.
+    """
+    owner = rec.get("owner") or {}
+    if by_is_admin:
+        return
+    if by is not None and by.user_id and by.user_id == owner.get("user_id"):
+        return
+    who = owner.get("display_name") or owner.get("user_id") or "its owner"
+    raise PermissionError(
+        f"Only {who} (the owner) or an admin may change collaborators on this automation."
+    )
+
+
+def add_collaborator(
+    key: str, ident: Identity, *, by: Optional[Identity] = None, by_is_admin: bool = False
+) -> dict:
     rec = get_record(key)
     if rec is None:
         raise KeyError(f"No ownership record for {key}")
+    _require_owner_or_admin(rec, by, by_is_admin)
     rec.setdefault("collaborators", [])
     if not any(c.get("user_id") == ident.user_id for c in rec["collaborators"]):
         rec["collaborators"].append(_ident_dict(ident))
@@ -352,10 +379,13 @@ def add_collaborator(key: str, ident: Identity) -> dict:
     return rec
 
 
-def remove_collaborator(key: str, user_id: str) -> dict:
+def remove_collaborator(
+    key: str, user_id: str, *, by: Optional[Identity] = None, by_is_admin: bool = False
+) -> dict:
     rec = get_record(key)
     if rec is None:
         raise KeyError(f"No ownership record for {key}")
+    _require_owner_or_admin(rec, by, by_is_admin)
     rec["collaborators"] = [c for c in rec.get("collaborators", []) if c.get("user_id") != user_id]
     _put_record(key, rec)
     return rec
@@ -395,6 +425,42 @@ def _send_dm(platform: str, user_id: str, message: str) -> bool:
             return True
     except Exception:
         return False
+
+
+def record_ownership_change(
+    action: str,
+    key: str,
+    actor: Identity,
+    *,
+    notify: Optional[List[dict]] = None,
+    message: str = "",
+) -> None:
+    """Audit an ownership mutation and DM the people it affects.
+
+    ``notify`` is a list of owner-shaped dicts (``platform``/``user_id``/
+    ``display_name``); the acting user is never DM'd about their own action.
+    Best-effort throughout — a failed audit write or DM must never undo a
+    mutation that already landed.
+    """
+    try:
+        from agent.data_access_audit import record_access
+
+        record_access(tool="automation_ownership", action=action, target=key)
+    except Exception:
+        pass
+
+    try:
+        if not notify_enabled() or not message:
+            return
+        seen = {actor.user_id}
+        for target in notify or []:
+            user_id = (target or {}).get("user_id") or ""
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            _send_dm((target or {}).get("platform") or actor.platform, user_id, message)
+    except Exception:
+        pass
 
 
 def record_and_notify(key: str, editor: Identity, record: dict) -> None:

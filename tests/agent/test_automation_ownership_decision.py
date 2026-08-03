@@ -119,12 +119,35 @@ def test_transfer_by_admin_allowed():
     assert rec["owner"]["user_id"] == "U_BOB"
 
 
-def test_add_and_remove_collaborator():
+def test_add_and_remove_collaborator_by_owner():
     k = _own()
-    ao.add_collaborator(k, BOB)
+    ao.add_collaborator(k, BOB, by=ALICE)
     assert any(c["user_id"] == "U_BOB" for c in ao.get_record(k)["collaborators"])
-    ao.remove_collaborator(k, "U_BOB")
+    ao.remove_collaborator(k, "U_BOB", by=ALICE)
     assert all(c["user_id"] != "U_BOB" for c in ao.get_record(k)["collaborators"])
+
+
+def test_collaborator_change_by_non_owner_raises():
+    """Bob must not be able to add himself to Alice's automation — doing so
+    would silently bypass the cross-user gate with no notice to Alice."""
+    k = _own()
+    for call in (
+        lambda: ao.add_collaborator(k, BOB, by=BOB),
+        lambda: ao.remove_collaborator(k, "U_BOB", by=BOB),
+        lambda: ao.add_collaborator(k, BOB),          # no acting identity at all
+    ):
+        try:
+            call()
+            assert False, "expected PermissionError"
+        except PermissionError:
+            pass
+    assert ao.get_record(k)["collaborators"] == []
+
+
+def test_collaborator_change_by_admin_allowed():
+    k = _own()
+    ao.add_collaborator(k, BOB, by=Identity("slack", "U_ADMIN", "Admin"), by_is_admin=True)
+    assert any(c["user_id"] == "U_BOB" for c in ao.get_record(k)["collaborators"])
 
 
 def test_list_for_user():

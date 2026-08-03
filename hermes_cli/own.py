@@ -108,11 +108,15 @@ def run_own(argv: List[str]) -> int:
         if get_record(args.key) is None:
             print(f"Error: no ownership record for {args.key}")
             return 1
+        # A shell caller is an admin by definition (reaching this CLI from a
+        # messaging platform requires the ``terminal`` toolset), so the CLI
+        # keeps its unrestricted behavior while the ownership tool's callers
+        # go through the owner-or-admin check.
         if args.op == "add":
-            add_collaborator(args.key, _ident(args.user, args.name))
+            add_collaborator(args.key, _ident(args.user, args.name), by_is_admin=True)
             print(f"Added collaborator {args.user} to {args.key}")
         else:
-            remove_collaborator(args.key, args.user)
+            remove_collaborator(args.key, args.user, by_is_admin=True)
             print(f"Removed collaborator {args.user} from {args.key}")
         return 0
 

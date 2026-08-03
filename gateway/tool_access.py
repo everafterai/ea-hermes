@@ -80,9 +80,20 @@ BUILTIN_ROLES: Dict[str, FrozenSet[str]] = {
 # ``slack`` toolset isn't in the enabled set, so listing it here is inert there
 # (allowed_toolsets only ever intersects with what the platform actually offers).
 #
+# ``ownership`` (the ``ownership`` tool) is a floor for the same reason: the
+# ownership registry is administered by ``hermes own``, a CLI, and reaching a
+# CLI needs ``terminal`` — which only ``admin`` holds. That made claiming an
+# unowned automation, handing off your own, or even asking who owns something
+# admin-only, so the claim nudge told ordinary users to run a command they
+# cannot run. The tool self-enforces owner-or-admin on every mutation
+# (agent/automation_ownership._require_owner_or_admin) and refuses to act
+# without a human identity, so granting it broadly costs nothing. Gating it
+# behind a role instead would reproduce the bug the moment an operator writes a
+# custom role with ``cronjob`` or ``skills`` and forgets ``ownership``.
+#
 # Note: this does NOT apply to users with no role / an undefined role — they
 # get nothing (deny-until-assigned).
-FLOOR_TOOLSETS: FrozenSet[str] = frozenset({"clarify", "todo", "slack"})
+FLOOR_TOOLSETS: FrozenSet[str] = frozenset({"clarify", "todo", "slack", "ownership"})
 
 
 def _coerce_str(value: Any) -> str:

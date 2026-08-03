@@ -30,6 +30,25 @@ def test_unset_resolved_expands_then_caps(monkeypatch):
     assert out == ["web"]
 
 
+def test_ownership_floor_survives_the_ceiling_but_the_tool_is_inert(monkeypatch):
+    """``ownership`` is a floor toolset, so it passes the cron ceiling — but
+    cron runs with no platform identity, and the tool refuses to act without
+    one. Admitting it to the ceiling therefore grants nothing."""
+    import asyncio
+    import json
+
+    import agent.automation_ownership as ao
+    import tools.ownership_tool as ot
+
+    assert "ownership" in apply_cron_toolset_ceiling(["ownership", "terminal"], frozenset())
+
+    monkeypatch.setattr(ao, "current_identity", lambda: None)
+    for action in ("list", "show", "claim", "transfer", "collab_add", "collab_remove"):
+        out = json.loads(asyncio.run(ot._ownership_handler(
+            {"action": action, "key": "cron:j1", "user": "U_X", "to_user": "U_X"})))
+        assert "identity" in out["error"], action
+
+
 import cron.rbac_ceiling as ceiling
 
 

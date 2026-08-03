@@ -244,6 +244,33 @@ class TestSlackReactToolsetGating:
         assert p.can_use_tool("U_admin", "slack") is True
 
 
+class TestOwnershipToolsetGating:
+    """``ownership`` is a floor toolset: administering the ownership registry
+    otherwise means reaching the ``hermes own`` CLI, which needs ``terminal`` —
+    an admin-only grant. The tool self-enforces owner-or-admin on every
+    mutation, so a broad grant costs nothing."""
+
+    def test_ownership_maps_to_ownership_toolset(self):
+        import tools.ownership_tool  # noqa: F401  (register the tool)
+        from tools.registry import registry
+        assert registry.get_toolset_for_tool("ownership") == "ownership"
+
+    def test_ownership_is_floor_for_every_valid_role(self):
+        p = policy_from_extra({
+            "user_roles": {"U_chat": "chat_only", "U_ro": "readonly", "U_op": "operator"},
+        })
+        for user in ("U_chat", "U_ro", "U_op"):
+            assert p.can_use_tool(user, "ownership") is True, user
+        # And it survives the toolset filter for the most restricted role.
+        allowed = p.allowed_toolsets("U_chat", frozenset({"ownership", "terminal"}))
+        assert allowed == frozenset({"ownership"})
+
+    def test_ownership_floor_does_not_rescue_roleless_or_undefined(self):
+        p = policy_from_extra({"user_roles": {"U_ghost": "nosuchrole"}})
+        assert p.can_use_tool("U_STRANGER", "ownership") is False
+        assert p.can_use_tool("U_ghost", "ownership") is False
+
+
 class TestChannelRoles:
     """A ``channel_roles`` map ({chat_id: role}) lets the bot serve EVERY user
     in a configured channel under a fixed service role — used for issue-tracking

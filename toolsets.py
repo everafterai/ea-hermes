@@ -310,6 +310,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "ownership": {
+        "description": "Automation ownership (claim, transfer, collaborators) without a shell",
+        "tools": ["ownership"],
+        "includes": [],
+    },
+
     "yuanbao": {
         "description": "Yuanbao platform tools - group info, member queries, DM, stickers",
         "tools": [

@@ -32,11 +32,17 @@ tiers ([gateway/slash_access.py](gateway/slash_access.py)) and adds a third axis
 **which toolsets an identified platform user may invoke**, keyed to named roles.
 
 - **Built-in roles** (`BUILTIN_ROLES`): `admin` (`*`), `operator`, `readonly`,
-  `chat_only` (no tools). `FLOOR_TOOLSETS` (`clarify`, `todo`, `slack`) are granted
+  `chat_only` (no tools). `operator` deliberately **excludes `terminal`** (so an
+  operator — including a `channel_roles` poster in an issue-tracking channel —
+  can't read host secrets via `printenv`/`cat ~/.hermes/.env`; `file`/`web`/`browser`/
+  `notion`/`session_search` cover its work). `FLOOR_TOOLSETS` (`clarify`, `todo`, `slack`,
+  `ownership`) are granted
   to every valid-role user — but NOT to roleless/undefined-role users. `slack`
   (`slack_react` + `turn_end`) is a floor because reacting/closing a turn is UX,
   not a privilege — so the bot can acknowledge any user's message in a quiet
-  channel, not just an admin's.
+  channel, not just an admin's. `ownership` is a floor for the same reason —
+  administering the ownership registry otherwise means reaching the `hermes own`
+  CLI, which needs `terminal` (see "Automation ownership" below).
 - **Config lives under the top-level `slack:` block** in `~/.hermes/config.yaml`
   (`user_roles`, optional `user_names`, optional `roles`, optional `channel_roles`).
   The gateway config loader ([gateway/config.py](gateway/config.py)) bridges these
@@ -78,6 +84,36 @@ Promoting a user to `admin` keeps `allow_admin_from` (the slash-admin list) in s
 demoting/deleting removes them.
 
 ### `hermes tools rbac` — lists tools by toolset with built-in role coverage.
+
+### Fork-added toolsets — Notion, Jira, Slack thread posting
+
+Three fork-only integrations, each registered as its **own** registry toolset so RBAC
+gates them independently. All three self-heal `~/.hermes/.env` for cron/delegation runs
+that never loaded it (the same pattern), so they work headless.
+
+- **`notion_api` (`notion` toolset)** — [tools/notion_api_tool.py](tools/notion_api_tool.py).
+  Wraps the `ntn` CLI (`ntn api <v1/...> -X <METHOD>`, JSON body via **stdin**,
+  `shell=False` fixed-argv so nothing the model supplies can inject). GET/POST/PATCH/DELETE;
+  supports a `markdown` body + the `v1/pages/<id>/markdown` endpoint (ntn does
+  Markdown→blocks). Creds `NOTION_API_KEY`/`NOTION_API_TOKEN` (bridged), `NOTION_KEYRING=0`
+  for headless. **Granted to the `operator` built-in role**; cross-platform; the agent is
+  told to reach Notion ONLY through this tool (never curl/shell/python). Design:
+  [docs/superpowers/specs/2026-06-15-notion-api-tool-design.md](docs/superpowers/specs/2026-06-15-notion-api-tool-design.md).
+- **`jira_api` (`jira` toolset)** — [tools/jira_api_tool.py](tools/jira_api_tool.py).
+  **Read-only** (`_ALLOWED_METHODS = {"GET"}`; path must start `rest/`); direct `aiohttp`
+  Atlassian-Cloud basic auth, proxy-aware. Creds `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN`.
+  **Not in any built-in role** — reachable only by `admin` (`*`) or an explicit custom
+  `roles:` grant; built for a reconciliation/cron worker that reads issue status without a
+  shell. Design:
+  [docs/superpowers/specs/2026-06-28-jira-issue-status-linkage-design.md](docs/superpowers/specs/2026-06-28-jira-issue-status-linkage-design.md).
+- **`slack_post_thread` (`slack_post` toolset)** — [tools/slack_post_thread_tool.py](tools/slack_post_thread_tool.py).
+  Posts to an explicit `chat_id`+`thread_ts` via `chat.postMessage` (takes them as args, no
+  session contextvars → cron/worker safe). **Deliberately a SEPARATE, NON-FLOOR toolset** —
+  unlike the floor `slack` toolset (`slack_react`+`turn_end`), `slack_post` must be granted
+  to a role, so a valid-role user does NOT get arbitrary thread-posting for free. It is how
+  a cron/delegated sub-agent posts to Slack, since cron hard-disables the `messaging`
+  toolset that `send_message` lives in. Token via `_resolve_slack_token()` (shared with
+  `slack_react`). No design doc.
 
 ### Session visibility / multi-user isolation — [hermes_state.py](hermes_state.py)
 
@@ -137,8 +173,72 @@ claim (design:
 - **Always-on guidance:** `AUTOMATION_OWNERSHIP_GUIDANCE` is appended to the
   cached `stable` system-prompt segment ([agent/system_prompt.py](agent/system_prompt.py))
   when enabled + an editing tool is available — present every turn, no `SOUL.md` edit.
+- **`ownership` tool (`ownership` toolset, a FLOOR toolset)** —
+  [tools/ownership_tool.py](tools/ownership_tool.py). The registry used to be
+  administered only via the CLI below, which needs `terminal` — admin-only — so
+  the claim nudge told ordinary users to run a command they can't run, and an
+  owner couldn't hand off their own work. This tool exposes
+  `list | show | claim | transfer | collab_add | collab_remove` to any valid-role
+  user. The acting identity comes **only** from session contextvars (no `--user`
+  equivalent, so nobody can act as someone else); `claim` requires the item to be
+  unowned; `transfer`/`collab_*` require owner-or-admin, enforced in
+  `automation_ownership._require_owner_or_admin` so every surface shares it
+  (this closed a hole where collaborator edits were unchecked). Admin =
+  `"*" in policy.grant_for(...)`, fail-closed — **RBAC off means nobody is admin**
+  and the CLI is the override. No identity (cron/delegation) → every action
+  refused, so the floor grant is inert under the cron ceiling. **Deployment:** the
+  floor grant only intersects with what the platform offers, so `ownership` must
+  also be listed in `platform_toolsets.slack` (an explicit list shadows defaults)
+  or the tool is silently missing. Name-based targeting ("transfer to Bob") needs
+  `slack.user_names`, which [gateway/config.py](gateway/config.py) now bridges into
+  the platform `extra` alongside `user_roles`. Design:
+  [docs/superpowers/specs/2026-08-03-automation-ownership-tool-design.md](docs/superpowers/specs/2026-08-03-automation-ownership-tool-design.md).
 - **CLI:** `hermes own list|claim|transfer|collab|init` ([hermes_cli/own.py](hermes_cli/own.py));
-  `init` scaffolds an optional `${HERMES_HOME}/automations/<name>/` bundle.
+  `init` scaffolds an optional `${HERMES_HOME}/automations/<name>/` bundle, and is
+  still the only way to do so. A shell caller is treated as an admin.
+
+### Cron RBAC toolset ceiling — [cron/rbac_ceiling.py](cron/rbac_ceiling.py)
+
+Extends RBAC to **cron execution**, the one surface the three enforcement points
+miss: the scheduler runs jobs with **no platform identity** in session contextvars
+(it clears them on purpose — [cron/scheduler.py](cron/scheduler.py)), so the
+`pre_tool_call` backstop fails open (`denial_for_current_tool` returns early on
+empty identity), and a job's `enabled_toolsets` would otherwise be the **sole**
+determinant of the agent's capabilities — letting a non-admin who can author a job
+(a custom role granting `cronjob`, a `channel_roles` grant, or a direct `jobs.json`
+edit) escalate to `terminal`/host-shell. Design:
+[docs/superpowers/specs/2026-06-30-cron-rbac-toolset-ceiling-design.md](docs/superpowers/specs/2026-06-30-cron-rbac-toolset-ceiling-design.md).
+
+- **Runtime ceiling (the hard control):** `_cron_enabled_toolsets_with_ceiling`
+  ([cron/scheduler.py](cron/scheduler.py)) wraps `_resolve_cron_enabled_toolsets` at
+  the single `AIAgent` construction. `cron_owner_grant` reads the creator from the
+  **automation-ownership registry** (`cron:<job_id>`; see the Automation ownership
+  section above), resolves their *current* role via `ToolAccessPolicy`, and
+  `apply_cron_toolset_ceiling` intersects the job's toolsets with that grant. The
+  role is re-resolved each run, so a later demotion shrinks the ceiling. An **empty
+  cap (`[]`) does NOT fall back to the full default** (`model_tools.get_tool_definitions`
+  keys on `enabled_toolsets is not None`); an **unset** `enabled_toolsets` expands to
+  `get_all_toolsets()` *then* caps (no silent full-default escalation). Delegated
+  sub-agents inherit the cap for free — `delegate_task` intersects a child's toolsets
+  with the parent's ([tools/delegate_tool.py](tools/delegate_tool.py)).
+- **Create-time gate (fail-fast + the script gate):** the `cronjob` tool's
+  `_rbac_creation_error` ([tools/cronjob_tools.py](tools/cronjob_tools.py)) rejects
+  `enabled_toolsets` the creator's role can't grant, and rejects `no_agent=True` **or**
+  a `script` field unless the role grants `terminal`/`code_execution` (running a
+  script is shell-equivalent) — on **create and update**, before the job is persisted
+  or the owner notified. This is the ONLY enforcement for `no_agent`/`script` jobs
+  (they never build an agent to cap).
+- **Ownerless/roleless jobs run UNCAPPED** (fail-open — deliberate operator decision
+  so legacy/CLI-created jobs keep working). Surfaced via a `data_access_audit`
+  `ownerless-elevated` line — but only when RBAC is genuinely active
+  (`tool_access.rbac_active_anywhere`), so installs that never opted into RBAC stay
+  **byte-for-byte unchanged** (no new audit writes).
+- **No new config block.** Keyed to RBAC activation (`user_roles`) +
+  `automation_ownership.enabled`. Fail-open on any internal error (the cap is the
+  primary cron control, not a backstop). **Not a boundary against a determined admin
+  with a shell** — RBAC + the `file`-toolset grant remain the real boundary for the
+  `jobs.json`-edit path; this closes the toolset-driven escalation and makes the
+  residual visible.
 
 ### Slack quiet channels + `slack_react`
 
@@ -152,7 +252,10 @@ block in `~/.hermes/config.yaml`:
   "no response generated" warning. Resolved in [gateway/run.py](gateway/run.py)
   via `_is_quiet_channel` (matches `chat_id` or thread `parent_chat_id`).
   Errors, approvals, and clarifications still surface. **Text replies are never
-  suppressed** — the bot can always answer.
+  suppressed** — the bot can always answer. A message that arrives **mid-task** in a
+  quiet channel is silently **queued** (forced `queue` mode, with the busy-ack text and
+  the one-time `/busy` onboarding tip suppressed) instead of interrupting; `/stop` and
+  `/new` still force-cancel normally.
 - `slack_react` tool ([tools/slack_react_tool.py](tools/slack_react_tool.py)) —
   lets the agent add/remove an emoji reaction on the triggering Slack message
   (or an explicit `message_id`). Targets the message via session contextvars

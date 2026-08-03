@@ -49,7 +49,9 @@ AUTOMATION_OWNERSHIP_GUIDANCE = (
     "an automation is owned by someone else, relay the warning and get the user's "
     "explicit confirmation, then re-invoke with confirm_cross_user_owner set to the "
     "owner's name. Never confirm on the user's behalf. When a tool reports an "
-    "automation is unowned, offer to claim it (`hermes own claim <key>`). Owners and "
+    "automation is unowned, offer to claim it with the `ownership` tool "
+    '(action="claim"), which also handles transfer and collaborators — use it '
+    "rather than the `hermes own` CLI, which most users cannot reach. Owners and "
     "collaborators edit freely. Build new multi-part automations under "
     "automations/<name>/ via `hermes own init`."
 )
