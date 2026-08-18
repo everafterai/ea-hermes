@@ -85,10 +85,10 @@ demoting/deleting removes them.
 
 ### `hermes tools rbac` — lists tools by toolset with built-in role coverage.
 
-### Fork-added toolsets — Notion, Jira, Slack thread posting
+### Fork-added toolsets — Notion, Jira, Slack thread posting, Webflow assets
 
-Three fork-only integrations, each registered as its **own** registry toolset so RBAC
-gates them independently. All three self-heal `~/.hermes/.env` for cron/delegation runs
+Four fork-only integrations, each registered as its **own** registry toolset so RBAC
+gates them independently. All of them self-heal `~/.hermes/.env` for cron/delegation runs
 that never loaded it (the same pattern), so they work headless.
 
 - **`notion_api` (`notion` toolset)** — [tools/notion_api_tool.py](tools/notion_api_tool.py).
@@ -114,6 +114,23 @@ that never loaded it (the same pattern), so they work headless.
   a cron/delegated sub-agent posts to Slack, since cron hard-disables the `messaging`
   toolset that `send_message` lives in. Token via `_resolve_slack_token()` (shared with
   `slack_react`). No design doc.
+- **`webflow_asset_upload` (`webflow_assets` toolset)** — [tools/webflow_asset_tool.py](tools/webflow_asset_tool.py).
+  Uploads a **local file** to the Webflow asset CDN via the Data API's two-leg flow
+  (`POST /v2/sites/<id>/assets` with `fileName`+`fileHash` md5 → presigned S3 form →
+  multipart POST of the bytes), returning `hosted_url` for the agent to drop into a CMS
+  item. Exists because **webflow-mcp-server 1.0.0 (the latest) has NO asset-creation
+  tool** — its `asset_tool` only does `create_folder`/`get_all_assets_and_folders`/
+  `update_asset`, and is Designer-session-backed besides — so without this the agent
+  cannot get a cover image into Webflow and falls back to the dashboard in a `browser`,
+  which hits a login/human-verification wall. Cred `WEBFLOW_API_TOKEN` (needs the
+  `assets:write` scope; `WEBFLOW_TOKEN` accepted as a fallback since the MCP block
+  remaps to it). **Deliberately a separate toolset from `mcp-webflow`** — writing bytes
+  to a public CDN is not implied by reading collections — granted to the config's
+  `webflow_publisher` role alongside `webflow`/`mcp-webflow`. Reads are guarded by
+  `get_read_block_error` + `is_protected_data_path` ([agent/file_safety.py](agent/file_safety.py))
+  so a credential store or another user's session data can never be published to a CDN
+  URL. **Deployment:** must also be listed in `platform_toolsets.slack` (an explicit
+  list shadows defaults) or the tool is silently missing. No design doc.
 
 ### Session visibility / multi-user isolation — [hermes_state.py](hermes_state.py)
 

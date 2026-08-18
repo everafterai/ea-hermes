@@ -304,6 +304,16 @@ TOOLSETS = {
         "includes": [],
     },
 
+    # Separate from the MCP server's `mcp-webflow` toolset on purpose: the MCP
+    # package has NO asset-creation tool, and publishing bytes to a public CDN
+    # is a different privilege from reading collections, so it is granted on
+    # its own.
+    "webflow_assets": {
+        "description": "Upload local files to the Webflow asset CDN (Data API presigned upload)",
+        "tools": ["webflow_asset_upload"],
+        "includes": [],
+    },
+
     "slack_post": {
         "description": "Post a text message into a specific Slack thread (explicit chat_id + thread_ts)",
         "tools": ["slack_post_thread"],
