@@ -92,4 +92,14 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
         metavar="KEY",
         help="Post-setup hook key (e.g. agent_browser, camofox, kittentts)",
     )
+    # hermes tools rbac [--json] — list toolsets with built-in role coverage.
+    # Fork subcommand; registered here so it survives upstream re-extractions
+    # of this parser (see hermes_cli/tools_list.py).
+    try:
+        from hermes_cli.tools_list import register_tools_rbac_subcommand
+
+        register_tools_rbac_subcommand(tools_sub)
+    except Exception:  # pragma: no cover - never block the CLI on an optional subcommand
+        pass
+
     tools_parser.set_defaults(func=cmd_tools)

@@ -1037,6 +1037,15 @@ class TestDiscordChannelPromptsConfig:
         assert "local-llm" in raw["providers"]
         assert raw["providers"]["local-llm"]["api"] == "http://localhost:8080/v1"
 
+        # File must NOT be a defaults dump — assert specific DEFAULT_CONFIG
+        # top-level keys are absent (they should only appear via load_config's
+        # deep-merge, not be written to the user's file by migration).
+        for default_key in ("tts", "compression", "security", "whatsapp", "bedrock"):
+            assert default_key not in raw, (
+                f"{default_key} should not be in migrated config file — "
+                f"migration should use read_raw_config() to avoid defaults dump"
+            )
+
 
 class TestSlackQuietChannelsConfig:
     def test_default_config_includes_slack_quiet_channels(self):
@@ -1054,14 +1063,6 @@ class TestUserMessagePreviewConfig:
         preview = DEFAULT_CONFIG["display"]["user_message_preview"]
         assert preview["first_lines"] == 2
         assert preview["last_lines"] == 2
-        # File must NOT be a defaults dump — assert specific DEFAULT_CONFIG
-        # top-level keys are absent (they should only appear via load_config's
-        # deep-merge, not be written to the user's file by migration).
-        for default_key in ("tts", "compression", "security", "whatsapp", "bedrock"):
-            assert default_key not in raw, (
-                f"{default_key} should not be in migrated config file — "
-                f"migration should use read_raw_config() to avoid defaults dump"
-            )
 
 
 class TestEnvWriteDenylist:
