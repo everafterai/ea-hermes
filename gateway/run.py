@@ -13082,8 +13082,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # channel/DM history visible to the correct scope under session_search
         # user-isolation (fail-closed on NULL scope).  Idempotent: only fills
         # NULL columns, safe to run on every startup.
+        # Through the async boundary: this walks every session row and writes
+        # SQLite, so calling the sync store directly here would block the
+        # gateway's event loop during startup (enforced by
+        # tests/gateway/test_async_session_store.py).
         try:
-            self.session_store.reconcile_db_scope()
+            await self.async_session_store.reconcile_db_scope()
         except Exception as e:
             logger.debug("Session scope reconcile on startup failed: %s", e)
 
