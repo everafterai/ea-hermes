@@ -100,6 +100,14 @@ ul.pink li::before{background:var(--pink)}
 ul.tight li{font-size:clamp(13.5px,1.25vw,16.5px); padding-left:20px; line-height:1.45}
 ul.tight li::before{width:5px; height:5px; left:2px; opacity:.6}
 
+.mode{display:inline-block; font-family:'Poppins',sans-serif; font-weight:500; font-size:.66em;
+  letter-spacing:.07em; text-transform:uppercase; padding:2px 7px; border-radius:5px; margin-left:7px;
+  vertical-align:2px; white-space:nowrap; color:var(--ink)}
+.m-script{background:var(--tint-peach)}
+.m-agent{background:var(--tint-purple)}
+.m-hybrid{background:var(--tint-pink)}
+.legend{display:flex; flex-wrap:wrap; gap:16px; align-items:center; font-size:clamp(12px,1.15vw,14.5px); color:var(--muted)}
+.legend .mode{margin-left:0; margin-right:5px}
 .quote{border-left:4px solid; border-image:linear-gradient(180deg,var(--purple),var(--pink)) 1; padding-left:clamp(18px,2.2vw,30px)}
 .note{background:var(--ground-2); border:1px solid var(--line); border-radius:12px; padding:clamp(14px,1.7vw,22px);
   font-size:clamp(14px,1.35vw,17px); color:var(--muted)}
@@ -122,7 +130,7 @@ ul.tight li::before{width:5px; height:5px; left:2px; opacity:.6}
 
 /* worksheet */
 .sheet{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card)}
-.field{display:grid; grid-template-columns:210px 1fr; gap:20px; padding:clamp(10px,1.35vh,16px) clamp(16px,1.9vw,24px); border-top:1px solid var(--line-soft)}
+.field{display:grid; grid-template-columns:210px 1fr; gap:20px; padding:clamp(8px,1.1vh,13px) clamp(16px,1.9vw,24px); border-top:1px solid var(--line-soft)}
 .field:first-child{border-top:0}
 .field .lbl{font-weight:500; font-size:clamp(11px,1.1vw,13px); letter-spacing:.1em; text-transform:uppercase; color:var(--purple); padding-top:3px}
 .field .d{font-size:clamp(14px,1.35vw,17px); color:var(--muted)}
@@ -224,14 +232,14 @@ button:hover{color:var(--ink); border-color:var(--purple)}
 </section>
 
 <!-- 5 -->
-<section class="slide" data-title="The four blocks" data-notes="THE most important slide in the deck. Everything after this uses these four words — the demo, the worksheet, the share-back. Teach it once, properly, then keep pointing back at it.">
+<section class="slide" data-title="The four blocks" data-notes="THE most important slide in the deck. Everything after this uses these four words — the demo, the worksheet, the share-back. Teach it once, properly, then keep pointing back at it. Flag the third block as you go: the decision can be made by rules or by judgment, and the next three slides unpack what that changes.">
   <div class="inner">
     <span class="eyebrow">The one thing to leave with</span>
     <h2>Every automation is four blocks</h2>
     <div class="grid g4">
       <div class="card tint1"><div class="k">Trigger</div><p>What sets it off. Someone posts, someone asks, or a schedule fires.</p></div>
       <div class="card tint2"><div class="k">Context</div><p>What it's allowed to look at. A channel, a database, a folder, the public web.</p></div>
-      <div class="card tint3"><div class="k">Judgment</div><p>The thinking part. Read, classify, compare, decide, draft.</p></div>
+      <div class="card tint3"><div class="k">Decision</div><p>The part that works something out. Either rules you write down, or judgment you can only describe.</p></div>
       <div class="card tint1"><div class="k">Action</div><p>What it does about it. Post, file, draft, update, flag, notify.</p></div>
     </div>
   </div>
@@ -246,6 +254,77 @@ button:hover{color:var(--ink); border-color:var(--purple)}
 </section>
 
 <!-- 7 -->
+<section class="slide" data-title="Two kinds of automation" data-notes="This is the credibility slide. Saying out loud that half of what they want does not need AI is what makes everything you claim about the agentic half believable. R&amp;D in particular will trust you more after this. Land the last row hardest: a script breaks loudly, an agent can be quietly plausible — which is exactly why anything that has to be exact should be a script.">
+  <div class="inner">
+    <span class="eyebrow">Before you assume everything needs a model</span>
+    <h2>Two kinds of automation — and half of them don't think at all</h2>
+    <div class="grid g2">
+      <div class="card tint3"><div class="k">Scripts</div><p>The rule is something you can write down. Scan Jira for tickets sitting in "ready to deploy", find who owns them, nudge them. No reasoning involved — just steps, run reliably, on time, forever.</p></div>
+      <div class="card tint1"><div class="k">Agents</div><p>You can't write the rule down, only describe what good looks like. Is this message a bug report? Is this news worth anyone's attention? Turn this thread into a decision record.</p></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th></th><th>Script</th><th>Agent</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Decides by</strong></td><td>Rules you can state</td><td>Judgment you can only describe</td></tr>
+          <tr><td><strong>Same input twice</strong></td><td>Identical answer, always</td><td>Usually the same. Not guaranteed</td></tr>
+          <tr><td><strong>Costs per run</strong></td><td>Effectively nothing</td><td>Real, if small</td></tr>
+          <tr><td><strong>When it's wrong</strong></td><td>It breaks loudly</td><td>It can be quietly plausible</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-title="Which one? The write-it-down test" data-notes="Give them the test as a sentence they can apply in the brainstorm without you. Then the second half, which is the part people miss: it is not either/or. The skill is carving an idea into the part you can write down and the small part you cannot, and only handing over the second piece. Same instinct as least-information from the trust segment — keep the surface small.">
+  <div class="inner">
+    <div class="quote"><p class="big">Can you write the rule down? It's a script.<br>Can you only describe what good looks like? It needs judgment.</p></div>
+    <p class="body-lg">Most real automations are both. The skill is splitting the idea into the part you can write down and the small part you can't — then <strong>giving the agent only the second piece.</strong></p>
+    <div class="note">Same instinct as the access rule. Least information, least judgment. Every bit of either that you hand over is a bit more that can drift.</div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-title="Worked example — the Jira nudge" data-notes="Use a real one of ours rather than a hypothetical. Walk the four blocks left to right and say which engine runs each. The point that lands: three of the four blocks are plain steps. The only place judgment earns its keep is wording a nudge that a busy person will actually act on — and even that is optional. Ask the room which blocks they would have assumed needed AI.">
+  <div class="inner">
+    <span class="eyebrow">One automation, four blocks, two engines</span>
+    <h2>Nudging Jira tickets that are stuck</h2>
+    <div class="grid g4">
+      <div class="card tint3"><div class="k">Trigger</div><p>Every weekday at 9am.<span class="mode m-script">script</span></p></div>
+      <div class="card tint3"><div class="k">Context</div><p>Jira tickets sitting in "needs validation" or "ready to deploy" for more than two days.<span class="mode m-script">script</span></p></div>
+      <div class="card tint1"><div class="k">Decision</div><p>Who to nudge is a rule. How to word it so a busy person actually acts is judgment.<span class="mode m-hybrid">both</span></p></div>
+      <div class="card tint3"><div class="k">Action</div><p>DM the owner, post the summary in the release channel.<span class="mode m-script">script</span></p></div>
+    </div>
+    <p class="body-lg">Three of the four blocks are plain steps. Judgment earns its place in exactly one — and even there it's optional.</p>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-title="What Hermes does for a plain script" data-notes="This is the empowerment message and the reason scripts belong in this session at all. The barrier to a script like the Jira nudge was never the logic — it was auth, hosting, scheduling and maintenance. Every one of those is gone. Say plainly: you do not need to know Python and you do not need a server.">
+  <div class="inner">
+    <span class="eyebrow">If it's just a script, why not write it yourself?</span>
+    <h2>Because the script was never the hard part</h2>
+    <div class="grid g2">
+      <div class="card"><h3>What used to stop you</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Getting Jira, GitHub and Slack to talk to each other</li>
+        <li>Somewhere to keep the credentials</li>
+        <li>A machine to run it on, at 9am, every day</li>
+        <li>Knowing when it silently stopped working</li>
+        <li>Knowing Python</li>
+      </ul></div>
+      <div class="card tint1"><h3>What you do now</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Describe it. It writes it.</li>
+        <li>It already holds the connections</li>
+        <li>It owns the schedule</li>
+        <li>It tells you when it breaks</li>
+        <li>You change it by asking, in English</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 -->
 <section class="slide" data-title="Three-question filter" data-notes="Tell squads they must run their idea through this before pitching it. All three have to be yes for a FIRST automation. This is the single best defence against the wish-list problem.">
   <div class="inner">
     <span class="eyebrow">Is this a good first automation?</span>
@@ -253,12 +332,12 @@ button:hover{color:var(--ink); border-color:var(--purple)}
     <div class="grid g3">
       <div class="card"><div class="k">Weekly?</div><p>Does it happen at least once a week? Automating something quarterly is a hobby project.</p></div>
       <div class="card"><div class="k">Annoying?</div><p>Is it low-judgment grind — the kind of thing you'd hand to a sharp new hire?</p></div>
-      <div class="card"><div class="k">85% enough?</div><p>If it's mostly right, is it still useful? If only perfect will do, pick something else first.</p></div>
+      <div class="card"><div class="k">85% enough?</div><p>For judgment-based ones: if it's mostly right, is it still useful? If it has to be exact every time, make it a script instead.</p></div>
     </div>
   </div>
 </section>
 
-<!-- 8 -->
+<!-- 12 -->
 <section class="slide" data-title="Strong / not strong" data-notes="Be genuinely honest about the right column. A room that has heard you name the weaknesses trusts the strengths. If the cold open produced a fumble, refer back to it here.">
   <div class="inner">
     <h2>What it's good at, and what it isn't</h2>
@@ -276,7 +355,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
       <div class="card">
         <h3 style="color:var(--pink)">Not strong</h3>
         <ul class="clean pink tight" style="margin-top:12px">
-          <li>Anything where being quietly wrong is expensive — pricing, contracts, money out the door</li>
+          <li>Anything where being quietly wrong is expensive — pricing, contracts, money out the door. <strong>Make that a script.</strong></li>
           <li>Work with no clear trigger, that happens "when it happens"</li>
           <li>Judgment that depends on context nobody wrote down</li>
           <li>Things rare enough that you'd forget it exists</li>
@@ -287,7 +366,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 9 -->
+<!-- 13 -->
 <section class="slide" data-title="Trust — section open" data-notes="Deliberately placed BEFORE the brainstorm. Unresolved anxiety kills idea generation in both directions: some people won't propose anything touching data they assume is off-limits, others get quietly uneasy about being watched. Naming it out loud fixes both.">
   <div class="inner">
     <span class="eyebrow">Before you start having ideas</span>
@@ -295,7 +374,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 10 -->
+<!-- 14 -->
 <section class="slide" data-title="Access is by role" data-notes="VERIFY THE EXACT WORDING against the live config before you present this. Being loosely accurate here is worse than saying less. The honest framing: we keep access narrow on purpose, and that's a trust decision, not a technical limit.">
   <div class="inner">
     <h2>Access is granted by role — and we keep it narrow on purpose</h2>
@@ -308,7 +387,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 11 -->
+<!-- 15 -->
 <section class="slide" data-title="Least information" data-notes="The most transferable idea in the session. Most people start from 'what would I love to give it'. Starting from the other end is what makes an automation shippable this week instead of pending a conversation with you.">
   <div class="inner">
     <div class="quote"><p class="big">The first design question isn't <em>what would I love to give it.</em><br>It's <em>what is the least information this could possibly need?</em></p></div>
@@ -316,7 +395,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 12 -->
+<!-- 16 -->
 <section class="slide" data-title="Demo — The Radar" data-notes="The centrepiece. Fifteen minutes. You rehearsed this identical build yesterday, so you already know what's in the feed and which item to point at.">
   <div class="inner">
     <span class="live"><span class="pulse"></span>Live build · from scratch</span>
@@ -325,7 +404,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 13 -->
+<!-- 17 -->
 <section class="slide" data-title="What it watches for" data-notes="Land the churn point: an exec change at an account is the single best-known predictor of churn, and today we find out when the renewal call goes weird. Nobody does this now — not because it's unimportant, but because reading the news for forty companies every morning is nobody's job.">
   <div class="inner">
     <h2>Things we currently find out too late</h2>
@@ -337,7 +416,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 14 -->
+<!-- 18 -->
 <section class="slide" data-title="Show the cage first" data-notes="Put the actual role definition on screen before anything runs. Say: this is everything it can touch — it cannot read our Notion, our Slack history, our code or our Drive. Pre-empting the anxiety is what lets the room enjoy the next four minutes.">
   <div class="inner">
     <span class="eyebrow">Before we run it — here is everything it can touch</span>
@@ -351,7 +430,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 15 -->
+<!-- 19 -->
 <section class="slide" data-title="The instruction" data-notes="SLOW DOWN. Type this in Slack in front of them. The fact that this paragraph IS the entire authoring interface is a bigger mind-opener than the output. No YAML, no engineer, no ticket.">
   <div class="inner">
     <span class="eyebrow">This is the entire setup — typed into Slack</span>
@@ -360,7 +439,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 16 -->
+<!-- 20 -->
 <section class="slide" data-title="Run it now" data-notes="Don't wait for tomorrow morning — tell it to do today's pass now and let the room watch the channel fill. Then find the item about an account someone in the room owns and turn to them. After rehearsal you know which one. This is the moment the session turns.">
   <div class="inner">
     <span class="live"><span class="pulse"></span>Switch to Slack</span>
@@ -369,7 +448,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 17 -->
+<!-- 21 -->
 <section class="slide" data-title="Bridge to squads" data-notes="Say this and go straight into the squad brief. Don't let the energy dissipate into questions here — take questions during the brainstorm while you're floating.">
   <div class="inner">
     <div class="quote"><p class="big">Web, a list, a channel. Three permissions and one paragraph of English — and the company knows something this morning that it didn't know yesterday.</p></div>
@@ -377,7 +456,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 18 -->
+<!-- 22 -->
 <section class="slide" data-title="Your turn — squads" data-notes="Five minutes. Name the champions here. Hand out worksheets and scope cards. Say the rule out loud: one automation designed properly beats five sketched.">
   <div class="inner">
     <span class="eyebrow">Thirty minutes, starting now</span>
@@ -390,7 +469,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 19 -->
+<!-- 23 -->
 <section class="slide" data-title="Worksheet" data-notes="Walk through the fields once, out loud. The ACCESS field is the important one — it turns scope into something squads design within and own, rather than something you veto at share-back. If their access list is long, the idea is too big.">
   <div class="inner">
     <span class="eyebrow">Fill this in — one per squad</span>
@@ -400,6 +479,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
       <div class="field"><div class="lbl">Trigger</div><div class="d">A message, a mention, or a schedule. Which one, exactly?</div></div>
       <div class="field"><div class="lbl">Access needed</div><div class="d">Exactly which channel, database, folder or public source. If this list is long, shrink the idea.</div></div>
       <div class="field"><div class="lbl">What it works out</div><div class="d">Classify, compare, summarise, decide, draft.</div></div>
+      <div class="field"><div class="lbl">Rules or judgment</div><div class="d">Which parts could you write down as rules, and which need judgment? Give the agent only the second kind.</div></div>
       <div class="field"><div class="lbl">What it does</div><div class="d">The output, and where it lands.</div></div>
       <div class="field"><div class="lbl">Human checkpoint</div><div class="d">What a person approves — or "none needed, it's internal".</div></div>
       <div class="field"><div class="lbl">Good enough means</div><div class="d">If it's 85% right, what does that look like here?</div></div>
@@ -408,63 +488,65 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 20 -->
+<!-- 24 -->
 <section class="slide" data-title="Idea menus 1 — CS / Sales / Marketing" data-notes="Leave this up during the brainstorm, or hand each squad only their own card on paper. A blank page produces wish lists or silence; a menu produces an argument about which one is best — which is the conversation you want.">
   <div class="inner">
     <span class="eyebrow">Starting points · not a menu to order from</span>
     <h2>If your squad is stuck</h2>
+    <div class="legend"><span><span class="mode m-script">script</span>rules only</span><span><span class="mode m-agent">agent</span>needs judgment</span><span><span class="mode m-hybrid">both</span>script does the gathering, agent does the messy bit</span></div>
     <div class="grid g3">
       <div class="card"><h3>Customer Success</h3><ul class="clean tight" style="margin-top:10px">
-        <li>A Radar narrowed to just your accounts</li>
-        <li>Renewal prep pack, assembled two weeks out</li>
-        <li>Quiet-account alert: nothing in 30 days</li>
-        <li>Onboarding stall nudge to the step owner</li>
+        <li>A Radar narrowed to just your accounts<span class="mode m-agent">agent</span></li>
+        <li>Renewal prep pack, assembled two weeks out<span class="mode m-hybrid">both</span></li>
+        <li>Quiet-account alert: nothing in 30 days<span class="mode m-script">script</span></li>
+        <li>Onboarding stall nudge to the step owner<span class="mode m-script">script</span></li>
       </ul></div>
       <div class="card"><h3>Sales</h3><ul class="clean tight" style="margin-top:10px">
-        <li>Drop a domain, get a prospect brief before the call</li>
-        <li>Inbound lead research with a suggested angle</li>
-        <li>Competitor mention watch feeding battlecards</li>
-        <li>Follow-up drafted from your own call notes</li>
+        <li>Drop a domain, get a prospect brief before the call<span class="mode m-agent">agent</span></li>
+        <li>Inbound lead research with a suggested angle<span class="mode m-agent">agent</span></li>
+        <li>Competitor mention watch feeding battlecards<span class="mode m-hybrid">both</span></li>
+        <li>Follow-up drafted from your own call notes<span class="mode m-agent">agent</span></li>
       </ul></div>
       <div class="card"><h3>Marketing</h3><ul class="clean tight" style="margin-top:10px">
-        <li>One blog post into five LinkedIn variants</li>
-        <li>Competitor content watch — and what we should answer</li>
-        <li>Calendar keeper that nudges owners and drafts briefs</li>
-        <li>Review monitor surfacing quotable social proof</li>
+        <li>One blog post into five LinkedIn variants<span class="mode m-agent">agent</span></li>
+        <li>Competitor content watch — and what we should answer<span class="mode m-hybrid">both</span></li>
+        <li>Calendar keeper that nudges owners and drafts briefs<span class="mode m-hybrid">both</span></li>
+        <li>Review monitor surfacing quotable social proof<span class="mode m-agent">agent</span></li>
       </ul></div>
     </div>
   </div>
 </section>
 
-<!-- 21 -->
+<!-- 25 -->
 <section class="slide" data-title="Idea menus 2 — Support / Product / R&D" data-notes="Same as previous. Note that several of these are deliberately near-misses of what already runs in the support channels — that's fine, extending something proven is the fastest path to a working Demo Day.">
   <div class="inner">
     <span class="eyebrow">Starting points · not a menu to order from</span>
     <h2>If your squad is stuck</h2>
+    <div class="legend"><span><span class="mode m-script">script</span>rules only</span><span><span class="mode m-agent">agent</span>needs judgment</span><span><span class="mode m-hybrid">both</span>script does the gathering, agent does the messy bit</span></div>
     <div class="grid g3">
       <div class="card"><h3>Support</h3><ul class="clean tight" style="margin-top:10px">
-        <li>"Has this been reported before?" before anything is filed</li>
-        <li>First-response draft from known issues and docs</li>
-        <li>Weekly digest clustering reports into themes</li>
-        <li>Escalation watcher: critical, open past 24 hours</li>
+        <li>"Has this been reported before?" before anything is filed<span class="mode m-agent">agent</span></li>
+        <li>First-response draft from known issues and docs<span class="mode m-agent">agent</span></li>
+        <li>Weekly digest clustering reports into themes<span class="mode m-agent">agent</span></li>
+        <li>Escalation watcher: critical, open past 24 hours<span class="mode m-script">script</span></li>
       </ul></div>
       <div class="card"><h3>Product</h3><ul class="clean tight" style="margin-top:10px">
-        <li>Monthly roll-up clustering feature requests by theme</li>
-        <li>Competitor release watch from public changelogs</li>
-        <li>Spec companion drafting a PRD skeleton from a thread</li>
-        <li>What customers asked for vs what we shipped</li>
+        <li>Monthly roll-up clustering feature requests by theme<span class="mode m-agent">agent</span></li>
+        <li>Competitor release watch from public changelogs<span class="mode m-hybrid">both</span></li>
+        <li>Spec companion drafting a PRD skeleton from a thread<span class="mode m-agent">agent</span></li>
+        <li>What customers asked for vs what we shipped<span class="mode m-hybrid">both</span></li>
       </ul></div>
       <div class="card"><h3>R&amp;D</h3><ul class="clean tight" style="margin-top:10px">
-        <li>Release notes drafted from merged pull requests</li>
-        <li>Stale PR nudge to whoever's sitting on it</li>
-        <li>Incident context pack: every related past issue</li>
-        <li>Dependency and CVE watch on public advisories</li>
+        <li>Release notes drafted from merged pull requests<span class="mode m-hybrid">both</span></li>
+        <li>Stale PR nudge to whoever's sitting on it<span class="mode m-script">script</span></li>
+        <li>Incident context pack: every related past issue<span class="mode m-hybrid">both</span></li>
+        <li>Dependency and CVE watch on public advisories<span class="mode m-script">script</span></li>
       </ul></div>
     </div>
   </div>
 </section>
 
-<!-- 22 -->
+<!-- 26 -->
 <section class="slide" data-title="Share-back" data-notes="Four minutes per squad, and hold them to it — six squads at four minutes is already 24 of your 25. Use a visible timer. If you're running behind, this is the block to cut, never the build block.">
   <div class="inner">
     <span class="eyebrow">Four minutes each</span>
@@ -477,7 +559,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 23 -->
+<!-- 27 -->
 <section class="slide" data-title="Build block" data-notes="The single highest-leverage half hour of the day. A champion who has TOUCHED it will finish it; one who has only discussed it will not. Float constantly. Crude and running beats designed and pending — say that out loud when someone starts gold-plating.">
   <div class="inner">
     <span class="live"><span class="pulse"></span>Thirty minutes · champions driving</span>
@@ -486,7 +568,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 24 -->
+<!-- 28 -->
 <section class="slide" data-title="Demo Day" data-notes="Confirm the date out loud, in the room, before anyone leaves. Each champion says what will be running. The gap between 'we should build that' and 'I have to show this working in twelve days' is the whole difference between a good afternoon and a change in how the company operates.">
   <div class="inner">
     <span class="eyebrow">Two weeks from today</span>
@@ -496,7 +578,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 25 -->
+<!-- 29 -->
 <section class="slide" data-title="⚑ Prep — the week before" data-notes="FACILITATOR ONLY — don't project this. Assign champion roles in config.yaml BEFORE the session; being blocked on permissions during the build block is the most preventable way this loses momentum.">
   <div class="inner">
     <span class="eyebrow">Facilitator only</span>
@@ -520,7 +602,7 @@ button:hover{color:var(--ink); border-color:var(--purple)}
   </div>
 </section>
 
-<!-- 26 -->
+<!-- 30 -->
 <section class="slide" data-title="⚑ What goes wrong" data-notes="FACILITATOR ONLY — don't project this. Worth re-reading the morning of.">
   <div class="inner">
     <span class="eyebrow">Facilitator only</span>

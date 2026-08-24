@@ -33,6 +33,7 @@ tests/hermes_cli/test_slack_toolset_restriction.py
 tests/hermes_cli/test_tools_list.py
 tests/hermes_state/test_visibility_scope.py
 tests/plugins/test_google_drive_sa_plugin.py
+tests/test_fork_feature_inventory.py
 tests/test_slack_toolset.py
 tests/tools/test_cron_ownership.py
 tests/tools/test_cronjob_unattended_ack.py

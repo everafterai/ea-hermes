@@ -104,6 +104,15 @@ ul.check li::before{content:"✓"; font-family:'Poppins',sans-serif; font-size:1
 ul.check li{padding-left:22px}
 ul.no li::before{background:var(--pink)}
 
+.mode{display:inline-block; font-family:'Poppins',sans-serif; font-weight:500; font-size:10px;
+  letter-spacing:.07em; text-transform:uppercase; padding:2px 6px; border-radius:5px; margin-left:6px;
+  vertical-align:1px; white-space:nowrap; color:var(--ink)}
+.m-script{background:var(--tint-peach)}
+.m-agent{background:var(--tint-purple)}
+.m-hybrid{background:var(--tint-pink)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:13.5px; color:var(--muted); margin-bottom:18px}
+.legend .mode{margin-left:0; margin-right:4px}
+
 /* ---------- callout ---------- */
 .say{border-left:3px solid; border-image:linear-gradient(180deg,var(--purple),var(--pink)) 1;
   padding:4px 0 4px 20px; font-size:18px; line-height:1.55; color:var(--ink); font-family:'Poppins',sans-serif; font-weight:500; letter-spacing:-.01em}
@@ -272,7 +281,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
   <div class="blocks">
     <div class="block"><div class="k">Trigger</div><p>What sets it off. Someone posts in a channel, mentions it, or a schedule fires.</p></div>
     <div class="block"><div class="k">Context</div><p>What it's allowed to look at. A channel, a database, a folder, the public web.</p></div>
-    <div class="block"><div class="k">Judgment</div><p>The thinking part. Read, classify, compare, decide, draft.</p></div>
+    <div class="block"><div class="k">Decision</div><p>The part that works something out — either rules you write down, or judgment you can only describe.</p></div>
     <div class="block"><div class="k">Action</div><p>What it does about it. Post, file, draft, update, flag, notify.</p></div>
   </div>
   <div class="stack" style="margin-top:26px">
@@ -282,12 +291,65 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
 </section>
 
 <section>
+  <div class="eyebrow">Teaching block · the second half of the idea</div>
+  <h2>Two kinds of automation, and half of them don't think at all</h2>
+  <p class="lede">The third block has two settings, and which one you pick decides what you're building. This is the credibility segment — saying plainly that much of what the team wants needs no model at all is what makes the agentic claims believable.</p>
+  <div class="grid two">
+    <div class="card">
+      <h3>Scripts</h3>
+      <p style="margin-top:8px">The rule is something you can write down. Scan Jira for tickets sitting in "ready to deploy", work out who owns them, nudge them. No reasoning — just steps, run reliably, on time, forever.</p>
+    </div>
+    <div class="card">
+      <h3>Agents</h3>
+      <p style="margin-top:8px">You can't write the rule down, only describe what good looks like. Is this message a bug report? Is this news worth anyone's attention? Turn this thread into a decision record.</p>
+    </div>
+  </div>
+  <div class="tablewrap" style="margin-top:16px">
+    <table>
+      <thead><tr><th></th><th>Script</th><th>Agent</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Decides by</strong></td><td>Rules you can state</td><td>Judgment you can only describe</td></tr>
+        <tr><td><strong>Same input twice</strong></td><td>Identical answer, always</td><td>Usually the same. Not guaranteed</td></tr>
+        <tr><td><strong>Costs per run</strong></td><td>Effectively nothing</td><td>Real, if small</td></tr>
+        <tr><td><strong>When it's wrong</strong></td><td>It breaks loudly</td><td>It can be quietly plausible</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="stack" style="margin-top:26px">
+    <p class="say">"Can you write the rule down? It's a script. Can you only describe what good looks like? It needs judgment."</p>
+    <p>That last row of the table is the one to land hardest. A script that breaks tells you. An agent that's wrong can be quietly plausible — which is precisely why anything that has to be exact belongs on the left-hand side.</p>
+    <p><strong>Most real automations are both,</strong> and the skill is carving the idea into the part you can write down and the small part you can't, then handing over only the second piece. It's the same instinct as the access rule: least information, least judgment. Every bit of either that you give away is a bit more that can drift.</p>
+  </div>
+
+  <h3 style="margin-top:36px">Worked example — the Jira nudge</h3>
+  <p class="lede">Use one of ours rather than a hypothetical. Walk the blocks and name the engine running each.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Block</th><th>What happens</th><th>Engine</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Trigger</strong></td><td>Every weekday at 9am</td><td>Script</td></tr>
+        <tr><td><strong>Context</strong></td><td>Jira tickets in "needs validation" or "ready to deploy" for more than two days</td><td>Script</td></tr>
+        <tr><td><strong>Decision</strong></td><td>Who to nudge is a rule. How to word it so a busy person acts is judgment</td><td>Both</td></tr>
+        <tr><td><strong>Action</strong></td><td>DM the owner, post a summary in the release channel</td><td>Script</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="body" style="margin-top:14px; color:var(--muted)">Three of four blocks are plain steps. Judgment earns its place in exactly one — and even there it's optional. Ask the room which blocks they'd have assumed needed AI.</p>
+
+  <h3 style="margin-top:36px">Why a plain script still belongs in this session</h3>
+  <div class="stack">
+    <p>Because the script was never the hard part. What stopped anyone building the Jira nudge was getting Jira, GitHub and Slack to talk to each other, somewhere to keep the credentials, a machine to run it on at 9am every day, noticing when it silently stopped, and knowing Python.</p>
+    <p>All five are gone. You describe it and it writes it; it already holds the connections; it owns the schedule; it tells you when it breaks; and you change it by asking, in English. <strong>No server, no auth wiring, no Python.</strong> That's the empowerment message, and it's the reason the non-engineers in the room should care about the script half at all.</p>
+  </div>
+</section>
+
+<section>
   <h2>The three-question filter</h2>
   <p class="lede">For a first automation, all three need to be yes. Squads should apply this to their own ideas before pitching.</p>
   <div class="grid three">
     <div class="card"><h4>Frequency</h4><p>Does it happen <strong>at least weekly?</strong> Automating something quarterly is a hobby project.</p></div>
     <div class="card"><h4>Judgment load</h4><p>Is it <strong>annoying and low-judgment</strong> — the kind of thing you'd hand to a sharp new hire?</p></div>
-    <div class="card"><h4>Error tolerance</h4><p>If it's <strong>85% right</strong>, is it still useful? If only perfect will do, it's the wrong first pick.</p></div>
+    <div class="card"><h4>Error tolerance</h4><p>For judgment-based ones: if it's <strong>85% right</strong>, is it still useful? If it has to be exact every time, make it a script instead.</p></div>
   </div>
   <div class="grid two" style="margin-top:16px">
     <div class="card">
@@ -303,7 +365,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="card">
       <h4>Where it isn't</h4>
       <ul class="clean no">
-        <li>Anything where being quietly wrong is expensive — pricing, contracts, legal, money out the door</li>
+        <li>Anything where being quietly wrong is expensive — pricing, contracts, legal, money out the door. <strong>That should be a script.</strong></li>
         <li>Work with no clear trigger, that happens "when it happens"</li>
         <li>Judgment that depends on context nobody ever wrote down</li>
         <li>Anything rare enough that you'd forget it exists</li>
@@ -401,59 +463,60 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
   <div class="eyebrow">Brainstorm fuel</div>
   <h2>Seeded ideas, by function</h2>
   <p class="lede">Hand each squad only their own card. A blank page produces either wish lists or silence; a menu produces arguments about which one is best, which is exactly the conversation you want. Everything here fits a narrow scope.</p>
+  <div class="legend"><span><span class="mode m-script">script</span>rules only</span><span><span class="mode m-agent">agent</span>needs judgment</span><span><span class="mode m-hybrid">both</span>script gathers, agent handles the messy bit</span></div>
   <div class="grid two">
     <div class="squad">
       <h3><span class="dot"></span>Customer Success</h3>
       <ul class="clean">
-        <li>A Radar narrowed to just your accounts</li>
-        <li>Renewal prep pack assembled two weeks out — open issues, what shipped, recent public news</li>
-        <li>Quiet-account alert: no mention anywhere in 30 days</li>
-        <li>Onboarding stall nudge to the owner of a step that hasn't moved</li>
+        <li>A Radar narrowed to just your accounts<span class="mode m-agent">agent</span></li>
+        <li>Renewal prep pack assembled two weeks out — open issues, what shipped, recent public news<span class="mode m-hybrid">both</span></li>
+        <li>Quiet-account alert: no mention anywhere in 30 days<span class="mode m-script">script</span></li>
+        <li>Onboarding stall nudge to the owner of a step that hasn't moved<span class="mode m-script">script</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>Sales</h3>
       <ul class="clean">
-        <li>Drop a domain, get a prospect brief before the call — public web only</li>
-        <li>Inbound lead research with suggested angle and fit</li>
-        <li>Competitor mention watch feeding battlecard updates</li>
-        <li>Post-call follow-up drafted from your own notes</li>
+        <li>Drop a domain, get a prospect brief before the call — public web only<span class="mode m-agent">agent</span></li>
+        <li>Inbound lead research with suggested angle and fit<span class="mode m-agent">agent</span></li>
+        <li>Competitor mention watch feeding battlecard updates<span class="mode m-hybrid">both</span></li>
+        <li>Post-call follow-up drafted from your own notes<span class="mode m-agent">agent</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>Marketing</h3>
       <ul class="clean">
-        <li>One blog post into five LinkedIn variants, with images</li>
-        <li>Competitor content watch: what they published, what we should answer</li>
-        <li>Content calendar keeper that nudges owners and drafts the brief</li>
-        <li>Review and mention monitor, surfacing quotable social proof</li>
+        <li>One blog post into five LinkedIn variants, with images<span class="mode m-agent">agent</span></li>
+        <li>Competitor content watch: what they published, what we should answer<span class="mode m-hybrid">both</span></li>
+        <li>Content calendar keeper that nudges owners and drafts the brief<span class="mode m-hybrid">both</span></li>
+        <li>Review and mention monitor, surfacing quotable social proof<span class="mode m-agent">agent</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>Support</h3>
       <ul class="clean">
-        <li>"Has this been reported before?" checked before anything gets filed</li>
-        <li>First-response draft assembled from known issues and docs</li>
-        <li>Weekly digest clustering the week's reports into themes</li>
-        <li>Escalation watcher: anything critical still open past 24 hours</li>
+        <li>"Has this been reported before?" checked before anything gets filed<span class="mode m-agent">agent</span></li>
+        <li>First-response draft assembled from known issues and docs<span class="mode m-agent">agent</span></li>
+        <li>Weekly digest clustering the week's reports into themes<span class="mode m-agent">agent</span></li>
+        <li>Escalation watcher: anything critical still open past 24 hours<span class="mode m-script">script</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>Product</h3>
       <ul class="clean">
-        <li>Monthly roll-up clustering logged feature requests by theme</li>
-        <li>Competitor release watch from public changelogs</li>
-        <li>Spec companion drafting a PRD skeleton from a thread</li>
-        <li>Reconciling what customers asked for against what we shipped</li>
+        <li>Monthly roll-up clustering logged feature requests by theme<span class="mode m-agent">agent</span></li>
+        <li>Competitor release watch from public changelogs<span class="mode m-hybrid">both</span></li>
+        <li>Spec companion drafting a PRD skeleton from a thread<span class="mode m-agent">agent</span></li>
+        <li>Reconciling what customers asked for against what we shipped<span class="mode m-hybrid">both</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>R&amp;D</h3>
       <ul class="clean">
-        <li>Release notes drafted from merged pull requests</li>
-        <li>Stale PR nudge to the reviewer who's sitting on it</li>
-        <li>Incident context pack: pull every related past issue</li>
-        <li>Dependency and CVE watch on public advisories</li>
+        <li>Release notes drafted from merged pull requests<span class="mode m-hybrid">both</span></li>
+        <li>Stale PR nudge to the reviewer who's sitting on it<span class="mode m-script">script</span></li>
+        <li>Incident context pack: pull every related past issue<span class="mode m-hybrid">both</span></li>
+        <li>Dependency and CVE watch on public advisories<span class="mode m-script">script</span></li>
       </ul>
     </div>
   </div>
@@ -467,7 +530,8 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="field"><div class="lbl">In one line</div><div class="desc">When <em>X</em> happens, look at <em>Y</em>, work out <em>Z</em>, then do <em>W</em>.</div></div>
     <div class="field"><div class="lbl">Trigger</div><div class="desc">A message in a channel, a mention, or a schedule. Be specific about which.</div></div>
     <div class="field"><div class="lbl">Access needed</div><div class="desc">Exactly which channel, database, folder or public source. If this list is long, the idea is too big — shrink it.</div></div>
-    <div class="field"><div class="lbl">What it works out</div><div class="desc">The judgment you're asking for. Classify, compare, summarise, decide, draft.</div></div>
+    <div class="field"><div class="lbl">What it works out</div><div class="desc">Classify, compare, summarise, decide, draft.</div></div>
+    <div class="field"><div class="lbl">Rules or judgment</div><div class="desc">Which parts could you write down as rules, and which genuinely need judgment? Give the agent only the second kind.</div></div>
     <div class="field"><div class="lbl">What it does</div><div class="desc">The output, and where it lands.</div></div>
     <div class="field"><div class="lbl">Human checkpoint</div><div class="desc">What a person approves before anything leaves the building — or "none needed, it's internal".</div></div>
     <div class="field"><div class="lbl">Good enough looks like</div><div class="desc">If it's 85% right, what does that mean here, and is it still worth having?</div></div>
