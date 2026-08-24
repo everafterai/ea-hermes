@@ -1,6 +1,10 @@
 ---
 name: automation-ownership
-description: Use when building, editing, claiming, or transferring ownership of skills, cron jobs, scripts, or automation bundles in a shared multi-user Hermes — explains the ownership registry, the cross-user edit gate, and the `ownership` tool.
+description: "Own, claim, or hand off automations in a shared Hermes."
+version: 1.0.0
+author: EverAfter
+license: MIT
+platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [ownership, automations, governance, multi-user]
