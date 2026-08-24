@@ -1795,6 +1795,8 @@ def skill_manage(
     replace_all: bool = False,
     absorbed_into: str = None,
     confirm_cross_user_owner: str = None,
+    task_id: str = None,
+    session_id: str = None,
 ) -> str:
     """Public entry point for skill_manage.
 
@@ -1808,6 +1810,7 @@ def skill_manage(
             action=action, name=name, content=content, category=category,
             file_path=file_path, file_content=file_content, old_string=old_string,
             new_string=new_string, replace_all=replace_all, absorbed_into=absorbed_into,
+            task_id=task_id, session_id=session_id,
         )
         try:
             import json as _json
