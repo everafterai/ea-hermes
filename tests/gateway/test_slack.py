@@ -3016,6 +3016,13 @@ class TestAssistantThreadLifecycle:
             # connector's chat.startStream recipient fields.
             "scope_id": "T_OTHER",
             "user_id": "U_USER",
+            # The fork stamps source.message_id with the triggering ts (so
+            # slack_react can target it via HERMES_SESSION_MESSAGE_ID), which
+            # _thread_metadata_for_source forwards as reply_to_message_id.
+            # This is what makes _resolve_thread_ts's reply_in_thread=false
+            # synthetic-thread check (thread_id == reply_to) able to fire at
+            # all — it was dead while Slack sources carried message_id=None.
+            "message_id": "171.111",
         }
 
     @pytest.mark.asyncio

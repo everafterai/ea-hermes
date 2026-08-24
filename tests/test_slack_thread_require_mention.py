@@ -89,7 +89,7 @@ def test_thread_require_mention_allows_top_level_free_response():
     run(adapter._handle_slack_message(slack_event("vpn is broken", ts="100.000")))
 
     assert len(handled) == 1
-    assert handled[0].text == "vpn is broken"
+    assert handled[0].text == "[Message from Sebastian]\nvpn is broken"
     assert handled[0].source.thread_id == "100.000"
 
 
@@ -141,7 +141,7 @@ def test_thread_require_mention_allows_mentioned_thread_reply_without_sticky_thr
     )
 
     assert len(handled) == 1
-    assert handled[0].text == "update this"
+    assert handled[0].text == "[Message from Sebastian]\nupdate this"
     assert "100.000" not in adapter._mentioned_threads
 
     run(

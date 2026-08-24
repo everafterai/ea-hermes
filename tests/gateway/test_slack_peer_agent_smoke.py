@@ -140,7 +140,7 @@ class TestSlackPeerAgentSmoke:
 
         smoke_adapter.handle_message.assert_awaited_once()
         msg_event = smoke_adapter.handle_message.await_args.args[0]
-        assert msg_event.text == "summarize the deploy status", (
+        assert msg_event.text == "[Message from Smoke User]\nsummarize the deploy status", (
             "routing_logic: human @mentions must route and strip the current target mention"
         )
         assert msg_event.source.thread_id == REPLY_TS
@@ -164,7 +164,7 @@ class TestSlackPeerAgentSmoke:
 
         smoke_adapter.handle_message.assert_awaited_once()
         msg_event = smoke_adapter.handle_message.await_args.args[0]
-        assert msg_event.text == "please take over this thread", (
+        assert msg_event.text == "[Message from Smoke User]\nplease take over this thread", (
             "routing_logic: explicit peer-bot @mentions must still route in allow_bots=mentions mode"
         )
         assert smoke_adapter._mentioned_threads == set(), (
