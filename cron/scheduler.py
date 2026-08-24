@@ -5524,10 +5524,14 @@ def run_job(
 
     agent = None
 
-    # Mark this as a cron session so the approval system can apply cron_mode.
-    # This env var is process-wide and persists for the lifetime of the
-    # scheduler process — every job this process runs is a cron job.
-    os.environ["HERMES_CRON_SESSION"] = "1"
+    # NOTE: do NOT set os.environ["HERMES_CRON_SESSION"] here. Upstream scopes
+    # the cron-approval flag to this job via the HERMES_CRON_SESSION ContextVar
+    # (see the _cron_session_var token below), because a process-wide env var
+    # taints unrelated gateway/API/TUI turns running in the same process — on a
+    # shared gateway that would make every turn look like cron and inherit
+    # cron_mode's auto-approval. tools.approval._is_cron_approval_context()
+    # prefers the ContextVar and only falls back to the env var for standalone
+    # CLI entrypoints.
 
     # Export the job owner's toolset grant + acknowledged tools for the
     # per-tool approval gate (model_tools reads this via a ContextVar deep
