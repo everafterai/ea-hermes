@@ -1,0 +1,625 @@
+<title>Agent Enablement — Session Deck</title>
+<style>
+/*FONTS*/
+
+:root{
+  --purple:#8F4AFB; --pink:#F84E8E;
+  --ink:#17131F; --body:#3A3348; --muted:#6B6480;
+  --ground:#FFFFFF; --ground-2:#F7F5FB; --card:#FFFFFF;
+  --line:#E8E3F2; --line-soft:#F0ECF8;
+  --tint-purple:#F3EEFA; --tint-pink:#FCE4EC; --tint-peach:#FFEEDF;
+  --shadow:0 1px 2px rgba(23,19,31,.04), 0 10px 30px -20px rgba(23,19,31,.25);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --purple:#AC82FF; --pink:#FF7FAF;
+    --ink:#F2EEFA; --body:#CFC8DE; --muted:#948CAB;
+    --ground:#131019; --ground-2:#1A1624; --card:#1A1624;
+    --line:#2E2740; --line-soft:#241E31;
+    --tint-purple:#241C36; --tint-pink:#33202C; --tint-peach:#33261C;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px -20px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --purple:#AC82FF; --pink:#FF7FAF;
+  --ink:#F2EEFA; --body:#CFC8DE; --muted:#948CAB;
+  --ground:#131019; --ground-2:#1A1624; --card:#1A1624;
+  --line:#2E2740; --line-soft:#241E31;
+  --tint-purple:#241C36; --tint-pink:#33202C; --tint-peach:#33261C;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px -20px rgba(0,0,0,.7);
+}
+:root[data-theme="light"]{
+  --purple:#8F4AFB; --pink:#F84E8E;
+  --ink:#17131F; --body:#3A3348; --muted:#6B6480;
+  --ground:#FFFFFF; --ground-2:#F7F5FB; --card:#FFFFFF;
+  --line:#E8E3F2; --line-soft:#F0ECF8;
+  --tint-purple:#F3EEFA; --tint-pink:#FCE4EC; --tint-peach:#FFEEDF;
+  --shadow:0 1px 2px rgba(23,19,31,.04), 0 10px 30px -20px rgba(23,19,31,.25);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; overflow:hidden; background:var(--ground); color:var(--body);
+  font-family:'Lato',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,.k,.lbl,.eyebrow,.big,.time{font-family:'Poppins',sans-serif; color:var(--ink); margin:0; text-wrap:balance}
+p{margin:0}
+strong{font-weight:700; color:var(--ink)}
+em{font-style:italic}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.88em; background:var(--tint-purple); color:var(--ink); padding:.1em .4em; border-radius:5px}
+
+/* ---------- stage ---------- */
+#stage{position:fixed; inset:0}
+.slide{
+  position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center;
+  padding:clamp(40px,6vh,80px) clamp(28px,7vw,110px) clamp(72px,9vh,104px);
+  opacity:0; transform:translateX(36px); pointer-events:none;
+  transition:opacity .34s ease, transform .34s cubic-bezier(.22,.61,.36,1);
+  overflow-y:auto;
+}
+.slide.is-active{opacity:1; transform:none; pointer-events:auto}
+html:not(.js) .slide:first-of-type{opacity:1; transform:none; pointer-events:auto}
+.slide.is-past{transform:translateX(-36px)}
+@media(prefers-reduced-motion:reduce){ .slide{transition:opacity .12s linear; transform:none!important} }
+.inner{width:100%; max-width:1080px; margin:0 auto; display:flex; flex-direction:column; gap:clamp(16px,2.4vh,28px)}
+
+/* ---------- type scale ---------- */
+.eyebrow{font-weight:500; font-size:clamp(11px,1.15vw,14px); letter-spacing:.16em; text-transform:uppercase; color:var(--purple)}
+h1{font-weight:600; font-size:clamp(38px,5.6vw,74px); line-height:1.05; letter-spacing:-.03em}
+h2{font-weight:600; font-size:clamp(28px,4.1vw,50px); line-height:1.13; letter-spacing:-.025em}
+h3{font-weight:600; font-size:clamp(17px,1.7vw,22px); letter-spacing:-.01em}
+.sub{font-size:clamp(17px,1.85vw,24px); line-height:1.5; color:var(--muted); max-width:44ch}
+.big{font-weight:500; font-size:clamp(24px,3.4vw,42px); line-height:1.28; letter-spacing:-.02em; color:var(--ink)}
+.body-lg{font-size:clamp(16px,1.55vw,20px); line-height:1.6; max-width:62ch}
+
+/* ---------- title slide ---------- */
+.title-mark{display:flex; align-items:center; gap:14px}
+.title-mark .bar{width:56px; height:4px; border-radius:2px; background:linear-gradient(90deg,var(--purple),var(--pink))}
+.meta{display:flex; flex-wrap:wrap; gap:10px; margin-top:6px}
+.chip{font-family:'Poppins',sans-serif; font-weight:500; font-size:clamp(11px,1.05vw,13px); letter-spacing:.06em; text-transform:uppercase;
+  padding:7px 14px; border-radius:999px; border:1px solid var(--line); color:var(--muted)}
+
+/* ---------- generic blocks ---------- */
+.grid{display:grid; gap:clamp(10px,1.4vw,18px)}
+.g2{grid-template-columns:1fr} .g3{grid-template-columns:1fr} .g4{grid-template-columns:1fr}
+@media(min-width:780px){ .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)} }
+.card{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:clamp(16px,1.9vw,26px); box-shadow:var(--shadow)}
+.card h3{margin-bottom:8px}
+.card p{font-size:clamp(14px,1.35vw,17px); line-height:1.55; color:var(--muted)}
+.k{font-weight:600; font-size:clamp(18px,1.9vw,25px); margin-bottom:8px}
+.tint1{background:var(--tint-purple); border-color:transparent}
+.tint2{background:var(--tint-pink); border-color:transparent}
+.tint3{background:var(--tint-peach); border-color:transparent}
+
+ul.clean{list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:clamp(8px,1.1vh,14px)}
+ul.clean li{position:relative; padding-left:26px; font-size:clamp(15px,1.55vw,20px); line-height:1.5}
+ul.clean li::before{content:""; position:absolute; left:3px; top:.6em; width:7px; height:7px; border-radius:50%; background:var(--purple)}
+ul.pink li::before{background:var(--pink)}
+ul.tight li{font-size:clamp(13.5px,1.25vw,16.5px); padding-left:20px; line-height:1.45}
+ul.tight li::before{width:5px; height:5px; left:2px; opacity:.6}
+
+.quote{border-left:4px solid; border-image:linear-gradient(180deg,var(--purple),var(--pink)) 1; padding-left:clamp(18px,2.2vw,30px)}
+.note{background:var(--ground-2); border:1px solid var(--line); border-radius:12px; padding:clamp(14px,1.7vw,22px);
+  font-size:clamp(14px,1.35vw,17px); color:var(--muted)}
+.prompt{background:var(--tint-purple); border-radius:12px; padding:clamp(18px,2.2vw,30px);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:clamp(14px,1.55vw,20px); line-height:1.65; color:var(--ink)}
+.live{display:inline-flex; align-items:center; gap:9px; font-family:'Poppins',sans-serif; font-weight:500;
+  font-size:clamp(11px,1.05vw,13px); letter-spacing:.14em; text-transform:uppercase; color:var(--pink)}
+.live .pulse{width:9px; height:9px; border-radius:50%; background:var(--pink)}
+
+/* run of show list */
+.ros{display:flex; flex-direction:column}
+.ros .r{display:grid; grid-template-columns:104px 1fr; gap:clamp(14px,2vw,28px); padding:clamp(9px,1.25vh,15px) 0; border-top:1px solid var(--line-soft); align-items:baseline}
+.ros .r:first-child{border-top:0}
+.ros .time{font-weight:600; font-size:clamp(14px,1.4vw,18px); font-variant-numeric:tabular-nums; color:var(--ink)}
+.ros .r.hi .time{color:var(--purple)}
+.ros .lbl{font-size:clamp(15px,1.5vw,19px); color:var(--body)}
+.ros .r.dim{opacity:.55}
+.ros .dur{font-size:clamp(12px,1.15vw,14.5px); color:var(--muted); white-space:nowrap}
+.ros .r{grid-template-columns:104px 1fr auto}
+
+/* worksheet */
+.sheet{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card)}
+.field{display:grid; grid-template-columns:210px 1fr; gap:20px; padding:clamp(10px,1.35vh,16px) clamp(16px,1.9vw,24px); border-top:1px solid var(--line-soft)}
+.field:first-child{border-top:0}
+.field .lbl{font-weight:500; font-size:clamp(11px,1.1vw,13px); letter-spacing:.1em; text-transform:uppercase; color:var(--purple); padding-top:3px}
+.field .d{font-size:clamp(14px,1.35vw,17px); color:var(--muted)}
+@media(max-width:640px){ .field{grid-template-columns:1fr; gap:5px} .ros .r{grid-template-columns:1fr; gap:2px} }
+
+/* table */
+.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--card)}
+table{border-collapse:collapse; width:100%; min-width:640px}
+th,td{text-align:left; padding:clamp(9px,1.15vh,14px) clamp(13px,1.5vw,20px); border-top:1px solid var(--line-soft);
+  font-size:clamp(13.5px,1.3vw,16.5px); vertical-align:top}
+th{font-family:'Poppins',sans-serif; font-weight:500; font-size:clamp(10.5px,1vw,12.5px); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); border-top:0}
+
+/* ---------- chrome ---------- */
+#bar{position:fixed; top:0; left:0; height:3px; background:linear-gradient(90deg,var(--purple),var(--pink));
+  width:0; transition:width .34s cubic-bezier(.22,.61,.36,1); z-index:40}
+#chrome{position:fixed; left:0; right:0; bottom:0; height:56px; display:flex; align-items:center;
+  justify-content:space-between; padding:0 clamp(18px,3vw,34px); z-index:60; pointer-events:none}
+#chrome .side{display:flex; align-items:center; gap:12px; pointer-events:auto}
+.tag{font-family:'Poppins',sans-serif; font-weight:500; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted)}
+.count{font-family:'Poppins',sans-serif; font-weight:600; font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums}
+button{font-family:'Poppins',sans-serif; font-weight:500; font-size:12px; letter-spacing:.04em; color:var(--muted);
+  background:var(--card); border:1px solid var(--line); border-radius:8px; padding:7px 12px; cursor:pointer}
+button:hover{color:var(--ink); border-color:var(--purple)}
+.nav{width:34px; height:34px; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:15px}
+
+/* notes */
+#notes{position:fixed; left:0; right:0; bottom:0; background:var(--card); border-top:2px solid var(--purple);
+  padding:20px clamp(18px,3vw,34px) 68px; z-index:35; display:none; max-height:46vh; overflow-y:auto}
+#notes.on{display:block}
+#notes .lbl{font-family:'Poppins',sans-serif; font-weight:500; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--purple); margin-bottom:8px}
+#notes p{font-size:16px; line-height:1.6; max-width:88ch; color:var(--body)}
+
+/* jump menu */
+#jump{position:fixed; inset:0; background:var(--ground); z-index:50; display:none; overflow-y:auto; padding:clamp(30px,6vh,60px) clamp(24px,5vw,60px) 80px}
+#jump.on{display:block}
+#jump h2{margin-bottom:22px}
+.jgrid{display:grid; gap:8px; grid-template-columns:1fr}
+@media(min-width:700px){ .jgrid{grid-template-columns:repeat(3,1fr)} }
+.jitem{display:flex; gap:12px; align-items:baseline; text-align:left; width:100%; background:none; border:1px solid transparent;
+  border-radius:8px; padding:9px 12px; font-family:'Lato',sans-serif; font-size:15px; color:var(--body)}
+.jitem:hover{border-color:var(--line); background:var(--ground-2); color:var(--ink)}
+.jitem .jn{font-family:'Poppins',sans-serif; font-weight:600; font-size:12px; color:var(--purple); font-variant-numeric:tabular-nums; min-width:22px}
+.jitem.cur{border-color:var(--purple); background:var(--tint-purple); color:var(--ink)}
+:focus-visible{outline:2px solid var(--purple); outline-offset:3px}
+</style>
+
+<div id="bar"></div>
+<div id="stage">
+
+<!-- 1 -->
+<section class="slide" data-title="Title" data-notes="Don't start with slides. Start with the cold open on the next slide — open Slack live and take questions from the room. This title is just what's on screen as people sit down.">
+  <div class="inner">
+    <div class="title-mark"><span class="bar"></span><span class="eyebrow">Base · Agent Enablement</span></div>
+    <h1>Three hours to turn twenty people into automation owners</h1>
+    <p class="sub">What our agent can do, what it is deliberately not allowed to do, and what your team is going to build first.</p>
+    <div class="meta"><span class="chip">3 hours</span><span class="chip">6 squads</span><span class="chip">1 champion each</span><span class="chip">Demo Day in 2 weeks</span></div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="slide" data-title="Cold open — ask it anything" data-notes="No preamble. Open Slack, take real questions shouted from the room, let it answer live. Ten minutes. If it fumbles one, keep it — that's the honest opening to the good-at / bad-at conversation and it buys credibility for everything after. Don't defend it.">
+  <div class="inner">
+    <span class="live"><span class="pulse"></span>Live · no slides</span>
+    <h1>Ask it anything.</h1>
+    <p class="sub">Shout a question about this company. Anything you'd normally have to go digging for.</p>
+  </div>
+</section>
+
+<!-- 3 -->
+<section class="slide" data-title="Agenda" data-notes="Twenty seconds on this. The point is to show that the second half is theirs, not yours — people listen differently to a teaching block when they know they'll have to produce something with it.">
+  <div class="inner">
+    <span class="eyebrow">Where we're going</span>
+    <h2>Today</h2>
+    <div class="ros">
+      <div class="r hi"><span class="time">0:00</span><span class="lbl">Ask it anything</span><span class="dur">10 min</span></div>
+      <div class="r"><span class="time">0:10</span><span class="lbl">What this actually is</span><span class="dur">30 min</span></div>
+      <div class="r"><span class="time">0:40</span><span class="lbl">What it can and cannot see</span><span class="dur">15 min</span></div>
+      <div class="r hi"><span class="time">0:55</span><span class="lbl">Demo — built live, from scratch</span><span class="dur">15 min</span></div>
+      <div class="r dim"><span class="time">1:10</span><span class="lbl">Break</span><span class="dur">10 min</span></div>
+      <div class="r hi"><span class="time">1:25</span><span class="lbl">Your squad designs one automation</span><span class="dur">30 min</span></div>
+      <div class="r"><span class="time">1:55</span><span class="lbl">Share-back</span><span class="dur">25 min</span></div>
+      <div class="r hi"><span class="time">2:20</span><span class="lbl">Champions build it, here, now</span><span class="dur">30 min</span></div>
+      <div class="r"><span class="time">2:50</span><span class="lbl">Commitments and Demo Day</span><span class="dur">10 min</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section class="slide" data-title="It's already running" data-notes="The reveal. Proof beats promises — most of the room has no idea this has been live for weeks. Show the actual channels if you can. This is the moment the session stops being theoretical.">
+  <div class="inner">
+    <span class="eyebrow">Before we talk about what it could do</span>
+    <h2>It has been quietly working here for weeks</h2>
+    <div class="grid g2">
+      <div class="card tint1"><div class="k">#production-issues</div><p>Every issue reported in the channel is read, given a severity, tracked into Notion, and updated as the thread moves. Nobody files anything by hand.</p></div>
+      <div class="card tint2"><div class="k">#first-tier-support</div><p>Lower-priority bugs captured the same way, so they stop evaporating into scrollback.</p></div>
+    </div>
+    <p class="body-lg">Nobody was asked to change how they work. People report issues the way they always did — the tracking just started happening.</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section class="slide" data-title="The four blocks" data-notes="THE most important slide in the deck. Everything after this uses these four words — the demo, the worksheet, the share-back. Teach it once, properly, then keep pointing back at it.">
+  <div class="inner">
+    <span class="eyebrow">The one thing to leave with</span>
+    <h2>Every automation is four blocks</h2>
+    <div class="grid g4">
+      <div class="card tint1"><div class="k">Trigger</div><p>What sets it off. Someone posts, someone asks, or a schedule fires.</p></div>
+      <div class="card tint2"><div class="k">Context</div><p>What it's allowed to look at. A channel, a database, a folder, the public web.</p></div>
+      <div class="card tint3"><div class="k">Judgment</div><p>The thinking part. Read, classify, compare, decide, draft.</p></div>
+      <div class="card tint1"><div class="k">Action</div><p>What it does about it. Post, file, draft, update, flag, notify.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 6 -->
+<section class="slide" data-title="The sentence" data-notes="Say it slowly, twice. Then the second half: most ideas that feel impossible are missing exactly ONE block, usually the trigger. 'I wish someone watched churn risk' has no trigger. 'Every Monday, flag accounts untouched for 30 days' does. Coaching people from the first sentence to the second is most of what you'll do during the brainstorm.">
+  <div class="inner">
+    <div class="quote"><p class="big">If you can say — when <em>X</em> happens, go look at <em>Y</em>, work out <em>Z</em>, then do <em>W</em> — it's automatable.</p></div>
+    <p class="body-lg">And if you can't say it yet, that's useful too. It means one of the four blocks is missing — almost always the trigger.</p>
+  </div>
+</section>
+
+<!-- 7 -->
+<section class="slide" data-title="Three-question filter" data-notes="Tell squads they must run their idea through this before pitching it. All three have to be yes for a FIRST automation. This is the single best defence against the wish-list problem.">
+  <div class="inner">
+    <span class="eyebrow">Is this a good first automation?</span>
+    <h2>All three have to be yes</h2>
+    <div class="grid g3">
+      <div class="card"><div class="k">Weekly?</div><p>Does it happen at least once a week? Automating something quarterly is a hobby project.</p></div>
+      <div class="card"><div class="k">Annoying?</div><p>Is it low-judgment grind — the kind of thing you'd hand to a sharp new hire?</p></div>
+      <div class="card"><div class="k">85% enough?</div><p>If it's mostly right, is it still useful? If only perfect will do, pick something else first.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-title="Strong / not strong" data-notes="Be genuinely honest about the right column. A room that has heard you name the weaknesses trusts the strengths. If the cold open produced a fumble, refer back to it here.">
+  <div class="inner">
+    <h2>What it's good at, and what it isn't</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3 style="color:var(--purple)">Strong</h3>
+        <ul class="clean tight" style="margin-top:12px">
+          <li>Reading far more than a person has time to read</li>
+          <li>Doing the same careful thing every time, without drift</li>
+          <li>Watching things nobody has been assigned to watch</li>
+          <li>Getting a first draft to 80% in seconds</li>
+          <li>Sorting a messy stream of anything into categories</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="color:var(--pink)">Not strong</h3>
+        <ul class="clean pink tight" style="margin-top:12px">
+          <li>Anything where being quietly wrong is expensive — pricing, contracts, money out the door</li>
+          <li>Work with no clear trigger, that happens "when it happens"</li>
+          <li>Judgment that depends on context nobody wrote down</li>
+          <li>Things rare enough that you'd forget it exists</li>
+          <li>Being the last check before something reaches a customer</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-title="Trust — section open" data-notes="Deliberately placed BEFORE the brainstorm. Unresolved anxiety kills idea generation in both directions: some people won't propose anything touching data they assume is off-limits, others get quietly uneasy about being watched. Naming it out loud fixes both.">
+  <div class="inner">
+    <span class="eyebrow">Before you start having ideas</span>
+    <h1>What it can see,<br>and what it can't</h1>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-title="Access is by role" data-notes="VERIFY THE EXACT WORDING against the live config before you present this. Being loosely accurate here is worse than saying less. The honest framing: we keep access narrow on purpose, and that's a trust decision, not a technical limit.">
+  <div class="inner">
+    <h2>Access is granted by role — and we keep it narrow on purpose</h2>
+    <ul class="clean">
+      <li><strong>A role is a named list of tools.</strong> Not a seniority level. Today we run admin, operator, marketing and readonly.</li>
+      <li><strong>It doesn't roam.</strong> It works in the conversation it's been invited into, with the tools its role holds. It is not reading the company in the background.</li>
+      <li><strong>Every squad gets a written scope card</strong> — exactly which channel, which database, which folder.</li>
+      <li><strong>Nothing customer-facing goes out unreviewed.</strong> Drafting is the job. Sending stays with a person.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-title="Least information" data-notes="The most transferable idea in the session. Most people start from 'what would I love to give it'. Starting from the other end is what makes an automation shippable this week instead of pending a conversation with you.">
+  <div class="inner">
+    <div class="quote"><p class="big">The first design question isn't <em>what would I love to give it.</em><br>It's <em>what is the least information this could possibly need?</em></p></div>
+    <p class="body-lg">An automation that needs a trust decision waits on a conversation. An automation built on public information and one output channel ships this week. <strong>Start outside the walls, and earn your way in.</strong></p>
+  </div>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-title="Demo — The Radar" data-notes="The centrepiece. Fifteen minutes. You rehearsed this identical build yesterday, so you already know what's in the feed and which item to point at.">
+  <div class="inner">
+    <span class="live"><span class="pulse"></span>Live build · from scratch</span>
+    <h1>The Radar</h1>
+    <p class="sub">Every weekday at 8am, it checks the outside world for news about our customers and prospects — and posts only what matters.</p>
+  </div>
+</section>
+
+<!-- 13 -->
+<section class="slide" data-title="What it watches for" data-notes="Land the churn point: an exec change at an account is the single best-known predictor of churn, and today we find out when the renewal call goes weird. Nobody does this now — not because it's unimportant, but because reading the news for forty companies every morning is nobody's job.">
+  <div class="inner">
+    <h2>Things we currently find out too late</h2>
+    <div class="grid g3">
+      <div class="card tint1"><div class="k">Exec changes</div><p>Your champion just left. Best-known predictor of churn, and we usually learn it on the renewal call.</p></div>
+      <div class="card tint2"><div class="k">Funding &amp; acquisitions</div><p>New budget, new priorities, new decision-makers — an expansion window that opens and closes.</p></div>
+      <div class="card tint3"><div class="k">Launches &amp; hiring</div><p>A prospect announcing exactly the initiative we serve, or building a team around the problem we solve.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-title="Show the cage first" data-notes="Put the actual role definition on screen before anything runs. Say: this is everything it can touch — it cannot read our Notion, our Slack history, our code or our Drive. Pre-empting the anxiety is what lets the room enjoy the next four minutes.">
+  <div class="inner">
+    <span class="eyebrow">Before we run it — here is everything it can touch</span>
+    <h2>Three permissions</h2>
+    <div class="grid g3">
+      <div class="card"><div class="k">The public web</div><p>The same internet you have open right now.</p></div>
+      <div class="card"><div class="k">A list of company names</div><p>The logos already published on our own homepage. Nothing that isn't already public.</p></div>
+      <div class="card"><div class="k">One channel to post in</div><p><code>#radar</code>. That's the whole output.</p></div>
+    </div>
+    <div class="note">No customer data. No Notion workspace. No Slack history. No repo. No Drive. Watch what it can still do.</div>
+  </div>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-title="The instruction" data-notes="SLOW DOWN. Type this in Slack in front of them. The fact that this paragraph IS the entire authoring interface is a bigger mind-opener than the output. No YAML, no engineer, no ticket.">
+  <div class="inner">
+    <span class="eyebrow">This is the entire setup — typed into Slack</span>
+    <div class="prompt">Every weekday at 8am, look up recent news for each company on this list — funding, exec changes, layoffs, acquisitions, product launches, big hiring pushes. Post anything meaningful to #radar with a link and one line on why it matters to us. If there's nothing worth reporting, say nothing.</div>
+    <p class="body-lg">No config file. No ticket to R&amp;D. No engineer. That paragraph is the whole thing.</p>
+  </div>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-title="Run it now" data-notes="Don't wait for tomorrow morning — tell it to do today's pass now and let the room watch the channel fill. Then find the item about an account someone in the room owns and turn to them. After rehearsal you know which one. This is the moment the session turns.">
+  <div class="inner">
+    <span class="live"><span class="pulse"></span>Switch to Slack</span>
+    <h1>Run today's pass.</h1>
+    <p class="sub">Then find the person who owns that account, and ask them: <strong>did you know that?</strong></p>
+  </div>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-title="Bridge to squads" data-notes="Say this and go straight into the squad brief. Don't let the energy dissipate into questions here — take questions during the brainstorm while you're floating.">
+  <div class="inner">
+    <div class="quote"><p class="big">Web, a list, a channel. Three permissions and one paragraph of English — and the company knows something this morning that it didn't know yesterday.</p></div>
+    <p class="sub" style="max-width:52ch">So: what's the version of that for your team?</p>
+  </div>
+</section>
+
+<!-- 18 -->
+<section class="slide" data-title="Your turn — squads" data-notes="Five minutes. Name the champions here. Hand out worksheets and scope cards. Say the rule out loud: one automation designed properly beats five sketched.">
+  <div class="inner">
+    <span class="eyebrow">Thirty minutes, starting now</span>
+    <h2>Design one automation your team would actually use</h2>
+    <div class="grid g3">
+      <div class="card"><div class="k">Squads of 3–4</div><p>By function. Customer success, sales, marketing, support, product, R&amp;D.</p></div>
+      <div class="card"><div class="k">One champion each</div><p>They'll own the build, the scope card, and being the person you ask first.</p></div>
+      <div class="card"><div class="k">One idea, done properly</div><p>One automation designed all the way through beats five sketched.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 19 -->
+<section class="slide" data-title="Worksheet" data-notes="Walk through the fields once, out loud. The ACCESS field is the important one — it turns scope into something squads design within and own, rather than something you veto at share-back. If their access list is long, the idea is too big.">
+  <div class="inner">
+    <span class="eyebrow">Fill this in — one per squad</span>
+    <h2>The worksheet</h2>
+    <div class="sheet">
+      <div class="field"><div class="lbl">In one line</div><div class="d">When <em>X</em> happens, look at <em>Y</em>, work out <em>Z</em>, then do <em>W</em>.</div></div>
+      <div class="field"><div class="lbl">Trigger</div><div class="d">A message, a mention, or a schedule. Which one, exactly?</div></div>
+      <div class="field"><div class="lbl">Access needed</div><div class="d">Exactly which channel, database, folder or public source. If this list is long, shrink the idea.</div></div>
+      <div class="field"><div class="lbl">What it works out</div><div class="d">Classify, compare, summarise, decide, draft.</div></div>
+      <div class="field"><div class="lbl">What it does</div><div class="d">The output, and where it lands.</div></div>
+      <div class="field"><div class="lbl">Human checkpoint</div><div class="d">What a person approves — or "none needed, it's internal".</div></div>
+      <div class="field"><div class="lbl">Good enough means</div><div class="d">If it's 85% right, what does that look like here?</div></div>
+      <div class="field"><div class="lbl">Owner</div><div class="d">The champion, plus who checks it's still useful in a month.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 20 -->
+<section class="slide" data-title="Idea menus 1 — CS / Sales / Marketing" data-notes="Leave this up during the brainstorm, or hand each squad only their own card on paper. A blank page produces wish lists or silence; a menu produces an argument about which one is best — which is the conversation you want.">
+  <div class="inner">
+    <span class="eyebrow">Starting points · not a menu to order from</span>
+    <h2>If your squad is stuck</h2>
+    <div class="grid g3">
+      <div class="card"><h3>Customer Success</h3><ul class="clean tight" style="margin-top:10px">
+        <li>A Radar narrowed to just your accounts</li>
+        <li>Renewal prep pack, assembled two weeks out</li>
+        <li>Quiet-account alert: nothing in 30 days</li>
+        <li>Onboarding stall nudge to the step owner</li>
+      </ul></div>
+      <div class="card"><h3>Sales</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Drop a domain, get a prospect brief before the call</li>
+        <li>Inbound lead research with a suggested angle</li>
+        <li>Competitor mention watch feeding battlecards</li>
+        <li>Follow-up drafted from your own call notes</li>
+      </ul></div>
+      <div class="card"><h3>Marketing</h3><ul class="clean tight" style="margin-top:10px">
+        <li>One blog post into five LinkedIn variants</li>
+        <li>Competitor content watch — and what we should answer</li>
+        <li>Calendar keeper that nudges owners and drafts briefs</li>
+        <li>Review monitor surfacing quotable social proof</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- 21 -->
+<section class="slide" data-title="Idea menus 2 — Support / Product / R&D" data-notes="Same as previous. Note that several of these are deliberately near-misses of what already runs in the support channels — that's fine, extending something proven is the fastest path to a working Demo Day.">
+  <div class="inner">
+    <span class="eyebrow">Starting points · not a menu to order from</span>
+    <h2>If your squad is stuck</h2>
+    <div class="grid g3">
+      <div class="card"><h3>Support</h3><ul class="clean tight" style="margin-top:10px">
+        <li>"Has this been reported before?" before anything is filed</li>
+        <li>First-response draft from known issues and docs</li>
+        <li>Weekly digest clustering reports into themes</li>
+        <li>Escalation watcher: critical, open past 24 hours</li>
+      </ul></div>
+      <div class="card"><h3>Product</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Monthly roll-up clustering feature requests by theme</li>
+        <li>Competitor release watch from public changelogs</li>
+        <li>Spec companion drafting a PRD skeleton from a thread</li>
+        <li>What customers asked for vs what we shipped</li>
+      </ul></div>
+      <div class="card"><h3>R&amp;D</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Release notes drafted from merged pull requests</li>
+        <li>Stale PR nudge to whoever's sitting on it</li>
+        <li>Incident context pack: every related past issue</li>
+        <li>Dependency and CVE watch on public advisories</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- 22 -->
+<section class="slide" data-title="Share-back" data-notes="Four minutes per squad, and hold them to it — six squads at four minutes is already 24 of your 25. Use a visible timer. If you're running behind, this is the block to cut, never the build block.">
+  <div class="inner">
+    <span class="eyebrow">Four minutes each</span>
+    <h2>Read your worksheet out loud</h2>
+    <ul class="clean">
+      <li>The one-line version first. If it doesn't fit in one line, it isn't ready.</li>
+      <li>Then the access it needs — we'll check that together, here, now.</li>
+      <li>Then what "good enough" looks like.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 23 -->
+<section class="slide" data-title="Build block" data-notes="The single highest-leverage half hour of the day. A champion who has TOUCHED it will finish it; one who has only discussed it will not. Float constantly. Crude and running beats designed and pending — say that out loud when someone starts gold-plating.">
+  <div class="inner">
+    <span class="live"><span class="pulse"></span>Thirty minutes · champions driving</span>
+    <h1>Build it now.</h1>
+    <p class="sub">Crude and running beats polished and theoretical. Your squad watches, your champion types.</p>
+  </div>
+</section>
+
+<!-- 24 -->
+<section class="slide" data-title="Demo Day" data-notes="Confirm the date out loud, in the room, before anyone leaves. Each champion says what will be running. The gap between 'we should build that' and 'I have to show this working in twelve days' is the whole difference between a good afternoon and a change in how the company operates.">
+  <div class="inner">
+    <span class="eyebrow">Two weeks from today</span>
+    <h1>Demo Day</h1>
+    <p class="sub">Forty-five minutes. Every squad shows its automation actually running — not slides about it, not a description of what it'll do once someone has time.</p>
+    <div class="note">Say out loud now what will be running by then. That sentence is the commitment.</div>
+  </div>
+</section>
+
+<!-- 25 -->
+<section class="slide" data-title="⚑ Prep — the week before" data-notes="FACILITATOR ONLY — don't project this. Assign champion roles in config.yaml BEFORE the session; being blocked on permissions during the build block is the most preventable way this loses momentum.">
+  <div class="inner">
+    <span class="eyebrow">Facilitator only</span>
+    <h2>Prep</h2>
+    <div class="grid g2">
+      <div class="card"><h3>The week before</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Pick six champions — curiosity over seniority</li>
+        <li>Create a Slack channel per squad</li>
+        <li>Assign champion roles in <code>config.yaml</code> so nobody is blocked during the build block</li>
+        <li>Write six scope cards, one per squad</li>
+        <li>Put Demo Day in the calendar now</li>
+      </ul></div>
+      <div class="card"><h3>The day before</h3><ul class="clean tight" style="margin-top:10px">
+        <li>Create <code>#radar</code></li>
+        <li>Assemble the watch list: public logos, target prospects, two or three competitors</li>
+        <li><strong>Rehearse the exact demo build</strong>, then tear it down</li>
+        <li>Note which item to point at — ideally an account someone in the room owns</li>
+        <li>Keep a screen recording as fallback</li>
+      </ul></div>
+    </div>
+  </div>
+</section>
+
+<!-- 26 -->
+<section class="slide" data-title="⚑ What goes wrong" data-notes="FACILITATOR ONLY — don't project this. Worth re-reading the morning of.">
+  <div class="inner">
+    <span class="eyebrow">Facilitator only</span>
+    <h2>What goes wrong, and the fix</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Failure</th><th>Shows up</th><th>Fix, already built in</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Room nods, nothing changes</strong></td><td>Two weeks later</td><td>Demo Day booked before anyone leaves; champions commit out loud</td></tr>
+          <tr><td><strong>A squad designs something you must refuse</strong></td><td>Share-back</td><td>The access field forces the constraint in during design</td></tr>
+          <tr><td><strong>Brainstorm goes quiet</strong></td><td>First five minutes</td><td>Seeded menu per function</td></tr>
+          <tr><td><strong>Demo finds nothing interesting</strong></td><td>Live, in front of everyone</td><td>Rehearse yesterday; widen the watch list if thin</td></tr>
+          <tr><td><strong>Unease about surveillance</strong></td><td>Mid-brainstorm, unspoken</td><td>Access segment runs before the brainstorm</td></tr>
+          <tr><td><strong>Champion too senior, too busy</strong></td><td>Week two, silently</td><td>Pick for curiosity; build block means they've touched it</td></tr>
+          <tr><td><strong>Ideas are all "I wish someone watched X"</strong></td><td>Throughout</td><td>Coach the missing block — almost always the trigger</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div id="notes"><div class="lbl">Speaker notes</div><p id="notes-body"></p></div>
+
+<div id="jump"><h2>Jump to a slide</h2><div class="jgrid" id="jgrid"></div></div>
+
+<div id="chrome">
+  <div class="side"><span class="tag">Base · Agent Enablement</span></div>
+  <div class="side">
+    <button class="nav" id="prev" aria-label="Previous slide">‹</button>
+    <span class="count"><span id="cur">1</span> / <span id="tot">1</span></span>
+    <button class="nav" id="next" aria-label="Next slide">›</button>
+    <button id="btn-notes" aria-label="Toggle speaker notes">Notes · S</button>
+    <button id="btn-jump" aria-label="Jump to slide">Jump · O</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  document.documentElement.classList.add('js');
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var i = 0;
+  var bar = document.getElementById('bar');
+  var cur = document.getElementById('cur');
+  var notes = document.getElementById('notes');
+  var notesBody = document.getElementById('notes-body');
+  var jump = document.getElementById('jump');
+  document.getElementById('tot').textContent = slides.length;
+
+  slides.forEach(function(s, n){
+    var b = document.createElement('button');
+    b.className = 'jitem';
+    b.innerHTML = '<span class="jn">' + (n+1) + '</span><span>' + (s.dataset.title || 'Slide') + '</span>';
+    b.addEventListener('click', function(){ go(n); jump.classList.remove('on'); });
+    document.getElementById('jgrid').appendChild(b);
+  });
+  var jitems = Array.prototype.slice.call(document.querySelectorAll('.jitem'));
+
+  function go(n){
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function(s, k){
+      s.classList.toggle('is-active', k === i);
+      s.classList.toggle('is-past', k < i);
+    });
+    bar.style.width = ((i + 1) / slides.length * 100) + '%';
+    cur.textContent = i + 1;
+    notesBody.textContent = slides[i].dataset.notes || '—';
+    jitems.forEach(function(b, k){ b.classList.toggle('cur', k === i); });
+    if (history.replaceState) history.replaceState(null, '', '#' + (i + 1));
+    slides[i].scrollTop = 0;
+  }
+
+  document.getElementById('next').addEventListener('click', function(){ go(i + 1); });
+  document.getElementById('prev').addEventListener('click', function(){ go(i - 1); });
+  document.getElementById('btn-notes').addEventListener('click', function(){ notes.classList.toggle('on'); });
+  document.getElementById('btn-jump').addEventListener('click', function(){ jump.classList.toggle('on'); });
+
+  document.addEventListener('keydown', function(e){
+    var k = e.key;
+    if (k === 'Escape'){ jump.classList.remove('on'); return; }
+    if (k === 'ArrowRight' || k === 'PageDown' || k === ' '){ e.preventDefault(); go(i + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp'){ e.preventDefault(); go(i - 1); }
+    else if (k === 'Home'){ go(0); }
+    else if (k === 'End'){ go(slides.length - 1); }
+    else if (k === 's' || k === 'S'){ notes.classList.toggle('on'); }
+    else if (k === 'o' || k === 'O'){ jump.classList.toggle('on'); }
+  });
+
+  var x0 = null;
+  document.addEventListener('touchstart', function(e){ x0 = e.changedTouches[0].clientX; }, {passive:true});
+  document.addEventListener('touchend', function(e){
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 60) go(i + (dx < 0 ? 1 : -1));
+    x0 = null;
+  }, {passive:true});
+
+  var start = parseInt((location.hash || '').replace('#',''), 10);
+  go(isNaN(start) ? 0 : start - 1);
+})();
+</script>

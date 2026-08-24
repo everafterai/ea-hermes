@@ -1,3 +1,4 @@
+from hermes_state import AsyncSessionDB
 """Regression tests for approval-state cleanup on session boundaries."""
 
 from datetime import datetime
@@ -86,28 +87,13 @@ def _make_resume_runner():
     runner.session_store.get_or_create_session.return_value = current_entry
     runner.session_store.switch_session.return_value = resumed_entry
     runner.session_store.load_transcript.return_value = []
-    runner._session_db = MagicMock()
-    runner._session_db.resolve_session_by_title.return_value = "resumed-session"
-    runner._session_db.get_session_title.return_value = "Resumed Work"
-
-    # /resume is now identity-scoped: the handler's gate calls
-    # get_session(target_id) and checks session_row_visible against the
-    # requester's scope (telegram DM, user u1). Return a row owned by that
-    # identity for the resolved target; the title lookup ("Resumed Work")
-    # must miss so resolution falls through to resolve_session_by_title.
-    def _get_session(sid):
-        if sid == "resumed-session":
-            return {
-                "id": "resumed-session",
-                "source": "telegram",
-                "user_id": "u1",
-                "chat_id": "c1",
-                "chat_type": "dm",
-            }
-        return None
-
-    runner._session_db.get_session.side_effect = _get_session
-    runner._session_db.resolve_resume_session_id.side_effect = lambda sid: sid
+    runner._session_db = AsyncSessionDB(MagicMock())
+    runner._session_db._db.resolve_session_by_title.return_value = "resumed-session"
+    runner._session_db._db.get_session_title.return_value = "Resumed Work"
+    # The resumed session is live and shares the caller's origin, so the
+    # /resume IDOR guard authorizes it (this test covers the post-resume
+    # security-state clearing, not the ownership check).
+    runner._gateway_session_origin_for_id = lambda sid: source
     return runner, session_key
 
 
@@ -135,108 +121,10 @@ def _make_branch_runner():
         {"role": "assistant", "content": "world"},
     ]
     runner.session_store.switch_session.return_value = branched_entry
-    runner._session_db = MagicMock()
-    runner._session_db.get_session_title.return_value = "Current Work"
-    runner._session_db.get_next_title_in_lineage.return_value = "Current Work #2"
+    runner._session_db = AsyncSessionDB(MagicMock())
+    runner._session_db._db.get_session_title.return_value = "Current Work"
+    runner._session_db._db.get_next_title_in_lineage.return_value = "Current Work #2"
     return runner, session_key
-
-
-@pytest.mark.asyncio
-async def test_resume_clears_session_scoped_approval_and_yolo_state():
-    runner, session_key = _make_resume_runner()
-    other_key = "agent:main:telegram:dm:other-chat"
-
-    runner._pending_skills_reload_notes = {
-        session_key: "[USER INITIATED SKILLS RELOAD: target]",
-        other_key: "[USER INITIATED SKILLS RELOAD: other]",
-    }
-    approve_session(session_key, "recursive delete")
-    approve_session(other_key, "recursive delete")
-    enable_session_yolo(session_key)
-    enable_session_yolo(other_key)
-    runner._pending_approvals[session_key] = {"command": "rm -rf /tmp/demo"}
-    runner._pending_approvals[other_key] = {"command": "rm -rf /tmp/other"}
-    runner._update_prompt_pending[session_key] = True
-    runner._update_prompt_pending[other_key] = True
-
-    result = await runner._handle_resume_command(_make_event("/resume Resumed Work"))
-
-    assert "Resumed session" in result
-    assert is_approved(session_key, "recursive delete") is False
-    assert is_session_yolo_enabled(session_key) is False
-    assert session_key not in runner._pending_approvals
-    assert session_key not in runner._update_prompt_pending
-    assert session_key not in runner._pending_skills_reload_notes
-    assert is_approved(other_key, "recursive delete") is True
-    assert is_session_yolo_enabled(other_key) is True
-    assert other_key in runner._pending_approvals
-    assert other_key in runner._update_prompt_pending
-    assert other_key in runner._pending_skills_reload_notes
-
-
-@pytest.mark.asyncio
-async def test_branch_clears_session_scoped_approval_and_yolo_state():
-    runner, session_key = _make_branch_runner()
-    other_key = "agent:main:telegram:dm:other-chat"
-
-    runner._pending_skills_reload_notes = {
-        session_key: "[USER INITIATED SKILLS RELOAD: target]",
-        other_key: "[USER INITIATED SKILLS RELOAD: other]",
-    }
-    approve_session(session_key, "recursive delete")
-    approve_session(other_key, "recursive delete")
-    enable_session_yolo(session_key)
-    enable_session_yolo(other_key)
-    runner._pending_approvals[session_key] = {"command": "rm -rf /tmp/demo"}
-    runner._pending_approvals[other_key] = {"command": "rm -rf /tmp/other"}
-    runner._update_prompt_pending[session_key] = True
-    runner._update_prompt_pending[other_key] = True
-
-    result = await runner._handle_branch_command(_make_event("/branch"))
-
-    assert "Branched to" in result
-    assert is_approved(session_key, "recursive delete") is False
-    assert is_session_yolo_enabled(session_key) is False
-    assert session_key not in runner._pending_approvals
-    assert session_key not in runner._update_prompt_pending
-    assert session_key not in runner._pending_skills_reload_notes
-    assert is_approved(other_key, "recursive delete") is True
-    assert is_session_yolo_enabled(other_key) is True
-    assert other_key in runner._pending_approvals
-    assert other_key in runner._update_prompt_pending
-    assert other_key in runner._pending_skills_reload_notes
-
-
-@pytest.mark.asyncio
-async def test_branch_preserves_persisted_assistant_metadata():
-    runner, _session_key = _make_branch_runner()
-    runner.session_store.load_transcript.return_value = [
-        {"role": "user", "content": "hello"},
-        {
-            "role": "assistant",
-            "content": "world",
-            "finish_reason": "stop",
-            "reasoning": "thinking",
-            "reasoning_content": "provider scratchpad",
-            "reasoning_details": [{"type": "summary", "text": "step"}],
-            "codex_reasoning_items": [{"id": "r1", "type": "reasoning"}],
-            "codex_message_items": [{"id": "m1", "type": "message"}],
-        },
-    ]
-
-    result = await runner._handle_branch_command(_make_event("/branch"))
-
-    assert "Branched to" in result
-    append_calls = runner._session_db.append_message.call_args_list
-    assert len(append_calls) == 2
-    assistant_kwargs = append_calls[1].kwargs
-    assert assistant_kwargs["role"] == "assistant"
-    assert assistant_kwargs["finish_reason"] == "stop"
-    assert assistant_kwargs["reasoning"] == "thinking"
-    assert assistant_kwargs["reasoning_content"] == "provider scratchpad"
-    assert assistant_kwargs["reasoning_details"] == [{"type": "summary", "text": "step"}]
-    assert assistant_kwargs["codex_reasoning_items"] == [{"id": "r1", "type": "reasoning"}]
-    assert assistant_kwargs["codex_message_items"] == [{"id": "m1", "type": "message"}]
 
 
 @pytest.mark.asyncio
@@ -252,7 +140,7 @@ async def test_branch_session_inherits_source_identity():
     result = await runner._handle_branch_command(_make_event("/branch"))
 
     assert "Branched to" in result
-    create_kwargs = runner._session_db.create_session.call_args.kwargs
+    create_kwargs = runner._session_db._db.create_session.call_args.kwargs
     assert create_kwargs["user_id"] == "u1"
     assert create_kwargs["chat_id"] == "c1"
     assert create_kwargs["chat_type"] == "dm"

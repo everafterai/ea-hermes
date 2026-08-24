@@ -2,7 +2,11 @@ import { useStore } from '@nanostores/react'
 import { atom } from 'nanostores'
 import { useCallback, useEffect, useMemo } from 'react'
 
-import { clearProjectDirCache, readProjectDir } from './ipc'
+import { desktopFsCacheKey } from '@/lib/desktop-fs'
+import { $connection } from '@/store/session'
+import { $workspaceChangeTick, consumeWorkspaceChange } from '@/store/workspace-events'
+
+import { clearProjectDirCache, type ProjectTreeEntry, readProjectDir } from './ipc'
 
 export interface TreeNode {
   /** Absolute filesystem path. Doubles as react-arborist node id. */
@@ -14,11 +18,14 @@ export interface TreeNode {
   children?: TreeNode[]
   /** True while a readDir for this folder is in flight. */
   loading?: boolean
+  /** Synthetic loading/error rows are not real filesystem entries. */
+  placeholder?: 'error' | 'loading'
   /** Last error code from readDir (e.g. EACCES). Cleared on next successful load. */
   error?: string
 }
 
 const PLACEHOLDER_ID = '__loading__'
+const ERROR_PLACEHOLDER_ID = '__error__'
 
 function makeNode(path: string, name: string, isDirectory: boolean): TreeNode {
   return { id: path, isDirectory, name }
@@ -42,14 +49,58 @@ function patchNode(nodes: TreeNode[] | undefined | null, id: string, patch: (n: 
   })
 }
 
+function findNode(nodes: TreeNode[], id: string): null | TreeNode {
+  for (const node of nodes) {
+    if (node.id === id) {
+      return node
+    }
+
+    if (node.children?.length) {
+      const hit = findNode(node.children, id)
+
+      if (hit) {
+        return hit
+      }
+    }
+  }
+
+  return null
+}
+
+// Merge a freshly-read dir's entries into its existing children: keep surviving
+// nodes (subtrees intact), add new, drop deleted. Non-recursive — a grandchild
+// dir only re-reads when it's itself in the change set.
+function mergeChildren(existing: TreeNode[], entries: ProjectTreeEntry[]): TreeNode[] {
+  const byId = new Map(existing.filter(node => !node.placeholder).map(node => [node.id, node]))
+
+  return entries.map(entry => byId.get(entry.path) ?? makeNode(entry.path, entry.name, entry.isDirectory))
+}
+
 function placeholderChild(parentId: string): TreeNode {
-  return { id: `${parentId}::${PLACEHOLDER_ID}`, isDirectory: false, name: 'Loading…' }
+  return { id: `${parentId}::${PLACEHOLDER_ID}`, isDirectory: false, name: 'Loading…', placeholder: 'loading' }
+}
+
+function errorChild(parentId: string, error: string | undefined): TreeNode {
+  return {
+    id: `${parentId}::${ERROR_PLACEHOLDER_ID}`,
+    isDirectory: false,
+    name: `Unable to read (${error || 'read-error'})`,
+    placeholder: 'error'
+  }
+}
+
+function readError(cause: unknown): string {
+  return cause instanceof Error && cause.message ? cause.message : 'read-error'
 }
 
 export interface UseProjectTreeResult {
   /** Bumped by collapseAll so callers can remount the tree fully collapsed. */
   collapseNonce: number
   data: TreeNode[]
+  /** Directory actually displayed — differs from the requested cwd when the
+   *  session's recorded cwd no longer exists and we fell back to the default
+   *  workspace dir. */
+  effectiveCwd: string
   openState: Record<string, boolean>
   rootError: string | null
   rootLoading: boolean
@@ -66,6 +117,8 @@ interface ProjectTreeState {
   loaded: boolean
   openState: Record<string, boolean>
   requestId: number
+  /** Directory the displayed entries were read from ('' until first load). */
+  resolvedCwd: string
   rootError: string | null
   rootLoading: boolean
 }
@@ -77,6 +130,7 @@ const initialState: ProjectTreeState = {
   loaded: false,
   openState: {},
   requestId: 0,
+  resolvedCwd: '',
   rootError: null,
   rootLoading: false
 }
@@ -84,6 +138,12 @@ const initialState: ProjectTreeState = {
 const inflight = new Set<string>()
 const $projectTree = atom<ProjectTreeState>(initialState)
 let nextRootRequestId = 0
+let lastConnectionKey = ''
+
+// While the root is errored (ENOENT during a session's cwd race, a folder that
+// reappears after a checkout, a remote that wasn't ready), keep retrying on a
+// slow cadence so the tree self-heals instead of staying "UNREADABLE" forever.
+const ROOT_ERROR_RETRY_MS = 3_000
 
 function setProjectTree(updater: (current: ProjectTreeState) => ProjectTreeState) {
   $projectTree.set(updater($projectTree.get()))
@@ -95,7 +155,35 @@ function clearProjectTree() {
   $projectTree.set({ ...initialState, requestId: nextRootRequestId })
 }
 
-async function loadRoot(cwd: string, { force = false }: { force?: boolean } = {}) {
+/** Sessions record their launch cwd; deleted worktrees and remote-backend
+ *  paths arrive here as directories that don't exist on this machine. Rather
+ *  than bricking the tree, display the sanitized workspace fallback (main
+ *  prefers the configured default project dir). Local connections only —
+ *  remote trees are read through the remote bridge. */
+async function fallbackRootFor(cwd: string, sourceIsRemote: boolean): Promise<string | null> {
+  if (sourceIsRemote) {
+    return null
+  }
+
+  const sanitize = window.hermesDesktop?.sanitizeWorkspaceCwd
+
+  if (!sanitize) {
+    return null
+  }
+
+  try {
+    const { cwd: fallback, sanitized } = await sanitize(cwd)
+
+    return sanitized && fallback && fallback !== cwd ? fallback : null
+  } catch {
+    return null
+  }
+}
+
+async function loadRoot(
+  cwd: string,
+  { connectionKey = desktopFsCacheKey(), force = false }: { connectionKey?: string; force?: boolean } = {}
+) {
   if (!cwd) {
     clearProjectTree()
 
@@ -123,14 +211,38 @@ async function loadRoot(cwd: string, { force = false }: { force?: boolean } = {}
     loaded: false,
     openState: current.cwd === cwd ? current.openState : {},
     requestId,
+    resolvedCwd: '',
     rootError: null,
     rootLoading: true
   })
 
-  const { entries, error } = await readProjectDir(cwd, cwd)
+  const sourceIsRemote = $connection.get()?.mode === 'remote'
+  let resolvedCwd = cwd
+  let entries: ProjectTreeEntry[] = []
+  let error: string | undefined
+
+  try {
+    ;({ entries, error } = await readProjectDir(cwd, cwd))
+
+    if (error && desktopFsCacheKey() === connectionKey) {
+      const fallback = await fallbackRootFor(cwd, sourceIsRemote)
+
+      if (fallback) {
+        const retry = await readProjectDir(fallback, fallback)
+
+        if (!retry.error) {
+          resolvedCwd = fallback
+          entries = retry.entries
+          error = undefined
+        }
+      }
+    }
+  } catch (cause) {
+    error = readError(cause)
+  }
 
   setProjectTree(latest => {
-    if (latest.cwd !== cwd || latest.requestId !== requestId) {
+    if (latest.cwd !== cwd || latest.requestId !== requestId || desktopFsCacheKey() !== connectionKey) {
       return latest
     }
 
@@ -138,6 +250,7 @@ async function loadRoot(cwd: string, { force = false }: { force?: boolean } = {}
       ...latest,
       data: error ? [] : entries.map(e => makeNode(e.path, e.name, e.isDirectory)),
       loaded: true,
+      resolvedCwd,
       rootError: error || null,
       rootLoading: false
     }
@@ -145,8 +258,96 @@ async function loadRoot(cwd: string, { force = false }: { force?: boolean } = {}
 }
 
 export function resetProjectTreeState() {
+  lastConnectionKey = ''
   clearProjectTree()
   clearProjectDirCache()
+}
+
+// Non-destructive live refresh as the agent edits: preserves expansion + loaded
+// subtrees (stable absolute-path ids let rows animate in/out), never collapses.
+// Targeted by default — re-reads only the changed dirs in `change`; the root and
+// untouched folders never touch the filesystem or re-render. Falls back to
+// re-reading every loaded dir only when the mutation is opaque (a terminal
+// command / a path we couldn't resolve) — see store/workspace-events.
+async function revalidateTree(
+  cwd: string,
+  change: { dirs: string[]; full: boolean },
+  connectionKey: string
+): Promise<void> {
+  const state = $projectTree.get()
+
+  if (!cwd || state.cwd !== cwd || !state.loaded || desktopFsCacheKey() !== connectionKey) {
+    return
+  }
+
+  const rootPath = state.resolvedCwd || cwd
+
+  if (!change.full && change.dirs.length) {
+    // Only re-read changed dirs that are actually loaded (root, or an expanded
+    // folder); a change inside a collapsed/absent dir isn't visible → skip.
+    const targets = change.dirs.filter(dir => dir === rootPath || findNode(state.data, dir)?.children)
+
+    if (!targets.length) {
+      return
+    }
+
+    const reads = await Promise.all(targets.map(async dir => ({ dir, ...(await readProjectDir(dir, rootPath)) })))
+
+    setProjectTree(latest => {
+      if (latest.cwd !== cwd || !latest.loaded || desktopFsCacheKey() !== connectionKey) {
+        return latest
+      }
+
+      let data = latest.data
+
+      for (const { dir, entries, error } of reads) {
+        if (error) {
+          continue // keep last-known children on a transient read error
+        }
+
+        data =
+          dir === rootPath
+            ? mergeChildren(data, entries)
+            : patchNode(data, dir, node =>
+                node.children ? { ...node, children: mergeChildren(node.children, entries) } : node
+              )
+      }
+
+      return data === latest.data ? latest : { ...latest, data }
+    })
+
+    return
+  }
+
+  // Opaque fallback: reconcile every loaded dir. Siblings read concurrently
+  // (Promise.all keeps order); loaded subfolders recurse.
+  const reconcile = async (dirPath: string, existing: TreeNode[]): Promise<TreeNode[]> => {
+    const { entries, error } = await readProjectDir(dirPath, rootPath)
+
+    if (error) {
+      return existing
+    }
+
+    const byId = new Map(existing.filter(node => !node.placeholder).map(node => [node.id, node]))
+
+    return Promise.all(
+      entries.map(async entry => {
+        const prev = byId.get(entry.path)
+
+        if (prev?.isDirectory && prev.children) {
+          return { ...prev, children: await reconcile(prev.id, prev.children) }
+        }
+
+        return prev ?? makeNode(entry.path, entry.name, entry.isDirectory)
+      })
+    )
+  }
+
+  const nextData = await reconcile(rootPath, state.data)
+
+  setProjectTree(latest =>
+    latest.cwd === cwd && latest.loaded && desktopFsCacheKey() === connectionKey ? { ...latest, data: nextData } : latest
+  )
 }
 
 /**
@@ -158,8 +359,11 @@ export function resetProjectTreeState() {
  */
 export function useProjectTree(cwd: string): UseProjectTreeResult {
   const state = useStore($projectTree)
+  const connection = useStore($connection)
+  const workspaceTick = useStore($workspaceChangeTick)
+  const connectionKey = desktopFsCacheKey(connection)
 
-  const refreshRoot = useCallback(() => loadRoot(cwd, { force: true }), [cwd])
+  const refreshRoot = useCallback(() => loadRoot(cwd, { connectionKey, force: true }), [connectionKey, cwd])
 
   const setNodeOpen = useCallback(
     (id: string, open: boolean) => {
@@ -195,14 +399,16 @@ export function useProjectTree(cwd: string): UseProjectTreeResult {
 
   const loadChildren = useCallback(
     async (id: string) => {
-      if (!cwd || inflight.has(id)) {
+      const inflightKey = `${connectionKey}:${id}`
+
+      if (!cwd || inflight.has(inflightKey)) {
         return
       }
 
-      inflight.add(id)
+      inflight.add(inflightKey)
 
       setProjectTree(current => {
-        if (current.cwd !== cwd) {
+        if (current.cwd !== cwd || desktopFsCacheKey() !== connectionKey) {
           return current
         }
 
@@ -212,12 +418,20 @@ export function useProjectTree(cwd: string): UseProjectTreeResult {
         }
       })
 
-      const { entries, error } = await readProjectDir(id, cwd)
+      const rootPath = $projectTree.get().resolvedCwd || cwd
+      let entries: ProjectTreeEntry[] = []
+      let error: string | undefined
 
-      inflight.delete(id)
+      try {
+        ;({ entries, error } = await readProjectDir(id, rootPath))
+      } catch (cause) {
+        error = readError(cause)
+      } finally {
+        inflight.delete(inflightKey)
+      }
 
       setProjectTree(current => {
-        if (current.cwd !== cwd) {
+        if (current.cwd !== cwd || desktopFsCacheKey() !== connectionKey) {
           return current
         }
 
@@ -227,23 +441,83 @@ export function useProjectTree(cwd: string): UseProjectTreeResult {
             ...n,
             loading: false,
             error: error || undefined,
-            children: error ? [] : entries.map(e => makeNode(e.path, e.name, e.isDirectory))
+            children: error ? [errorChild(n.id, error)] : entries.map(e => makeNode(e.path, e.name, e.isDirectory))
           }))
         }
       })
     },
-    [cwd]
+    [connectionKey, cwd]
   )
 
+  // Live, non-destructive refresh when the agent touches the tree (skip the
+  // very first render: tick 0 is the initial value, not a real change).
   useEffect(() => {
-    void loadRoot(cwd)
-  }, [cwd])
+    if (workspaceTick > 0) {
+      void revalidateTree(cwd, consumeWorkspaceChange(), connectionKey)
+    }
+  }, [connectionKey, cwd, workspaceTick])
+
+  useEffect(() => {
+    const connectionChanged = lastConnectionKey !== '' && lastConnectionKey !== connectionKey
+    lastConnectionKey = connectionKey
+
+    if (connectionChanged) {
+      clearProjectDirCache()
+      void loadRoot(cwd, { connectionKey, force: true })
+
+      return
+    }
+
+    void loadRoot(cwd, { connectionKey })
+  }, [connectionKey, cwd])
+
+  // Self-heal: an errored root re-probes every few seconds while the tree is
+  // mounted. Each attempt bumps requestId, so a persistent error re-arms the
+  // timer; a success clears rootError and stops it.
+  useEffect(() => {
+    if (!cwd || state.cwd !== cwd || !state.rootError) {
+      return
+    }
+
+    const timer = window.setTimeout(() => void loadRoot(cwd, { connectionKey, force: true }), ROOT_ERROR_RETRY_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [connectionKey, cwd, state.cwd, state.requestId, state.rootError])
+
+  // While showing the fallback root, quietly re-probe the session's real cwd
+  // (a worktree re-created, a checkout restored) and switch back when it
+  // reappears. The probe never touches state, so there's no flicker.
+  const usingFallback = state.cwd === cwd && Boolean(state.resolvedCwd) && state.resolvedCwd !== cwd
+
+  useEffect(() => {
+    if (!cwd || !usingFallback) {
+      return
+    }
+
+    let cancelled = false
+
+    const timer = window.setInterval(() => {
+      void readProjectDir(cwd, cwd)
+        .then(({ error }) => {
+          if (!cancelled && !error && desktopFsCacheKey() === connectionKey) {
+            void loadRoot(cwd, { connectionKey, force: true })
+          }
+        })
+        .catch(() => undefined)
+    }, ROOT_ERROR_RETRY_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [connectionKey, cwd, usingFallback])
 
   return useMemo(
     () => ({
       collapseAll,
       collapseNonce: state.cwd === cwd ? state.collapseNonce : 0,
       data: state.cwd === cwd ? state.data : [],
+      effectiveCwd: state.cwd === cwd && state.resolvedCwd ? state.resolvedCwd : cwd,
       loadChildren,
       openState: state.cwd === cwd ? state.openState : {},
       refreshRoot,
@@ -261,6 +535,7 @@ export function useProjectTree(cwd: string): UseProjectTreeResult {
       state.cwd,
       state.data,
       state.openState,
+      state.resolvedCwd,
       state.rootError,
       state.rootLoading
     ]
