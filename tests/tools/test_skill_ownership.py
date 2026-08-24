@@ -15,7 +15,7 @@ BOB = Identity("slack", "U_BOB", "Bob")
 
 _SKILL = """---
 name: weekly-report
-description: A weekly report skill for testing ownership gating behavior here.
+description: Weekly report skill for ownership gating tests.
 ---
 Body.
 """

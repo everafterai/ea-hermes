@@ -53,6 +53,35 @@ def _search(db, query, monkeypatch, **vars_):
     return {r["session_id"] for r in json.loads(out)["results"]}
 
 
+def test_title_match_does_not_leak_other_users_session(db, monkeypatch):
+    """A title hit must obey the same scope partition as a content hit.
+
+    Regression: upstream's title-match discovery path (_title_match_result)
+    resolved ANY session by title and hydrated its messages with no scope
+    check, so Bob searching Alice's session title received her transcript.
+    """
+    db.set_session_title("alice_dm", "Falcon Launch Plan")
+    db._conn.commit()
+
+    # Bob searches Alice's exact session title from his own DM.
+    sids = _search(db, "Falcon Launch Plan", monkeypatch,
+                   platform="slack", chat_type="dm", chat_id="DB", user_id="BOB")
+    assert "alice_dm" not in sids
+
+    _clear_identity(monkeypatch)
+    tokens = set_session_vars(platform="slack", chat_type="dm", chat_id="DB", user_id="BOB")
+    try:
+        raw = session_search(query="Falcon Launch Plan", db=db, limit=10)
+    finally:
+        clear_session_vars(tokens)
+    assert "codename falcon" not in raw, "Alice's transcript leaked via the title-match path"
+
+    # Alice herself still gets her own titled session back.
+    sids = _search(db, "Falcon Launch Plan", monkeypatch,
+                   platform="slack", chat_type="dm", chat_id="DA", user_id="ALICE")
+    assert "alice_dm" in sids
+
+
 def test_dm_isolation(db, monkeypatch):
     # Bob in his DM searching "falcon" sees only his own DM.
     sids = _search(db, "falcon", monkeypatch,

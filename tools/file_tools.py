@@ -2714,7 +2714,6 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
             pattern=pattern, path=path, target=target, file_glob=file_glob,
             limit=limit, offset=offset, output_mode=output_mode, context=context
         )
-        omitted = _filter_read_blocked_search_results(result, task_id)
 
         # Drop any matches/files that resolve to a protected data store
         # (e.g. plaintext session snapshots picked up by a recursive search).
@@ -2757,6 +2756,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
                 tool="search_files", action="blocked-read",
                 target=f"{_dropped} protected file(s) under {path}",
             )
+        omitted = _filter_read_blocked_search_results(result, task_id)
 
         if hasattr(result, 'matches'):
             for m in result.matches:

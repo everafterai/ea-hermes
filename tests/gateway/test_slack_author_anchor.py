@@ -4,7 +4,7 @@ Without an explicit author label on the *current* (triggering) message, the
 agent defaults to guessing the sender — often a name found in quoted/forwarded/
 screenshot content or another thread participant. The anchor prevents that.
 """
-from gateway.platforms.slack import _anchor_message_author
+from plugins.platforms.slack.adapter import _anchor_message_author
 
 
 def test_anchors_channel_message_with_author():

@@ -1535,6 +1535,23 @@ class SessionStore:
                 print(f"[gateway] Warning: Failed to load sessions: {e}")
 
         self._loaded = True
+        self._routing_db_loaded = db_load_succeeded
+        self._routing_fallback_baseline = (
+            None
+            if db_load_succeeded
+            else {key: entry.to_dict() for key, entry in self._entries.items()}
+        )
+
+        # Prune any sessions.json entries that point to sessions already ended
+        # in state.db. A hard gateway crash (exit code 1) skips the graceful
+        # shutdown path, so sessions.json is never cleared and is left pointing
+        # at ended sessions. On the next startup those stale entries act as live
+        # routing keys. get_or_create_session() only consulted end_reason at
+        # startup (here) until #54878 added a routing-time guard for the
+        # live-gateway case; this startup prune still self-heals crash-left
+        # entries before the first message arrives. Pruning here (lock already
+        # held) is cheap: one lookup per routing key, once at startup.
+        self._prune_stale_sessions_locked()
 
     def reconcile_db_scope(self):
         """One-time backfill of chat_id/chat_type onto SQLite session rows from
@@ -1558,23 +1575,6 @@ class SessionStore:
                 self._db.backfill_session_scope(rows)
             except Exception as e:
                 logger.debug("session scope backfill failed: %s", e)
-        self._routing_db_loaded = db_load_succeeded
-        self._routing_fallback_baseline = (
-            None
-            if db_load_succeeded
-            else {key: entry.to_dict() for key, entry in self._entries.items()}
-        )
-
-        # Prune any sessions.json entries that point to sessions already ended
-        # in state.db. A hard gateway crash (exit code 1) skips the graceful
-        # shutdown path, so sessions.json is never cleared and is left pointing
-        # at ended sessions. On the next startup those stale entries act as live
-        # routing keys. get_or_create_session() only consulted end_reason at
-        # startup (here) until #54878 added a routing-time guard for the
-        # live-gateway case; this startup prune still self-heals crash-left
-        # entries before the first message arrives. Pruning here (lock already
-        # held) is cheap: one lookup per routing key, once at startup.
-        self._prune_stale_sessions_locked()
 
     def _prune_stale_sessions_locked(self) -> None:
         """Remove sessions.json entries whose session has ended in state.db.

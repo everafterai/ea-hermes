@@ -5879,6 +5879,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     "WHERE id = ?",
                     (r.get("chat_id"), r.get("chat_type"), r["session_id"]),
                 )
+        self._execute_write(_do)
+
     def record_gateway_session_peer(
         self,
         session_id: str,

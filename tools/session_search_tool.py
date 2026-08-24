@@ -721,8 +721,16 @@ def _title_match_result(
     db,
     query: str,
     current_lineage_root: Optional[str],
+    scope=None,
 ) -> Optional[Dict[str, Any]]:
-    """Return a discovery-shaped result when the query matches a session title."""
+    """Return a discovery-shaped result when the query matches a session title.
+
+    ``scope`` enforces the same per-requester visibility partition as every
+    other read shape. Without it this path resolves ANY session by title and
+    hydrates its messages, so a platform user who knows (or guesses) another
+    user's session title would receive their transcript. Out-of-scope is
+    reported as no match — never as "exists but hidden".
+    """
     title_query = _normalize_title_query(query)
     if not title_query:
         return None
@@ -748,6 +756,12 @@ def _title_match_result(
         logging.debug("get_session failed for title match %s", session_id, exc_info=True)
         session_meta = {}
     if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
+        return None
+
+    # Identity gate — BEFORE any message hydration below, so an out-of-scope
+    # title match never reads (let alone returns) another user's content.
+    from hermes_state import session_row_visible
+    if not session_row_visible(session_meta, scope):
         return None
 
     try:
@@ -802,7 +816,7 @@ def _discover(
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     role_list = role_filter if role_filter else ["user", "assistant"]
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
-    title_result = _title_match_result(db, query, current_lineage_root)
+    title_result = _title_match_result(db, query, current_lineage_root, scope=scope)
 
     try:
         raw_results = db.search_messages(

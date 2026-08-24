@@ -61,7 +61,7 @@ def test_execute_code_handler_invokes_scanner(monkeypatch):
     monkeypatch.setattr(cet, "SANDBOX_AVAILABLE", True)
     # Deny at the approval guard (runs AFTER the audit call) so no sandbox spawns.
     monkeypatch.setattr("tools.approval.check_execute_code_guard",
-                        lambda code, env_type: {"approved": False, "message": "blocked-for-test"})
+                        lambda code, env_type, **kw: {"approved": False, "message": "blocked-for-test"})
     cet.execute_code(code="cat ~/.hermes/state.db")
     assert spy.called
     assert spy.call_args.kwargs.get("tool") == "code_execution"
