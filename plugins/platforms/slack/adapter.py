@@ -6846,7 +6846,11 @@ class SlackAdapter(BasePlatformAdapter):
             channel_context=channel_context,
             reply_to_text=reply_to_text,
             auto_skill=_auto_skill,
-            directly_addressed=bool(is_dm or is_mentioned),
+            # 1:1 DM or explicit @mention. Deliberately NOT plain is_dm: an
+            # unmentioned MPIM (group DM) is a shared surface where the bot
+            # was not addressed — same distinction upstream's reaction guard
+            # makes one block below.
+            directly_addressed=bool(is_one_to_one_dm or is_mentioned),
             metadata={
                 "slack_team_id": team_id,
                 "slack_channel_id": channel_id,

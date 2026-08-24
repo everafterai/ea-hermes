@@ -448,7 +448,20 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
 
     *max_len* controls truncation.  ``None`` (default) defers to the global
     ``_tool_preview_max_len`` set via config; ``0`` means unlimited.
+
+    Thin wrapper that collapses the OS home dir to ``~`` on EVERY return path.
+    Upstream grew per-tool preview branches with their own early returns, so
+    collapsing inside the generic tail alone let ``/Users/<name>`` leak back
+    through (e.g. the ``terminal`` branch). Applied here once, at the boundary.
     """
+    preview = _build_tool_preview_uncollapsed(tool_name, args, max_len)
+    return collapse_home_path(preview) if preview else preview
+
+
+def _build_tool_preview_uncollapsed(
+    tool_name: str, args: dict, max_len: int | None = None
+) -> str | None:
+    """Preview construction proper. See :func:`build_tool_preview`."""
     if max_len is None:
         max_len = _tool_preview_max_len
     if not args:
@@ -590,7 +603,6 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
     preview = _oneline(str(value))
     if not preview:
         return None
-    preview = collapse_home_path(preview)
     if max_len > 0 and len(preview) > max_len:
         preview = preview[:max_len - 3] + "..."
     return preview

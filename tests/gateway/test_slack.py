@@ -1887,7 +1887,9 @@ class TestMessageRouting:
         adapter.handle_message.assert_awaited_once()
         msg_event = adapter.handle_message.await_args.args[0]
         prompt = msg_event.channel_prompt
-        assert msg_event.text == "Hi"
+        # The fork anchors the Slack author onto channel messages; the point
+        # of this test is that the MENTION is cleaned, so strip the anchor.
+        assert msg_event.text == "[Message from Test User]\nHi"
         assert "@WorkspaceBot" in prompt
         assert "already applied" in prompt
         assert "may have been stripped" in prompt
@@ -2748,7 +2750,7 @@ class TestThreadReplyHandling:
 
         adapter_with_session_store.handle_message.assert_called_once()
         msg_event = adapter_with_session_store.handle_message.call_args[0][0]
-        assert msg_event.text == "run"
+        assert msg_event.text == "[Message from Test User]\nrun"
         # Cold-start context carries the parent so the agent sees the ask.
         assert "check this and ask me for run" in msg_event.channel_context
         # Thread remembered so later replies skip the parent fetch.
@@ -2833,7 +2835,7 @@ class TestThreadReplyHandling:
         adapter_with_session_store._app.client.conversations_replies.assert_awaited_once()
         msg_event = adapter_with_session_store.handle_message.call_args[0][0]
         # Delta arrives as new-turn channel_context, not baked into text.
-        assert msg_event.text == "what changed?"
+        assert msg_event.text == "[Message from Test User]\nwhat changed?"
         assert "Fresh update" in msg_event.channel_context
         # Already-consumed messages must NOT be re-injected.
         assert "Old context" not in msg_event.channel_context

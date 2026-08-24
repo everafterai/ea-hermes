@@ -106,12 +106,16 @@ class TestBuildToolPreview:
         assert build_tool_preview("terminal", "") is None
         assert build_tool_preview("terminal", []) is None
 
-    def test_read_file_preview_collapses_home(self, monkeypatch):
+    def test_read_file_preview_hides_home(self, monkeypatch):
         monkeypatch.setenv("HOME", "/home/testuser")
         result = build_tool_preview(
             "read_file", {"path": "/home/testuser/.hermes/config.yaml"}
         )
-        assert result == "~/.hermes/config.yaml"
+        # Upstream shows read_file as a bare basename, which satisfies the
+        # goal here (never render the OS home dir) more strongly than the
+        # fork's original ``~/...`` collapse did.
+        assert "/home/testuser" not in result
+        assert result == "config.yaml"
 
     def test_terminal_preview_collapses_home(self, monkeypatch):
         monkeypatch.setenv("HOME", "/home/testuser")
@@ -123,12 +127,13 @@ class TestBuildToolPreview:
 
     def test_collapse_precedes_truncation(self, monkeypatch):
         monkeypatch.setenv("HOME", "/home/testuser")
-        # A long HOME-prefixed path with a small max_len: the collapse must
-        # run BEFORE truncation, so the output starts with ~ and never leaks
-        # the raw /home/... prefix even after truncation.
-        long_path = "/home/testuser/.hermes/a/very/long/nested/path/to/file.txt"
-        result = build_tool_preview("read_file", {"path": long_path}, max_len=20)
-        assert result.startswith("~/")
+        # A long HOME-prefixed value with a small max_len: the collapse must
+        # run BEFORE truncation, so the output never leaks the raw /home/...
+        # prefix even after truncation. Uses ``terminal`` because read_file
+        # now previews as a basename (see test_read_file_preview_hides_home).
+        long_cmd = "cat /home/testuser/.hermes/a/very/long/nested/path/file.txt"
+        result = build_tool_preview("terminal", {"command": long_cmd}, max_len=20)
+        assert "/home/testuser" not in result
         assert "/home/testuser" not in result
         assert result.endswith("...")
 

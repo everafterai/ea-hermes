@@ -254,6 +254,16 @@ class HolographicMemoryProvider(MemoryProvider):
         # NOTE: do NOT touch self._scopes here. The provider is shared across
         # concurrent gateway sessions; re-initialising on one message must not
         # disturb other live scopes.
+        if not self._scope_isolation:
+            # Legacy/non-isolated mode has exactly one bundle, and upstream's
+            # provider contract is that initialize() opens it (callers and tests
+            # observe the connection right after init). Build it eagerly here.
+            # Under scope isolation the bundle stays lazy and per-scope, because
+            # the owning scope isn't known until a request arrives.
+            try:
+                self._bundle_for_current_scope()
+            except Exception as e:
+                logger.debug("holographic: eager store init skipped: %s", e)
 
     def _db_path_for_scope(self, scope: "tuple[str, str]") -> str:
         if not self._scope_isolation:
@@ -288,6 +298,30 @@ class HolographicMemoryProvider(MemoryProvider):
                 bundle = (store, retriever)
                 self._scopes[db_path] = bundle
             return bundle
+
+    @property
+    def _store(self):
+        """The current scope's already-open MemoryStore, or None.
+
+        Upstream's provider keeps a single ``self._store``; the fork replaced it
+        with per-scope bundles for multi-user isolation. Exposing the current
+        scope's store under the upstream name keeps that contract (and upstream's
+        tests) working: with ``scope_isolation`` off — the default — there is
+        exactly one bundle, so this IS upstream's single shared store.
+
+        Deliberately does NOT create a bundle — internal callers go through
+        ``_bundle_for_current_scope()`` for that. Reading this after
+        ``shutdown()`` correctly reports None instead of silently reopening
+        the database.
+        """
+        bundle = self._scopes.get(self._db_path_for_scope(_resolve_scope()))
+        return bundle[0] if bundle else None
+
+    @property
+    def _retriever(self):
+        """The current scope's FactRetriever. See :attr:`_store`."""
+        bundle = self._scopes.get(self._db_path_for_scope(_resolve_scope()))
+        return bundle[1] if bundle else None
 
     def _scope_label(self) -> str:
         kind, _ = _resolve_scope()
@@ -454,10 +488,29 @@ class HolographicMemoryProvider(MemoryProvider):
                 logger.debug("Holographic memory_write mirror failed: %s", e)
 
     def shutdown(self) -> None:
-        # Provider is a process-global singleton; do NOT close cached per-scope
-        # stores here — other concurrent sessions may still be using them.
-        # SQLite connections are released at process exit.
-        pass
+        """Release this provider's SQLite connections.
+
+        Under ``scope_isolation`` the provider is a process-global singleton
+        holding one store PER SCOPE, and another concurrent session may still be
+        using any of them — so closing here would pull a live connection out from
+        under it. Leave those to process exit.
+
+        With scope isolation off (the default) there is exactly one shared
+        bundle owned by this provider, and upstream's deterministic close
+        applies: dropping the reference alone defers fd finalization to GC,
+        which keeps the write lock alive on a long-running gateway. close() is
+        idempotent and refcount-guarded.
+        """
+        if self._scope_isolation:
+            return
+        with self._scopes_lock:
+            bundles = list(self._scopes.values())
+            self._scopes.clear()
+        for store, _retriever in bundles:
+            try:
+                store.close()
+            except Exception as e:
+                logger.debug("Holographic shutdown close() failed: %s", e)
 
     # -- Tool handlers -------------------------------------------------------
 
