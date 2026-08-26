@@ -282,3 +282,23 @@ def test_check_fn_is_true_when_only_a_mapped_site_token_exists(monkeypatch):
     monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
 
     assert wa._check_webflow_asset_upload() is True
+
+
+def test_mapped_var_missing_from_the_process_env_triggers_the_dotenv_load(monkeypatch):
+    """A default token in the process env must not mask a mapped var in .env.
+
+    Headless runs (cron, workers) reach the dotenv only when the token comes
+    back empty. With a default token already exported — a systemd
+    EnvironmentFile, say — that check passes while the per-site var is still
+    unloaded, and the everafter.ai upload silently goes out with base.ai's
+    token. The self-heal has to fire on the MAPPED var's absence too.
+    """
+    monkeypatch.setenv("WEBFLOW_API_TOKEN", "base-token")
+    monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
+
+    def fake_dotenv():
+        os.environ["WEBFLOW_API_TOKEN_EVERAFTER"] = "ea-token"
+
+    monkeypatch.setattr(wa, "_load_dotenv_once", fake_dotenv, raising=False)
+
+    assert wa._webflow_token("site-ea") == "ea-token"

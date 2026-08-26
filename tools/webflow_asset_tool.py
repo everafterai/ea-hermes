@@ -150,18 +150,25 @@ def _webflow_token(site_id: str = "") -> str:
     var also falls back, so a half-finished map degrades to the old behavior
     instead of yielding an empty token.
     """
-    def _read() -> str:
+    def _read(reloaded: bool) -> str:
         var = _site_token_env_map().get((site_id or "").strip())
         if var:
             token = os.getenv(var, "").strip()
             if token:
                 return token
+            if not reloaded:
+                # The mapped var may simply not be loaded yet. Report empty so
+                # the dotenv self-heal below fires: falling straight through to
+                # the default token here would let an exported
+                # WEBFLOW_API_TOKEN mask a per-site var still sitting in .env,
+                # and the upload would go out against the wrong site's token.
+                return ""
         return _default_webflow_token()
 
-    token = _read()
+    token = _read(False)
     if not token:
         _load_dotenv_once()
-        token = _read()
+        token = _read(True)
     return token
 
 
