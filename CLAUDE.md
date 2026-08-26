@@ -156,7 +156,20 @@ that never loaded it (the same pattern), so they work headless.
   cannot get a cover image into Webflow and falls back to the dashboard in a `browser`,
   which hits a login/human-verification wall. Cred `WEBFLOW_API_TOKEN` (needs the
   `assets:write` scope; `WEBFLOW_TOKEN` accepted as a fallback since the MCP block
-  remaps to it). **Deliberately a separate toolset from `mcp-webflow`** — writing bytes
+  remaps to it). **Multi-site:** a Webflow token is scoped to ONE site, so hosts
+  managing several set `WEBFLOW_SITE_TOKENS` in `.env` to a
+  `site_id:ENV_VAR_NAME` comma list (var *names*, so secrets stay one-per-line);
+  the tool resolves the token from its `site_id` argument, falling back to
+  `WEBFLOW_API_TOKEN` for unmapped sites, so a single-site install is unchanged.
+  Each site also needs **its own `mcp_servers` entry** (`webflow` = base.ai,
+  `webflow_everafter` = everafter.ai) — same package, second process, second
+  token. Use an **underscore** in that server name: `sanitize_mcp_name_component`
+  rewrites `-`→`_` in the tool prefix but not the toolset name, so a hyphen
+  splits `mcp-webflow-x` from `mcp__webflow_x__*`. Grant BOTH spellings
+  (`webflow_everafter` + `mcp-webflow_everafter`) in the role. Approval globs in
+  `approvals.require_for_tools` must use the real dispatch spelling
+  `mcp__<server>__<tool>` — exact `fnmatch`, no normalization, so a wrong prefix
+  is a silently inert gate. **Deliberately a separate toolset from `mcp-webflow`** — writing bytes
   to a public CDN is not implied by reading collections — granted to the config's
   `webflow_publisher` role alongside `webflow`/`mcp-webflow`. Reads are guarded by
   `get_read_block_error` + `is_protected_data_path` ([agent/file_safety.py](agent/file_safety.py))

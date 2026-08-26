@@ -43,6 +43,7 @@ WIRING = [
     ("jira_api", "tools/jira_api_tool.py", "_ALLOWED_METHODS", "read-only guard"),
     ("slack_post_thread", "tools/slack_post_thread_tool.py", 'toolset="slack_post"', "non-floor toolset"),
     ("webflow_asset_upload", "tools/webflow_asset_tool.py", "is_protected_data_path", "credential-read guard"),
+    ("webflow_asset_upload", "tools/webflow_asset_tool.py", "WEBFLOW_SITE_TOKENS", "per-site token map"),
     ("ownership tool", "tools/ownership_tool.py", 'toolset="ownership"', "floor toolset"),
     # ── Multi-user session isolation ──────────────────────────────────────
     ("Session visibility", "hermes_state.py", "def build_visibility_where", "SQL scope fragment"),

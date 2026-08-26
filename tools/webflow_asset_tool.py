@@ -22,6 +22,12 @@ the MCP server block remaps to ``WEBFLOW_TOKEN``) and self-heal for headless
 cron/worker runs that never loaded the dotenv — mirrors jira_api / notion_api.
 The token needs the ``assets:write`` scope.
 
+A Webflow API token is scoped to ONE site, so hosts managing several (base.ai
+and everafter.ai here, each behind its own ``mcp_servers`` entry) set
+``WEBFLOW_SITE_TOKENS`` to map site ids onto per-site env var NAMES — see
+``_site_token_env_map``. Resolving off the caller's ``site_id`` rather than off
+process state is what keeps the token and its site from drifting apart.
+
 Registered as its OWN toolset (``webflow_assets``) so RBAC gates it
 independently of the ``mcp-webflow`` toolset: writing bytes to a public CDN is a
 different privilege from reading collections.
@@ -89,26 +95,72 @@ WEBFLOW_ASSET_UPLOAD_SCHEMA = {
 }
 
 
-def _webflow_token() -> str:
-    """Resolve the Webflow API token, self-healing from ~/.hermes/.env once.
+def _load_dotenv_once() -> None:
+    """Pull ~/.hermes/.env into the process env for headless cron/worker runs."""
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv()
+    except Exception:
+        pass
 
-    ``WEBFLOW_API_TOKEN`` is the canonical name (the MCP server block remaps it
-    to the package's ``WEBFLOW_TOKEN``); the latter is accepted as a fallback so
-    a host configured only for the MCP server still works.
+
+def _site_token_env_map() -> dict:
+    """Parse ``WEBFLOW_SITE_TOKENS`` — a ``site_id:ENV_VAR_NAME`` comma list.
+
+    One Webflow API token is scoped to ONE site, so a second site (everafter.ai
+    alongside base.ai) needs a second token. The map holds var *names*, not
+    values, so the secrets stay one-per-line in ~/.hermes/.env:
+
+        WEBFLOW_API_TOKEN=<base.ai token>
+        WEBFLOW_API_TOKEN_EVERAFTER=<everafter.ai token>
+        WEBFLOW_SITE_TOKENS=<base_site_id>:WEBFLOW_API_TOKEN,<ea_site_id>:WEBFLOW_API_TOKEN_EVERAFTER
+
+    Malformed entries are skipped rather than raising: a typo must not take the
+    tool offline for the sites that ARE configured.
+    """
+    raw = os.getenv("WEBFLOW_SITE_TOKENS", "").strip()
+    if not raw:
+        return {}
+    mapping = {}
+    for entry in raw.split(","):
+        site, sep, var = entry.partition(":")
+        if not sep:
+            continue
+        site, var = site.strip(), var.strip()
+        if site and var:
+            mapping[site] = var
+    return mapping
+
+
+def _default_webflow_token() -> str:
+    """The site-agnostic token: canonical name first, MCP-only host second."""
+    return (
+        os.getenv("WEBFLOW_API_TOKEN", "").strip()
+        or os.getenv("WEBFLOW_TOKEN", "").strip()
+    )
+
+
+def _webflow_token(site_id: str = "") -> str:
+    """Resolve the Webflow API token for *site_id*, self-healing from .env once.
+
+    Keyed on the site id the caller already had to supply, so the token and the
+    site it is spent against can never drift apart. A site with no mapping —
+    and every single-site install, which has no ``WEBFLOW_SITE_TOKENS`` at all —
+    falls back to ``WEBFLOW_API_TOKEN`` exactly as before. A mapped-but-unset
+    var also falls back, so a half-finished map degrades to the old behavior
+    instead of yielding an empty token.
     """
     def _read() -> str:
-        return (
-            os.getenv("WEBFLOW_API_TOKEN", "").strip()
-            or os.getenv("WEBFLOW_TOKEN", "").strip()
-        )
+        var = _site_token_env_map().get((site_id or "").strip())
+        if var:
+            token = os.getenv(var, "").strip()
+            if token:
+                return token
+        return _default_webflow_token()
 
     token = _read()
     if not token:
-        try:
-            from hermes_cli.env_loader import load_hermes_dotenv
-            load_hermes_dotenv()
-        except Exception:
-            pass
+        _load_dotenv_once()
         token = _read()
     return token
 
@@ -210,7 +262,7 @@ async def _webflow_asset_upload_handler(args: dict, **_kw) -> str:
             f"File too large to upload ({size} bytes > {_MAX_ASSET_BYTES})."
         )
 
-    token = _webflow_token()
+    token = _webflow_token(site_id)
     if not token:
         return tool_error(
             "Webflow not configured (set WEBFLOW_API_TOKEN with the "
@@ -294,8 +346,16 @@ async def _webflow_asset_upload_handler(args: dict, **_kw) -> str:
 
 
 def _check_webflow_asset_upload() -> bool:
-    """Available whenever a Webflow API token is resolvable."""
-    return bool(_webflow_token())
+    """Available whenever ANY Webflow API token is resolvable.
+
+    A host may be configured for a mapped site only (no default token), so the
+    per-site vars count too — otherwise the tool would not register at all.
+    """
+    if _webflow_token():
+        return True
+    return any(
+        os.getenv(var, "").strip() for var in _site_token_env_map().values()
+    )
 
 
 registry.register(
