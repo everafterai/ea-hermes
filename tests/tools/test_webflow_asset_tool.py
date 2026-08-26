@@ -17,7 +17,7 @@ import tools.webflow_asset_tool as wa
 
 @pytest.fixture
 def token_ok(monkeypatch):
-    monkeypatch.setattr(wa, "_webflow_token", lambda: "wf-token")
+    monkeypatch.setattr(wa, "_webflow_token", lambda site_id="": "wf-token")
 
 
 @pytest.fixture
@@ -183,7 +183,7 @@ def test_missing_upload_url_is_structured(monkeypatch, token_ok, png):
 
 
 def test_missing_token_returns_structured_error(monkeypatch, png):
-    monkeypatch.setattr(wa, "_webflow_token", lambda: "")
+    monkeypatch.setattr(wa, "_webflow_token", lambda site_id="": "")
     out = _run({"site_id": "site-1", "file_path": str(png)})
     assert "error" in out and "configured" in out["error"].lower()
 
@@ -196,7 +196,89 @@ def test_missing_site_id_errors(monkeypatch, token_ok, png):
 
 
 def test_check_fn_follows_token(monkeypatch):
-    monkeypatch.setattr(wa, "_webflow_token", lambda: "tok")
+    monkeypatch.setattr(wa, "_webflow_token", lambda site_id="": "tok")
     assert wa._check_webflow_asset_upload() is True
-    monkeypatch.setattr(wa, "_webflow_token", lambda: "")
+    monkeypatch.setattr(wa, "_webflow_token", lambda site_id="": "")
     assert wa._check_webflow_asset_upload() is False
+
+
+# --- Per-site token resolution (multi-site: base.ai + everafter.ai) ----------
+#
+# Two Webflow sites means two API tokens (a site token is scoped to one site,
+# and a workspace-scoped token cannot express per-site access levels). The
+# tool receives `site_id` already, so the token is resolved FROM it rather than
+# from which process is running — a mismatched pair can't happen.
+#
+# `WEBFLOW_SITE_TOKENS` maps `site_id:ENV_VAR_NAME` — var NAMES, not values, so
+# secrets stay one-per-line in ~/.hermes/.env.
+
+
+@pytest.fixture(autouse=True)
+def _clear_webflow_env(monkeypatch):
+    """Never inherit the developer's real Webflow env into these tests."""
+    for var in ("WEBFLOW_SITE_TOKENS", "WEBFLOW_API_TOKEN", "WEBFLOW_TOKEN",
+                "WEBFLOW_API_TOKEN_EVERAFTER"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(wa, "_load_dotenv_once", lambda: None, raising=False)
+
+
+def test_site_tokens_map_selects_the_token_for_that_site(monkeypatch):
+    monkeypatch.setenv("WEBFLOW_API_TOKEN", "base-token")
+    monkeypatch.setenv("WEBFLOW_API_TOKEN_EVERAFTER", "ea-token")
+    monkeypatch.setenv(
+        "WEBFLOW_SITE_TOKENS",
+        "site-base:WEBFLOW_API_TOKEN,site-ea:WEBFLOW_API_TOKEN_EVERAFTER",
+    )
+
+    assert wa._webflow_token("site-base") == "base-token"
+    assert wa._webflow_token("site-ea") == "ea-token"
+
+
+def test_unmapped_site_falls_back_to_the_default_token(monkeypatch):
+    """A single-site install (no map) must behave exactly as before."""
+    monkeypatch.setenv("WEBFLOW_API_TOKEN", "base-token")
+    monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
+
+    assert wa._webflow_token("some-other-site") == "base-token"
+    assert wa._webflow_token("") == "base-token"
+
+
+def test_mapped_var_that_is_unset_falls_back_to_the_default_token(monkeypatch):
+    """A half-configured map must not silently yield an empty token."""
+    monkeypatch.setenv("WEBFLOW_API_TOKEN", "base-token")
+    monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
+
+    assert wa._webflow_token("site-ea") == "base-token"
+
+
+def test_site_tokens_map_tolerates_whitespace_and_junk_entries(monkeypatch):
+    monkeypatch.setenv("WEBFLOW_API_TOKEN_EVERAFTER", "ea-token")
+    monkeypatch.setenv(
+        "WEBFLOW_SITE_TOKENS",
+        " , site-ea : WEBFLOW_API_TOKEN_EVERAFTER , nocolon, :novar, site-x: ",
+    )
+
+    assert wa._webflow_token("site-ea") == "ea-token"
+    assert wa._webflow_token("site-x") == ""
+
+
+def test_handler_resolves_the_token_from_the_requested_site(monkeypatch, png):
+    """End-to-end: the site_id argument picks which token leg 1 is called with."""
+    monkeypatch.setenv("WEBFLOW_API_TOKEN", "base-token")
+    monkeypatch.setenv("WEBFLOW_API_TOKEN_EVERAFTER", "ea-token")
+    monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
+    captured = _stub_legs(monkeypatch)
+
+    assert _run({"site_id": "site-ea", "file_path": str(png)})["ok"] is True
+    assert captured["token"] == "ea-token"
+
+    assert _run({"site_id": "site-base", "file_path": str(png)})["ok"] is True
+    assert captured["token"] == "base-token"
+
+
+def test_check_fn_is_true_when_only_a_mapped_site_token_exists(monkeypatch):
+    """A host configured for everafter.ai alone must still register the tool."""
+    monkeypatch.setenv("WEBFLOW_API_TOKEN_EVERAFTER", "ea-token")
+    monkeypatch.setenv("WEBFLOW_SITE_TOKENS", "site-ea:WEBFLOW_API_TOKEN_EVERAFTER")
+
+    assert wa._check_webflow_asset_upload() is True
