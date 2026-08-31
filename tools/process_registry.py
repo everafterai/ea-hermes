@@ -622,6 +622,7 @@ class ProcessRegistry:
                 self.completion_queue.put({
                     "session_id": session.id,
                     "session_key": session.session_key,
+                    "task_id": session.task_id,
                     "command": session.command,
                     "type": "watch_disabled",
                     "suppressed": session._watch_suppressed,
@@ -685,6 +686,7 @@ class ProcessRegistry:
         self.completion_queue.put({
             "session_id": session.id,
             "session_key": session.session_key,
+            "task_id": session.task_id,
             "command": session.command,
             "type": "watch_disabled",
             "suppressed": 0,
@@ -1076,6 +1078,11 @@ class ProcessRegistry:
                 user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
+                # PTY mode is a real TTY, so pager-happy tools (git log/diff,
+                # man) WILL page and hang waiting for `q` — default them to
+                # cat, honoring any pager the user already exported.
+                pty_env.setdefault("GIT_PAGER", "cat")
+                pty_env.setdefault("PAGER", "cat")
                 pty_argv = [user_shell, "-lic", f"set +m; {safe_command}"]
 
                 # Cgroup isolation for PTY mode (#70716, reviewer gap #1):
@@ -1837,6 +1844,26 @@ class ProcessRegistry:
             skip_poll_observed and session_id in self._poll_observed
         )
 
+    @staticmethod
+    def _surface_child_process_notifications() -> bool:
+        """Whether subagent-owned process notifications surface in the parent.
+
+        Read from ``delegation.surface_child_process_notifications`` in
+        config.yaml (default false = suppress). On any config read error the
+        DEFAULT applies (suppress) — never crash the drain loop.
+        """
+        try:
+            from hermes_cli.config import DEFAULT_CONFIG, cfg_get, read_raw_config
+            cfg = read_raw_config()
+            val = cfg_get(cfg, "delegation", "surface_child_process_notifications")
+            if val is None:
+                val = DEFAULT_CONFIG["delegation"][
+                    "surface_child_process_notifications"
+                ]
+            return bool(val)
+        except Exception:
+            return False
+
     def drain_notifications(
         self,
         session_key: str = "",
@@ -1875,6 +1902,10 @@ class ProcessRegistry:
         """
         results: "list[tuple[dict, str]]" = []
         requeue: "list[dict]" = []
+        # Lazily-read flag for subagent-owned process notifications
+        # (delegation.surface_child_process_notifications, default false).
+        # Read at most once per drain, and only when an sa- event shows up.
+        surface_child: "bool | None" = None
         while not self.completion_queue.empty():
             try:
                 evt = self.completion_queue.get_nowait()
@@ -1916,6 +1947,28 @@ class ProcessRegistry:
                 _evt_sid, skip_poll_observed=skip_poll_observed
             ):
                 continue
+
+            # Subagent-owned process notifications (task_id "sa-...") are
+            # suppressed from the parent conversation by default — the
+            # child's consolidated delegation result is the deliverable;
+            # "npm ci finished" walls mid-chat are noise. Dropped, NOT
+            # requeued (children never drain notify events, so requeueing
+            # would pin them in the queue forever). Type 'async_delegation'
+            # is the delegation result itself and is NEVER suppressed.
+            _evt_task_id = str(evt.get("task_id") or "")
+            if not is_async_delegation and _evt_task_id.startswith("sa-"):
+                if surface_child is None:
+                    surface_child = self._surface_child_process_notifications()
+                if not surface_child:
+                    logger.debug(
+                        "Suppressed subagent-owned process notification "
+                        "(delegation.surface_child_process_notifications=false): "
+                        "type=%s session_id=%s task_id=%s",
+                        evt.get("type", "completion"),
+                        _evt_sid,
+                        _evt_task_id,
+                    )
+                    continue
 
             text = format_process_notification(evt)
             if text:
@@ -2907,6 +2960,95 @@ def _format_age(seconds: float) -> str:
     return f"{h}h" if m == 0 else f"{h}h{m}m"
 
 
+def _model_not_found_patterns() -> "list[str]":
+    """Model-not-found phrases from the failover classifier.
+
+    Imported from ``agent.error_classifier`` so the batch renderer applies
+    the SAME classification the failover path consumes — no hand-copied
+    pattern list to drift. Fails open to a minimal built-in set so a
+    classifier import problem never hides the per-task blocks.
+    (Import approach from PR #97667 by @liuhao1024.)
+    """
+    try:
+        from agent.error_classifier import _MODEL_NOT_FOUND_PATTERNS
+
+        return list(_MODEL_NOT_FOUND_PATTERNS)
+    except Exception:
+        return ["is not a valid model", "model not found", "model_not_found"]
+
+
+def _delegation_config() -> dict:
+    """Load the active delegation config (model/provider/fallbacks), fail-open.
+
+    Mirrors ``tools.delegate_tool._load_config`` so the renderer sees the same
+    ``model`` / ``provider`` the dispatcher used, without importing the heavy
+    delegation module at import time. Returns ``{}`` on any error so callers
+    fail open to "no notice" rather than dropping the per-task blocks.
+    """
+    try:
+        from tools.delegate_tool import _load_config as _cfg
+
+        return _cfg() or {}
+    except Exception:
+        return {}
+
+
+def _delegation_model_not_found(results, config) -> bool:
+    """True when a result entry reflects a config-level model_not_found rejection.
+
+    Matches when at least one entry's error/summary text contains both a
+    model-not-found phrase AND the name of the currently-configured delegation
+    model — so a stale task failing on a *different* (removed) model is not
+    mis-attributed to the config-level root cause.
+    """
+    model = (config or {}).get("model")
+    if not model:
+        return False
+    model = str(model).lower()
+    for r in results or []:
+        text = " ".join(
+            str(part) for part in (r.get("error"), r.get("summary")) if part
+        ).lower()
+        if not text or model not in text:
+            continue
+        if any(p in text for p in _model_not_found_patterns()):
+            return True
+    return False
+
+
+def _delegation_model_not_found_notice(results) -> "list[str] | None":
+    """Build the config-level model_not_found notice lines, or None.
+
+    Returns ``None`` unless at least one result entry shows the configured
+    delegation model being rejected by its provider, in which case a short
+    actionable block is returned. Every failure path fails open to ``None`` so
+    a config hiccup never hides the per-task blocks. Emit once per batch.
+    """
+    config = _delegation_config()
+    if not _delegation_model_not_found(results, config):
+        return None
+    model = config.get("model") or "?"
+    provider = config.get("provider") or "configured provider"
+    lines = [
+        "⚠ SUBAGENT MODEL REJECTED: the configured Subagent Model "
+        f'"{model}" was rejected by provider "{provider}" '
+        "(HTTP 400: not a valid model ID).",
+        "Every task in this batch failed for this reason before doing any work.",
+        "Check Settings → Advanced → Subagent Model (or: "
+        "hermes config get delegation.model).",
+    ]
+    try:
+        from hermes_cli.fallback_config import get_fallback_chain
+
+        if not get_fallback_chain(config):
+            lines.append(
+                "No fallback chain is configured, so no failover was attempted."
+            )
+    except Exception:
+        pass
+    return lines
+
+
 def _format_async_delegation(evt: dict) -> str:
     """Format an async-delegation completion into a self-contained re-injection.
 
@@ -2965,6 +3107,13 @@ def _format_async_delegation(evt: dict) -> str:
             lines.append("--- ERROR ---")
             lines.append(f"The batch did not complete successfully: {error}")
             return "\n".join(lines)
+        # Config-level rejection notice BEFORE the per-task wall — a rejected
+        # delegation model fails every task identically before doing any
+        # work, and that signal must not stay buried in the task blocks.
+        _notice = _delegation_model_not_found_notice(results)
+        if _notice:
+            lines.append("")
+            lines.extend(_notice)
         for r in sorted(results, key=lambda x: x.get("task_index", 0)):
             idx = r.get("task_index", 0)
             r_status = r.get("status", "?")
@@ -3032,6 +3181,10 @@ def _format_async_delegation(evt: dict) -> str:
     if toolsets:
         lines.append(f"Toolsets: {', '.join(toolsets)}")
     lines.append(f"Role: {role}   Model: {model}")
+    _notice = _delegation_model_not_found_notice([evt])
+    if _notice:
+        lines.append("")
+        lines.extend(_notice)
     _trunc = " [TRUNCATED: hit max_iterations — work may be incomplete]" if truncated else ""
     lines.append(f"Status: {status}   API calls: {api_calls}   Duration: {duration}s{_trunc}")
     lines.append("--- RESULT ---")
@@ -3190,41 +3343,44 @@ from tools.registry import registry, tool_error
 
 PROCESS_SCHEMA = {
     "name": "process",
+    # Dieted (#95681): the action enum names the verbs; the description
+    # keeps only non-obvious semantics. write-vs-submit is the tool's one
+    # real trap (a lone \n on a Windows PTY is not a line terminator) —
+    # that teaching gains emphasis rather than losing it.
     "description": (
         "Manage background processes started with terminal(background=true). "
-        "Actions: 'list' (show all), 'poll' (check status + new output), "
-        "'log' (full output with pagination), 'wait' (block until done or timeout), "
-        "'kill' (terminate), 'write' (send raw stdin data without newline), "
-        "'submit' (send data + Enter, for answering prompts), 'close' (close stdin/send EOF)."
+        "poll: status + new output. log: full output, paged. wait: block "
+        "until exit or timeout (partial output on timeout). write vs "
+        "submit: submit appends Enter — use it to answer prompts; write "
+        "sends raw bytes, no newline. close: EOF stdin. kill: terminate."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "poll", "log", "wait", "kill", "write", "submit", "close"],
-                "description": "Action to perform on background processes"
+                "enum": ["list", "poll", "log", "wait", "kill", "write", "submit", "close"]
             },
             "session_id": {
                 "type": "string",
-                "description": "Process session ID (from terminal background output). Required for all actions except 'list'. A unique ID prefix works too (e.g. 'proc_4dae' or just '4dae' for proc_4dae56ca81f6)."
+                "description": "From terminal background output; any unique prefix works ('4dae' for proc_4dae56ca81f6). Required except for 'list'."
             },
             "data": {
                 "type": "string",
-                "description": "Text to send to process stdin (for 'write' and 'submit' actions)"
+                "description": "Stdin text for write/submit."
             },
             "timeout": {
                 "type": "integer",
-                "description": "Max seconds to block for 'wait' action. Returns partial output on timeout.",
+                "description": "Max seconds for 'wait'.",
                 "minimum": 1
             },
             "offset": {
                 "type": "integer",
-                "description": "Line offset for 'log' action (default: last 200 lines)"
+                "description": "Log line offset (default: last 200)."
             },
             "limit": {
                 "type": "integer",
-                "description": "Max lines to return for 'log' action",
+                "description": "Max log lines.",
                 "minimum": 1
             }
         },
