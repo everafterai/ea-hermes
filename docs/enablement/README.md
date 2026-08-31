@@ -1,14 +1,16 @@
-# Agent enablement session
+# Off Your Plate — Agent Building Session
 
 Materials for the internal session that introduces the team (~20 people) to what
-our self-hosted Hermes agent can do, and sends them away in squads with one
-automation each to own.
+our self-hosted Hermes agent can do, and has them design, build and demo their
+first automation in squads — all inside a single three-hour session.
+
+**Program:** *Off Your Plate*. **Session:** *Agent Building Session*.
 
 Two deliverables, built from the same design system:
 
 | File | What it is |
 | --- | --- |
-| `dist/deck.html` | 26-slide presentation. The version shown in the room. |
+| `dist/deck.html` | 31-slide presentation. The version shown in the room. |
 | `dist/playbook.html` | Long-form facilitator playbook. The version used to prepare. |
 
 ## Editing
@@ -65,22 +67,68 @@ facilitation lives, not on the slides.
 The last two slides are marked ⚑ **facilitator only** (prep checklist and
 failure-mode table). Don't project them.
 
+## The concept model
+
+One mental model, taught once and reused everywhere — in the demo, on the
+worksheet, in the share-back:
+
+**Trigger → Context → Decision → Action**
+
+The third block has two settings, and which one you pick is what decides the
+*kind* of automation you're building:
+
+| | Script | Agent |
+| --- | --- | --- |
+| Decides by | Rules you can state | Judgment you can only describe |
+| Same input twice | Identical answer, always | Usually the same. Not guaranteed |
+| Costs per run | Effectively nothing | Real, if small |
+| When it's wrong | It breaks loudly | It can be quietly plausible |
+
+The test squads apply during the brainstorm: **can you write the rule down?**
+Then it's a script. Can you only describe what good looks like? Then it needs
+judgment.
+
+Most real automations are **both** — a script gathers and filters
+deterministically, an agent handles the one messy part, a script delivers. The
+skill being taught is carving an idea into the part you can write down and the
+small part you can't, then handing over only the second piece. It mirrors the
+access rule deliberately: least information, least judgment.
+
+Two consequences worth keeping if you rework the material:
+
+**The script half is a credibility device, not a footnote.** Saying out loud
+that much of what the team wants needs no model at all is what makes the
+agentic claims believable — particularly to R&D. It also converts the
+"not good at" list into a routing rule rather than a limitation: anything that
+must be exact becomes a script.
+
+**The pitch for scripts is that the script was never the hard part.** What
+stopped anyone writing the Jira nudge was auth, hosting, scheduling, breakage
+and Python. All five are gone. That is the empowerment message for the
+non-engineers in the room.
+
+Every item in the seeded idea menus is tagged `script` / `agent` / `both`, so
+the distinction gets reinforced twenty-four more times during the brainstorm.
+
 ## Session shape
 
-Three hours, six squads by function (customer success, sales, marketing,
-support, product, R&D), one champion each.
+**One session, three hours.** Six squads by function (customer success, sales,
+marketing, support, product, R&D), one champion each. There is no follow-up
+Demo Day — squads demo inside the session, and design and build are one
+continuous 90-minute block that squads manage themselves, with no checkpoint
+between.
 
 | Time | Block |
 | --- | --- |
-| 0:00 | Cold open — take live questions about the company, no slides |
-| 0:10 | What this is: the four blocks, the filter, good-at / not-good-at |
-| 0:40 | What it can and cannot see — deliberately **before** the brainstorm |
-| 0:55 | Demo: build The Radar live |
-| 1:10 | Break |
-| 1:25 | Squad brainstorm (30 min, worksheet) |
-| 1:55 | Share-back, 4 min per squad |
-| 2:20 | Build block — champions build, squads watch |
-| 2:50 | Commitments, Demo Day confirmed |
+| 0:00 | Open on the numbers: yesterday's runs, the board of live automations, BA-282 |
+| 0:10 | What this is: the four blocks, scripts vs agents, the filter, good-at / not-good-at |
+| 0:32 | What it can and cannot see — deliberately **before** the brainstorm |
+| 0:42 | Demo: build The Radar live |
+| 0:54 | Break |
+| 1:04 | Squad brief |
+| 1:08 | **Design it, then build it — one 90-minute block** |
+| 2:38 | Show us what you made — 3 min per squad, live |
+| 2:55 | What happens tomorrow, champion commitments |
 
 Two load-bearing design decisions worth preserving if you rework this:
 
@@ -90,9 +138,47 @@ won't propose anything touching data they assume is off-limits, others get
 quietly uneasy about being watched.
 
 **The worksheet has a required "access needed" field.** It turns scope into
-something squads design within and own, rather than something that gets vetoed
-at share-back. A squad that has to write down the access its idea needs
-self-selects toward narrow ideas.
+something squads design within and own, rather than something vetoed later. A
+squad that has to write down the access its idea needs self-selects toward
+narrow ideas. With no checkpoint between design and build, the facilitator *is*
+the checkpoint — circulate in the first ten minutes of the build block and
+shrink anything with a long access list before a squad invests in it.
+
+**The demos are the accountability loop, and something has to carry it
+afterwards.** A single session with no follow-up meeting decays inside a week.
+The replacement already exists and is already running: the automation-creation
+monitor announces every new automation the moment it appears, and the weekly
+activity report posts what everything did. Point both at a channel the whole
+company can see and the scoreboard becomes ambient rather than a meeting.
+
+## The opening
+
+Do **not** open with a capability tour or a live "ask it anything" demo. The
+strongest asset available is that this is already working at volume, built by
+three people around their day jobs. Lead with evidence:
+
+1. **The figures from yesterday** — 8 automations, 1,274 runs, 0 errors,
+   74 messages. The last two numbers are the point: the silence is deliberate,
+   because an automation that speaks every time it runs gets muted inside a
+   week. Reuse this when the Radar posts nothing on a quiet day.
+2. **The board** — all eight, with owners and engines. Point at two columns:
+   *owners* (three people, not a department) and *engine* (six of eight are
+   script + agent together, so the scripts-vs-agents teaching lands later as an
+   observation about our own system rather than as theory).
+3. **BA-282** — marked Done while a pull request was still open. The reconciler
+   caught it fifteen minutes later, posted a warning, added a Notion
+   deployment-check note and updated the tracking state. Nobody asked it to
+   look. Don't over-explain; the mechanism is unpacked at the worked-example
+   slide as a deliberate callback.
+
+**Keep the honesty beat.** Several live automations run flawlessly without
+substantiating that they changed anything. Saying *"it ran is not the same as
+it helped"* costs nothing and buys real credibility — but the bar for the
+in-session demos is deliberately lower (*it runs*); "it helped" is what the
+Sunday report tests.
+
+These numbers are a snapshot — refresh them from the activity report before
+presenting, and keep the ratio framing even if the figures move.
 
 ## The demo
 
@@ -115,7 +201,9 @@ that person and asking "did you know that?"
 
 ## Before presenting
 
-- [ ] **Verify the access claims on slide 10** against the current
+- [ ] **Refresh the opening figures** (runs / errors / messages, and the
+      board itself) from the weekly automation activity report
+- [ ] **Verify the access claims on the "Access is by role" slide** against the current
       `config.yaml`. It's written from principles plus the roles that exist;
       being loosely accurate about what the agent can reach is worse than
       saying less.
@@ -123,6 +211,6 @@ that person and asking "did you know that?"
 - [ ] Create a Slack channel per squad; assign champion roles in `config.yaml`
       so nobody is blocked on permissions during the build block
 - [ ] Write six scope cards (one channel / database / folder each)
-- [ ] Book Demo Day, two weeks out
+- [ ] Point the creation monitor and weekly activity report at a public channel
 - [ ] Create `#radar`, assemble the watch list, rehearse the demo, keep a screen
       recording as fallback
