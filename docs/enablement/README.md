@@ -1,10 +1,10 @@
-# Off Your Plate — Agent Building Session
+# Off Your Plate — Agent Building Adventure
 
 Materials for the internal session that introduces the team (~20 people) to what
 our self-hosted Hermes agent can do, and has them design, build and demo their
 first automation in squads — all inside a single three-hour session.
 
-**Program:** *Off Your Plate*. **Session:** *Agent Building Session*.
+**Program:** *Off Your Plate*. **Session:** *Agent Building Adventure*.
 
 Two deliverables, built from the same design system:
 

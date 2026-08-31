@@ -2164,34 +2164,29 @@ def _skill_manage_inner(
 
 
 def skill_manage(
-    action: str,
-    name: str,
-    content: str = None,
-    category: str = None,
-    file_path: str = None,
-    file_content: str = None,
-    old_string: str = None,
-    new_string: str = None,
-    replace_all: bool = False,
-    absorbed_into: str = None,
+    action: str = None,
+    name: str = None,
+    *,
     confirm_cross_user_owner: str = None,
-    task_id: str = None,
-    session_id: str = None,
+    **kwargs,
 ) -> str:
     """Public entry point for skill_manage.
 
     Sets the cross-user confirm token for the duration of the call, delegates
     to ``_skill_manage_inner``, and registers the creator on successful create.
+
+    Everything except the fork's own ``confirm_cross_user_owner`` is forwarded
+    verbatim via ``**kwargs``. This wrapper is a policy shim, not a second copy
+    of the signature: enumerating parameters here meant every parameter upstream
+    added to ``_skill_manage_inner`` (``task_id``/``session_id`` in v0.20.5,
+    ``operations`` in v0.20.6) raised TypeError on every dispatched call until
+    someone noticed. Passthrough keeps the shim decoupled from upstream's
+    evolving argument list.
     """
     _tok = _CONFIRM_OWNER.set(confirm_cross_user_owner)
     _notice_tok = _OWNERSHIP_NOTICE.set(None)
     try:
-        result = _skill_manage_inner(
-            action=action, name=name, content=content, category=category,
-            file_path=file_path, file_content=file_content, old_string=old_string,
-            new_string=new_string, replace_all=replace_all, absorbed_into=absorbed_into,
-            task_id=task_id, session_id=session_id,
-        )
+        result = _skill_manage_inner(action=action, name=name, **kwargs)
         try:
             import json as _json
             from agent import automation_ownership as _ao
@@ -2307,14 +2302,13 @@ SKILL_MANAGE_SCHEMA = {
                     "required": ["name", "action"]
                 }
             },
-            "confirm_cross_user_owner": {
-                "type": "string",
-                "description": (
-                    "Acknowledge editing a skill owned by another user. Pass the "
-                    "owner's name (or id) exactly as shown in the ownership warning, "
-                    "and ONLY after the user explicitly confirms. Omit otherwise."
-                ),
-            },
+            # NOTE: the handler still accepts `confirm_cross_user_owner` (the
+            # cross-user ownership gate's re-invoke token) — it is deliberately
+            # NOT advertised here. The gate's own refusal message names the
+            # parameter AND the value to pass (confirm_cross_user_owner="<owner>"),
+            # so it is self-teaching at the only moment it matters, and it stays
+            # out of the schema every call pays for. Mirrors upstream's treatment
+            # of `cross_profile` / `patch` in tools/file_tools.py.
             # NOTE: the handler also accepts the legacy flat single-op shape
             # (top-level action/name/content/old_string/new_string/
             # replace_all/category/file_path/file_content) — old transcripts
