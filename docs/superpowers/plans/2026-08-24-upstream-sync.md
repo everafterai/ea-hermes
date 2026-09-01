@@ -272,3 +272,49 @@ source under test:
   `test_file_tools.py` and `test_approval.py`'s new dangerous-rm case.
 - `test_systemd_notify` / `test_scale_to_zero` / `test_linux_desktop_entry` —
   Linux-only paths and `AF_UNIX path too long` on macOS.
+
+
+---
+
+## Second sync (2026-09-01) — upstream v0.20.6
+
+Re-merged `upstream/main` a week later: **1,365 new commits, 2,254 files,
++241,910 / −52,891**. Merged at `860e3df543`.
+
+**Only 6 conflicted files / 12 hunks** (vs 41 files / ~136 hunks the first
+time) — the fork is now close enough to upstream that a week of drift is a
+routine merge. No deletions or renames touched fork-modified files.
+
+| Package | Passed | Failed | vs before merge |
+|---|---|---|---|
+| fork gate (57 files) | 700 | **0** | same |
+| `tests/agent/` | 5,984 | 1 (flaky under load; passes isolated) | +1 flake |
+| `tests/tools/` | 8,260 | 20 | **−7** |
+| `gateway` + `cron` + `hermes_state` + `cli` | 9,855 | 11 | −1 |
+| `tests/hermes_cli/` | 7,705 | 19 | +1 (new upstream update test) |
+| `run_agent` + `tui_gateway` + `plugins` + `skills` | 6,217 | **0** | same |
+
+### Fixed
+
+- **`skill_manage` wrapper broke the same way twice.** It enumerated
+  parameters, so every argument upstream adds to `_skill_manage_inner` raised
+  `TypeError` on every dispatched call — `task_id`/`session_id` in v0.20.5,
+  `operations` (batch skill edits) in v0.20.6. Fixed at the root: the wrapper
+  is a policy shim, not a copy of the signature, and now forwards `**kwargs`.
+- **`confirm_cross_user_owner` un-advertised** from `SKILL_MANAGE_SCHEMA`.
+  Upstream slimmed that schema to one property and pins it with a test; the
+  ownership gate's refusal already names the parameter *and* the value, so it
+  is self-teaching and no longer costs schema tokens every call. Same treatment
+  upstream gives `cross_profile`/`patch` in `file_tools`.
+- **Dependency sync required.** Upstream added `snowballstemmer` (tool search);
+  61 failures were that one missing package. `uv pip install -e .` fixed them.
+  **A `git pull` alone is not enough on the VM — deps must be installed.**
+- Ownership-prompt test now patches only helpers that still exist on
+  `run_agent` (`build_nous_subscription_prompt` moved out of its namespace).
+
+### Still-remaining failures: unchanged in character
+
+Same upstream/host-specific set as the first sync — `hermes update` (17, fork
+never touches `update_cmd.py`), cron drift-guard reading the developer's real
+`~/.hermes/config.yaml`, macOS `/tmp` symlink + `AF_UNIX path too long`, and
+upstream's new voice/wake-word/MCP-OAuth suites.
