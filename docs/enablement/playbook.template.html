@@ -166,7 +166,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <span class="chip">3 hours</span>
     <span class="chip">~20 people</span>
     <span class="chip">6 squads</span>
-    <span class="chip">1 champion each</span>
+    <span class="chip">4 champions on call</span>
   </div>
 </header>
 
@@ -178,7 +178,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <ul class="clean check">
       <li><strong>Everyone can describe an automation in one sentence.</strong> Trigger, context, judgment, action — the same four blocks every time.</li>
       <li><strong>Every squad has designed one automation</strong> written on a worksheet, including the access it needs.</li>
-      <li><strong>Every squad has a named champion</strong> with a role, a channel, and a scope card.</li>
+      <li><strong>Every squad has a named driver</strong> with a role, a channel, and a scope card — and knows which champion to grab.</li>
       <li><strong>Every squad demos something running</strong> before anyone leaves the room.</li>
     </ul>
     <p>That last one is the accountability loop, and it is why the demos sit inside the session rather than in a follow-up meeting two weeks later. A list of ideas decays inside a week; a thing that ran in front of colleagues does not.</p>
@@ -192,9 +192,10 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="card">
       <h4>The week before</h4>
       <ul class="clean check">
-        <li>Pick the six champions — curiosity over seniority</li>
+        <li>Confirm each squad's <strong>driver</strong> — curiosity over seniority, not the most senior person in the squad</li>
         <li>Create a Slack channel per squad</li>
-        <li>Assign champion roles in <code>config.yaml</code> so nobody is blocked on permissions during the build block</li>
+        <li>Give the <strong>drivers</strong> roles in <code>config.yaml</code> — the champions already have access; it is the drivers who get blocked</li>
+        <li>Brief the four champions on what floating means: circulate, advise, unblock, never take the keyboard</li>
         <li>Write six scope cards — one per squad</li>
         <li>Point the automation-creation monitor and the weekly activity report at a channel the whole company can see — that is the ongoing loop, in place of a follow-up meeting</li>
       </ul>
@@ -244,12 +245,12 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="row rest">
       <div class="time">0:54<span class="dur">10 min</span></div>
       <div class="body"><h3>Break</h3>
-      <p>Champions get their scope cards here, quietly, so the squads start with the constraint already in hand.</p></div>
+      <p>Hand the scope cards out here, quietly, so squads start with the constraint already in hand.</p></div>
     </div>
     <div class="row">
       <div class="time">1:04<span class="dur">4 min</span></div>
       <div class="body"><h3>Squad brief</h3>
-      <p>Hand out the worksheet, name the champions, state the rule: one automation, designed properly, beats five sketched.</p></div>
+      <p>Show the squad slide, hand out worksheets and scope cards, and make every squad <strong>name its driver out loud</strong> — that is the one thing that must happen in these four minutes. Say the champions are a pool, not owners.</p></div>
     </div>
     <div class="row pin">
       <div class="time">1:08<span class="dur">1 hr 30</span></div>
@@ -265,7 +266,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="row">
       <div class="time">2:55<span class="dur">5 min</span></div>
       <div class="body"><h3>What happens tomorrow</h3>
-      <p>The ongoing loop, then one sentence from each champion about what they'll finish this week. Close.</p></div>
+      <p>The ongoing loop, then one sentence from each driver about what they'll finish this week. Close.</p></div>
     </div>
   </div>
 </section>
@@ -475,86 +476,107 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
 
 <section>
   <div class="eyebrow">Structure</div>
-  <h2>Squads and champions</h2>
-  <div class="grid two">
+  <h2>Squads, drivers and champions</h2>
+  <p class="lede">Six squads, each built around one shared workflow rather than one department. The four champions sit in <em>no</em> squad — they float, advise and unblock.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Squad</th><th>Members</th><th>Shared cause</th><th>First port of call</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Go-To-Market</strong></td><td>Adi Gorelik · Ohad Sagir · Gal Biran</td><td>Demand → pipeline → close</td><td>Shachar</td></tr>
+        <tr><td><strong>Customer</strong></td><td>Yonat Shain · Rona Aharonson · Uri Ronen Nesher</td><td>Onboarding → retention → expansion</td><td>Tal</td></tr>
+        <tr><td><strong>Product</strong></td><td>Itamar Amit · Roni Nakache · Vivian Berko</td><td>Discovery → spec → feedback</td><td>Shachar</td></tr>
+        <tr><td><strong>Release Pipeline</strong></td><td>Elad Sofer · Ben Pinhas · Ori Marko</td><td>Ticket → PR → QA → deploy</td><td>Gil</td></tr>
+        <tr><td><strong>Dev Experience</strong></td><td>Leetal Rivlin-Tal · Nir Fainshtein · Yahav Dan · Yiftach Badani</td><td>The daily developer loop</td><td>Gal Briner</td></tr>
+        <tr><td><strong>Internal Ops</strong></td><td>Pazit Lazar · Ayelet Morag · Ariel Lilaev</td><td>Running the company itself</td><td>Tal</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid two" style="margin-top:26px">
     <div class="card">
-      <h4>How to pick a champion</h4>
+      <h4>The driver</h4>
       <ul class="clean">
+        <li>One person per squad, at the keyboard, owning the build and the scope card.</li>
         <li><strong>Curiosity over seniority.</strong> You want the person who tinkers, not the person who approves.</li>
-        <li>They own the squad's automation, its scope card, and being the person their team asks first.</li>
-        <li>They get a role in the config, a squad channel, and thirty minutes with you in the week after.</li>
-        <li>A champion who is too busy to build is the most common way this dies quietly.</li>
+        <li><strong>The driver needs the config role</strong>, not the champion — champions already have access, so it is the drivers who get blocked at 1:08.</li>
+        <li>They own the automation afterwards and become their squad's go-to, which is how this spreads without you.</li>
       </ul>
     </div>
     <div class="card">
-      <h4>Why squads are by function</h4>
+      <h4>The champions</h4>
       <ul class="clean">
-        <li>Automations are function-specific — a mixed squad designs something nobody owns on Monday.</li>
-        <li>The champion becomes their function's go-to person afterwards, which is how this spreads without you.</li>
-        <li>Six squads of three to four: customer success, sales, marketing, support, product, R&amp;D.</li>
+        <li>Gal Briner, Gil Hobot, Shachar Avrahami and Tal Shemesh — a <strong>pool</strong>, not squad members.</li>
+        <li>Named per squad only as a first port of call; any squad can grab any of them.</li>
+        <li><strong>Brief them beforehand:</strong> advise, unblock, answer — never take the keyboard. A champion who builds it leaves a squad with nothing they can maintain.</li>
+        <li>Two champions cover two squads each, and those four are the non-technical squads — expect them to be busiest, and back them up rather than the engineering tables.</li>
       </ul>
     </div>
+  </div>
+  <div class="note" style="margin-top:16px">
+    <strong>Two deliberate placements.</strong> The CEO is inside Go-To-Market rather than observing — a chief executive who builds something is a far stronger signal than one who watches, though in a squad of three he will dominate unless you say so. And Release Pipeline is QA plus the R&amp;D lead rather than developers: it is the exact pipeline BA-282 came out of, so the opening story doubles as that squad's brief.
+  </div>
+  <div class="note" style="margin-top:12px">
+    <strong>Show the trust segment to Ariel before the day.</strong> He is the CISO and he is a participant, which makes the 0:32 block a security briefing delivered with the security officer in the room. Best case he co-signs it or says a sentence himself, turning the most likely source of objection into the person validating the answer. Worst case he corrects something you would otherwise have said wrong in front of everyone.
   </div>
 </section>
 
 <section>
   <div class="eyebrow">Brainstorm fuel</div>
   <h2>Seeded ideas, by function</h2>
-  <p class="lede">Hand each squad only their own card. A blank page produces either wish lists or silence; a menu produces arguments about which one is best, which is exactly the conversation you want. Everything here fits a narrow scope.</p>
+  <p class="lede">Hand each squad only their own card. A blank page produces either wish lists or silence; a menu produces arguments about which one is best, which is exactly the conversation you want. Everything here fits a narrow scope. <strong>Check on Internal Ops first</strong> — it is the squad furthest from an obvious idea and the most likely to stall.</p>
   <div class="legend"><span><span class="mode m-script">script</span>rules only</span><span><span class="mode m-agent">agent</span>needs judgment</span><span><span class="mode m-hybrid">both</span>script gathers, agent handles the messy bit</span></div>
   <div class="grid two">
     <div class="squad">
-      <h3><span class="dot"></span>Customer Success</h3>
+      <h3><span class="dot"></span>Go-To-Market</h3>
       <ul class="clean">
-        <li>A Radar narrowed to just your accounts<span class="mode m-agent">agent</span></li>
-        <li>Renewal prep pack assembled two weeks out — open issues, what shipped, recent public news<span class="mode m-hybrid">both</span></li>
-        <li>Quiet-account alert: no mention anywhere in 30 days<span class="mode m-script">script</span></li>
-        <li>Onboarding stall nudge to the owner of a step that hasn't moved<span class="mode m-script">script</span></li>
-      </ul>
-    </div>
-    <div class="squad">
-      <h3><span class="dot"></span>Sales</h3>
-      <ul class="clean">
-        <li>Drop a domain, get a prospect brief before the call — public web only<span class="mode m-agent">agent</span></li>
-        <li>Inbound lead research with suggested angle and fit<span class="mode m-agent">agent</span></li>
-        <li>Competitor mention watch feeding battlecard updates<span class="mode m-hybrid">both</span></li>
-        <li>Post-call follow-up drafted from your own notes<span class="mode m-agent">agent</span></li>
-      </ul>
-    </div>
-    <div class="squad">
-      <h3><span class="dot"></span>Marketing</h3>
-      <ul class="clean">
+        <li>Drop a domain, get a prospect brief before the call<span class="mode m-agent">agent</span></li>
+        <li>Weekly pipeline movement: what changed stage, what went quiet<span class="mode m-script">script</span></li>
         <li>One blog post into five LinkedIn variants, with images<span class="mode m-agent">agent</span></li>
-        <li>Competitor content watch: what they published, what we should answer<span class="mode m-hybrid">both</span></li>
-        <li>Content calendar keeper that nudges owners and drafts the brief<span class="mode m-hybrid">both</span></li>
-        <li>Review and mention monitor, surfacing quotable social proof<span class="mode m-agent">agent</span></li>
+        <li>Competitor content watch — and what we should answer<span class="mode m-hybrid">both</span></li>
       </ul>
     </div>
     <div class="squad">
-      <h3><span class="dot"></span>Support</h3>
+      <h3><span class="dot"></span>Customer</h3>
       <ul class="clean">
-        <li>"Has this been reported before?" checked before anything gets filed<span class="mode m-agent">agent</span></li>
-        <li>First-response draft assembled from known issues and docs<span class="mode m-agent">agent</span></li>
-        <li>Weekly digest clustering the week's reports into themes<span class="mode m-agent">agent</span></li>
-        <li>Escalation watcher: anything critical still open past 24 hours<span class="mode m-script">script</span></li>
+        <li>Renewal prep pack assembled two weeks out<span class="mode m-hybrid">both</span></li>
+        <li>Quiet-account alert: nothing anywhere in 30 days<span class="mode m-script">script</span></li>
+        <li>Onboarding stall nudge to whoever owns the step<span class="mode m-script">script</span></li>
+        <li>Follow-up and account notes drafted from a call<span class="mode m-agent">agent</span></li>
       </ul>
     </div>
     <div class="squad">
       <h3><span class="dot"></span>Product</h3>
       <ul class="clean">
-        <li>Monthly roll-up clustering logged feature requests by theme<span class="mode m-agent">agent</span></li>
+        <li>Monthly roll-up clustering feature requests by theme<span class="mode m-agent">agent</span></li>
+        <li>PRD skeleton drafted from a thread or a call<span class="mode m-agent">agent</span></li>
+        <li>What customers asked for vs what we actually shipped<span class="mode m-hybrid">both</span></li>
         <li>Competitor release watch from public changelogs<span class="mode m-hybrid">both</span></li>
-        <li>Spec companion drafting a PRD skeleton from a thread<span class="mode m-agent">agent</span></li>
-        <li>Reconciling what customers asked for against what we shipped<span class="mode m-hybrid">both</span></li>
       </ul>
     </div>
     <div class="squad">
-      <h3><span class="dot"></span>R&amp;D</h3>
+      <h3><span class="dot"></span>Release Pipeline</h3>
       <ul class="clean">
+        <li>Extend the BA-282 reconciler to other mismatch shapes<span class="mode m-hybrid">both</span></li>
+        <li>Nudge tickets sitting in &quot;ready for QA&quot; past a threshold<span class="mode m-script">script</span></li>
+        <li>Test checklist assembled from the ticket and its diff<span class="mode m-agent">agent</span></li>
         <li>Release notes drafted from merged pull requests<span class="mode m-hybrid">both</span></li>
-        <li>Stale PR nudge to the reviewer who's sitting on it<span class="mode m-script">script</span></li>
-        <li>Incident context pack: pull every related past issue<span class="mode m-hybrid">both</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Dev Experience</h3>
+      <ul class="clean">
+        <li>Stale PR nudge to whoever is sitting on the review<span class="mode m-script">script</span></li>
+        <li>Incident context pack: every related past issue and PR<span class="mode m-hybrid">both</span></li>
         <li>Dependency and CVE watch on public advisories<span class="mode m-script">script</span></li>
+        <li>First-pass review on your own PR before a human sees it<span class="mode m-agent">agent</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Internal Ops</h3>
+      <ul class="clean">
+        <li>Security questionnaire drafted from our previous answers<span class="mode m-agent">agent</span></li>
+        <li>Candidate pipeline digest: who is stuck at which stage<span class="mode m-script">script</span></li>
+        <li>Onboarding checklist that chases its own owners<span class="mode m-script">script</span></li>
+        <li>Vendor and tool renewals: what expires when, who owns it<span class="mode m-hybrid">both</span></li>
       </ul>
     </div>
   </div>
@@ -573,7 +595,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <div class="field"><div class="lbl">What it does</div><div class="desc">The output, and where it lands.</div></div>
     <div class="field"><div class="lbl">Human checkpoint</div><div class="desc">What a person approves before anything leaves the building — or "none needed, it's internal".</div></div>
     <div class="field"><div class="lbl">Good enough looks like</div><div class="desc">If it's 85% right, what does that mean here, and is it still worth having?</div></div>
-    <div class="field"><div class="lbl">Owner</div><div class="desc">The champion, plus who checks it's still useful in a month.</div></div>
+    <div class="field"><div class="lbl">Owner</div><div class="desc">Your driver, plus who checks it's still useful in a month.</div></div>
   </div>
 </section>
 
@@ -584,7 +606,7 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <p>Three minutes per squad, at 2:38, with a visible timer. Six squads is seventeen minutes with nothing spare, so hold it. They run it live, however crude.</p>
     <p><strong>Say the bar out loud before they start, because it is deliberately low: it runs.</strong> Nobody has had an hour and also proved their automation helped anyone, and pretending otherwise makes the room defensive at exactly the wrong moment. Celebrate anything that executes. A squad that didn't get there shows its worksheet and names the blocker — that is a real result, and it hands you a list of things to unblock this week.</p>
     <p>The honest version of the bar is that <em>"it ran" is not "it helped"</em> — but that test belongs to the Sunday report, not to a room an hour into building.</p>
-    <p><strong>Without a follow-up meeting, something has to carry the loop</strong>, or a session like this decays inside a week. The good news is that it already exists and is already running: the automation-creation monitor announces every new automation the moment it appears, and the weekly activity report posts what everything did. Point both at a channel the whole company can see and the scoreboard becomes ambient instead of a meeting. Then close by having each champion say one sentence out loud about what they will finish this week.</p>
+    <p><strong>Without a follow-up meeting, something has to carry the loop</strong>, or a session like this decays inside a week. The good news is that it already exists and is already running: the automation-creation monitor announces every new automation the moment it appears, and the weekly activity report posts what everything did. Point both at a channel the whole company can see and the scoreboard becomes ambient instead of a meeting. Then close by having each driver — not each champion — say one sentence out loud about what they will finish this week.</p>
   </div>
 </section>
 
@@ -595,12 +617,13 @@ footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font
     <table>
       <thead><tr><th>Failure</th><th>Where it shows up</th><th>The fix, already built in</th></tr></thead>
       <tbody>
-        <tr><td><strong>Room nods, nothing changes</strong></td><td>The week after</td><td>Every squad demos in-session; new automations announce themselves publicly; champions commit out loud</td></tr>
+        <tr><td><strong>Room nods, nothing changes</strong></td><td>The week after</td><td>Every squad demos in-session; new automations announce themselves publicly; drivers commit out loud</td></tr>
         <tr><td><strong>Squad designs something you have to refuse</strong></td><td>Mid-build</td><td>The access field forces the constraint in during design; you circulate in the first ten minutes of the build</td></tr>
         <tr><td><strong>Brainstorm goes quiet</strong></td><td>First five minutes of the 30</td><td>Seeded menu per function — they argue about options instead of staring at a blank page</td></tr>
         <tr><td><strong>Demo finds nothing interesting</strong></td><td>Live, in front of everyone</td><td>Rehearse the identical build the day before; widen the watch list if thin</td></tr>
         <tr><td><strong>People get uneasy about surveillance</strong></td><td>Mid-brainstorm, unspoken</td><td>The access segment runs before the brainstorm, not after</td></tr>
-        <tr><td><strong>Champion is too senior and too busy</strong></td><td>Week two, silently</td><td>Pick for curiosity; the build block means they've already touched it</td></tr>
+        <tr><td><strong>A squad never names a driver</strong></td><td>Ten minutes into the build</td><td>Drivers named out loud during the brief; picked for curiosity, not seniority</td></tr>
+        <tr><td><strong>A champion builds it for a squad</strong></td><td>During the build</td><td>Brief them beforehand — advise and unblock, never take the keyboard</td></tr>
         <tr><td><strong>Ideas are all "I wish someone watched X"</strong></td><td>Throughout the brainstorm</td><td>Coach the missing block — almost always the trigger</td></tr>
       </tbody>
     </table>

@@ -108,12 +108,40 @@ and Python. All five are gone. That is the empowerment message for the
 non-engineers in the room.
 
 Every item in the seeded idea menus is tagged `script` / `agent` / `both`, so
-the distinction gets reinforced twenty-four more times during the brainstorm.
+the distinction gets reinforced twenty-four more times during the design phase.
+
+## Squads
+
+Cohesive around a workflow, not a department — which is why QA sits with the R&D
+lead rather than with the developers, and why the CEO is inside a squad instead
+of observing.
+
+| Squad | Members | Shared cause | First port of call |
+| --- | --- | --- | --- |
+| Go-To-Market | Adi · Ohad · Gal Biran | Demand → pipeline → close | Shachar |
+| Customer | Yonat · Rona · Uri | Onboarding → retention → expansion | Tal |
+| Product | Itamar · Roni · Vivian | Discovery → spec → feedback | Shachar |
+| Release Pipeline | Elad · Ben · Ori | Ticket → PR → QA → deploy | Gil |
+| Dev Experience | Leetal · Nir · Yahav · Yiftach | The daily developer loop | Gal Briner |
+| Internal Ops | Pazit · Ayelet · Ariel | Running the company itself | Tal |
+
+Release Pipeline is deliberately the pipeline BA-282 came out of, so the opening
+story doubles as that squad's brief. Internal Ops is furthest from an obvious
+idea and most likely to stall — check on them first.
+
+**Show the trust segment to Ariel (CISO) before the day.** He is a participant,
+which makes the 0:32 block a security briefing delivered with the security
+officer in the room. Best case he co-signs it; worst case he corrects something
+you would otherwise have said wrong in front of everyone.
 
 ## Session shape
 
-**One session, three hours.** Six squads by function (customer success, sales,
-marketing, support, product, R&D), one champion each. There is no follow-up
+**One session, three hours.** Six squads of 3–4, each built around one shared
+workflow rather than one department: Go-To-Market, Customer, Product, Release
+Pipeline, Dev Experience, Internal Ops. Each squad names its own **driver** (the
+person at the keyboard, who owns the build and needs the `config.yaml` role).
+The four champions sit in **no** squad — they float, advise and unblock, and are
+briefed never to take the keyboard. There is no follow-up
 Demo Day — squads demo inside the session, and design and build are one
 continuous 90-minute block that squads manage themselves, with no checkpoint
 between.
@@ -207,9 +235,12 @@ that person and asking "did you know that?"
       `config.yaml`. It's written from principles plus the roles that exist;
       being loosely accurate about what the agent can reach is worse than
       saying less.
-- [ ] Pick six champions — curiosity over seniority
-- [ ] Create a Slack channel per squad; assign champion roles in `config.yaml`
-      so nobody is blocked on permissions during the build block
+- [ ] Confirm each squad's **driver** — curiosity over seniority
+- [ ] Create a Slack channel per squad; give the **drivers** roles in
+      `config.yaml` — champions already have access, it is the drivers who get
+      blocked
+- [ ] Brief the four champions: circulate, advise, unblock, never take the
+      keyboard
 - [ ] Write six scope cards (one channel / database / folder each)
 - [ ] Point the creation monitor and weekly activity report at a public channel
 - [ ] Create `#radar`, assemble the watch list, rehearse the demo, keep a screen
