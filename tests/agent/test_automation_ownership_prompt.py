@@ -1,6 +1,6 @@
 """The ownership guidance is injected into the stable system-prompt segment."""
 import types
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
 import agent.automation_ownership as ao
@@ -27,17 +27,31 @@ def _fake_agent(tool_names, model="claude-opus-4-8"):
     )
 
 
+# Helpers run_agent pulls in that make external calls or touch the filesystem.
+# Stubbed so the system prompt builds deterministically. Upstream periodically
+# adds, renames, or relocates these (``build_nous_subscription_prompt`` moved
+# out of run_agent's namespace in v0.20.6), so patch only what is actually
+# bound right now — a helper that no longer exists needs no stubbing, and
+# hard-coding it turns an upstream refactor into a false failure here.
+_STUBBED_RUN_AGENT_HELPERS = {
+    "load_soul_md": "",
+    "build_nous_subscription_prompt": "",
+    "build_environment_hints": "",
+    "build_context_files_prompt": "",
+    "build_skills_system_prompt": "",
+    "get_toolset_for_tool": None,
+}
+
+
 @contextmanager
 def _patched_run_agent():
     """Patch run_agent helpers that make external calls or touch the filesystem."""
-    with (
-        patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
-        patch("run_agent.build_environment_hints", return_value=""),
-        patch("run_agent.build_context_files_prompt", return_value=""),
-        patch("run_agent.build_skills_system_prompt", return_value=""),
-        patch("run_agent.get_toolset_for_tool", return_value=None),
-    ):
+    import run_agent
+
+    with ExitStack() as stack:
+        for name, value in _STUBBED_RUN_AGENT_HELPERS.items():
+            if hasattr(run_agent, name):
+                stack.enter_context(patch(f"run_agent.{name}", return_value=value))
         yield
 
 

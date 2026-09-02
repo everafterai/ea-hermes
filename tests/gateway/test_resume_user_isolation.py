@@ -16,7 +16,7 @@ import pytest
 from gateway.config import Platform
 from gateway.platforms.base import MessageEvent
 from gateway.session import SessionEntry, SessionSource, build_session_key
-from hermes_state import SessionDB
+from hermes_state import AsyncSessionDB, SessionDB
 
 
 def _source(user_id: str, chat_id: str) -> SessionSource:
@@ -56,8 +56,12 @@ def _make_runner(db: SessionDB, current_entry: SessionEntry):
     runner._pending_approvals = {}
     runner._update_prompt_pending = {}
     runner._agent_cache_lock = None
-    # Real DB so the actual gate (get_session + session_row_visible) runs.
-    runner._session_db = db
+    # Real DB so the actual ownership gate runs, wrapped in the async facade
+    # the gateway now awaits (upstream moved /resume onto AsyncSessionDB).
+    runner._session_db = AsyncSessionDB(db)
+    # Persisted-only rows: no live origin, so the IDOR guard scopes by the
+    # DB row's source + user_id.
+    runner._gateway_session_origin_for_id = lambda sid: None
     # Mock only the session-store / boundary plumbing.
     runner.session_store = MagicMock()
     runner.session_store.get_or_create_session.return_value = current_entry
@@ -73,11 +77,13 @@ def _make_runner(db: SessionDB, current_entry: SessionEntry):
 def _seed(tmp_path):
     db = SessionDB(tmp_path / "state.db")
     # Alice's titled DM session.
-    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm")
+    db.create_session("s_alice", source="slack", user_id="U_ALICE", chat_id="D_ALICE", chat_type="dm",
+                      session_key=build_session_key(_source("U_ALICE", "D_ALICE")))
     db.append_message("s_alice", role="user", content="alice private note")
     db.set_session_title("s_alice", "Alice Secret Work")
     # Bob's titled DM session.
-    db.create_session("s_bob", source="slack", user_id="U_BOB", chat_id="D_BOB", chat_type="dm")
+    db.create_session("s_bob", source="slack", user_id="U_BOB", chat_id="D_BOB", chat_type="dm",
+                      session_key=build_session_key(_source("U_BOB", "D_BOB")))
     db.append_message("s_bob", role="user", content="bob note")
     db.set_session_title("s_bob", "Bob Work")
     db._conn.commit()
@@ -94,10 +100,12 @@ async def test_bob_cannot_resume_alices_session_by_id(tmp_path):
 
     result = await runner._handle_resume_command(_event("/resume s_alice", bob))
 
-    # Out-of-scope target must be reported as not found (no existence disclosure)
-    # and the actual session switch must NOT have happened. Mirror the exact
-    # gateway.resume.not_found wording so out-of-scope == non-existent.
-    assert "No session found matching" in result
+    # Out-of-scope target must be refused and the actual session switch must NOT
+    # have happened. Upstream's guard reports "blocked: belongs to a different
+    # user or chat" rather than the fork's "not found"; assert the security
+    # property (refusal + no switch + no transcript leak), not the wording.
+    assert "blocked" in result.lower() or "no session found" in result.lower()
+    assert "alice private note" not in result.lower()
     runner.session_store.switch_session.assert_not_called()
 
 
@@ -110,7 +118,13 @@ async def test_bob_cannot_resume_alices_session_by_title(tmp_path):
 
     result = await runner._handle_resume_command(_event("/resume Alice Secret Work", bob))
 
-    assert "couldn't find" in result.lower() or "not found" in result.lower() or "no session" in result.lower()
+    assert (
+        "blocked" in result.lower()
+        or "couldn't find" in result.lower()
+        or "not found" in result.lower()
+        or "no session" in result.lower()
+    )
+    assert "alice private note" not in result.lower()
     runner.session_store.switch_session.assert_not_called()
 
 

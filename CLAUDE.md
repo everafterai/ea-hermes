@@ -18,6 +18,34 @@ When working here:
 - Prefer the plugin route for new local-only tools (see AGENTS.md "Adding New Tools")
   rather than editing core — it keeps merges with upstream clean.
 
+### Upstream sync state (last synced 2026-08-24, upstream v0.20.5)
+
+Sync plan + conflict inventory:
+[docs/superpowers/plans/2026-08-24-upstream-sync.md](docs/superpowers/plans/2026-08-24-upstream-sync.md).
+
+Structural changes from that sync that affect where fork work goes:
+
+- **Slack is now a bundled platform plugin.** `gateway/platforms/slack.py` is
+  gone; the adapter lives at
+  [plugins/platforms/slack/adapter.py](plugins/platforms/slack/adapter.py)
+  (Feishu and WeCom moved the same way). Slack YAML→env translation moved into
+  that file's `_apply_yaml_config`. The `slack:` config block and
+  `config.extra` bridging are unchanged.
+- **Gateway authorization was extracted into a mixin.** `_is_user_authorized`
+  now lives in [gateway/authz_mixin.py](gateway/authz_mixin.py); `gateway/run.py`
+  keeps only call sites.
+- **Session search moved.** `SessionDB.search_messages` is in
+  [hermes_state_search.py](hermes_state_search.py) and the schema/DDL in
+  [hermes_state_common.py](hermes_state_common.py). The fork's SQL-level scope
+  gate is applied on **four** query paths there (FTS5, trigram-in-impl, LIKE,
+  and `_run_trigram_search`).
+- **Some fork patches are now subsumed by upstream** and were dropped:
+  compression-session identity inheritance (upstream's
+  `publish_compression_child` COALESCEs it inside the transaction), the
+  `/resume` identity gate (upstream's `_resume_target_allowed` /
+  `_resume_row_visible` are stricter), and the fork's `reference_images`
+  image-to-image implementation.
+
 ## Fork-specific work: Slack per-user RBAC + multi-user session isolation
 
 The fork's primary divergence from upstream is **role-based access control (RBAC)
@@ -65,9 +93,13 @@ tiers ([gateway/slash_access.py](gateway/slash_access.py)) and adds a third axis
 - **Backward compatible / fail-closed:** absent `user_roles` → policy disabled,
   upstream behavior exactly. A `user_roles` entry naming an undefined role denies
   that user and logs.
-- **Three enforcement points, one policy:** (A) message gate in `gateway/run.py`,
-  (B) toolset filter feeding `enabled_toolsets` into `model_tools.get_tool_definitions`
-  (cache-safe — `enabled_toolsets` is in the memo key), (C) execution backstop in
+- **Three enforcement points, one policy:** (A) message gate in
+  `_is_user_authorized` ([gateway/authz_mixin.py](gateway/authz_mixin.py) —
+  upstream extracted the authorization cluster out of `gateway/run.py`),
+  (B) toolset filter inside `_resolve_enabled_toolsets_for_source`
+  ([gateway/run.py](gateway/run.py)), which feeds `enabled_toolsets` into
+  `model_tools.get_tool_definitions` (cache-safe — `enabled_toolsets` is in the
+  memo key); centralized there so every call site inherits it, (C) execution backstop in
   the `pre_tool_call` hook in [model_tools.py](model_tools.py) that resolves
   identity from session contextvars and hard-blocks forbidden tools (covers
   delegation sub-agents, the code-execution sandbox, plugin-invoked calls).
@@ -280,7 +312,9 @@ block in `~/.hermes/config.yaml`:
   `tool_progress: off` and allows **silent (emoji-only) completion**: a
   successful turn that produces no text stays silent instead of posting the
   "no response generated" warning. Resolved in [gateway/run.py](gateway/run.py)
-  via `_is_quiet_channel` (matches `chat_id` or thread `parent_chat_id`).
+  via `_is_quiet_channel` (matches `chat_id` or thread `parent_chat_id`); the
+  adapter-side half lives in [plugins/platforms/slack/adapter.py](plugins/platforms/slack/adapter.py)
+  (`_slack_quiet_channels`).
   Errors, approvals, and clarifications still surface. **Text replies are never
   suppressed** — the bot can always answer. A message that arrives **mid-task** in a
   quiet channel is silently **queued** (forced `queue` mode, with the busy-ack text and
@@ -289,7 +323,8 @@ block in `~/.hermes/config.yaml`:
 - `slack_react` tool ([tools/slack_react_tool.py](tools/slack_react_tool.py)) —
   lets the agent add/remove an emoji reaction on the triggering Slack message
   (or an explicit `message_id`). Targets the message via session contextvars
-  (`HERMES_SESSION_MESSAGE_ID`, set in [slack.py](gateway/platforms/slack.py)
+  (`HERMES_SESSION_MESSAGE_ID`, set in
+  [the Slack adapter](plugins/platforms/slack/adapter.py) via
   `build_source(message_id=ts)`). Lives in the platform-restricted `slack`
   toolset; grant it to a role via `slack.roles`. Emoji-first behavior is driven
   by `channel_prompts`, not enforced.
@@ -321,7 +356,8 @@ block in `~/.hermes/config.yaml`:
   with no agent run. Lives in [gateway/run.py](gateway/run.py)
   (`_relevance_gate_should_skip` → `_classify_relevance` via `async_call_llm`),
   invoked in `_handle_message` after `pre_gateway_dispatch`. @mention/DM bypass
-  it (`MessageEvent.directly_addressed`, set in [slack.py](gateway/platforms/slack.py)).
+  it (`MessageEvent.directly_addressed`, set in
+  [the Slack adapter](plugins/platforms/slack/adapter.py)).
   Purpose per channel: `slack.relevance_gate_purpose[chat_id]` →
   `channel_prompts[chat_id]` → a generic default. **Fail-open**: classifier
   error → the agent runs (never silently drops a real message). Only active on
@@ -363,8 +399,8 @@ source .venv/bin/activate                 # or: source venv/bin/activate
 
 # Tests — ALWAYS use the wrapper, never bare pytest (CI-parity: unset creds, TZ=UTC,
 # C.UTF-8, xdist, per-test subprocess isolation). See AGENTS.md "Testing".
-scripts/run_tests.sh                                   # full suite
-scripts/run_tests.sh tests/gateway/                    # one directory
+# NEVER run the whole suite in one invocation — see the rule below.
+scripts/run_tests.sh tests/gateway/                    # one package (do this)
 scripts/run_tests.sh tests/gateway/test_tool_access.py # one file
 scripts/run_tests.sh tests/gateway/test_tool_access.py::test_x  # one test
 scripts/run_tests.sh --no-isolate tests/foo/           # faster, for debugging
@@ -383,6 +419,33 @@ hermes doctor                             # diagnose issues
 # TUI dev (see AGENTS.md "TUI Architecture")
 cd ui-tui && npm run dev                  # watch mode
 ```
+
+### Testing rule: NEVER run the full suite in one invocation
+
+`scripts/run_tests.sh` with no path argument fans out ~3,300 files over 24
+workers and pins every core on the machine for ~25 minutes. It has deadlocked a
+developer machine. **Do not run it.** There is no flag that makes it safe — cap
+the SCOPE, not the parallelism.
+
+Run one package at a time, and wait for each to finish before starting the next:
+
+```bash
+scripts/run_tests.sh tests/agent/
+scripts/run_tests.sh tests/gateway/
+scripts/run_tests.sh tests/hermes_cli/
+scripts/run_tests.sh tests/tools/
+scripts/run_tests.sh tests/cron/ tests/hermes_state/ tests/plugins/
+scripts/run_tests.sh tests/cli/ tests/run_agent/ tests/tui_gateway/
+```
+
+The four big packages (`hermes_cli` 717 files, `gateway` 701, `tools` 523,
+`agent` 433) are each big enough to run alone. Small ones can be grouped.
+Never run a package batch in the background while another is running.
+
+When verifying a change, prefer the narrowest scope that covers it — the
+specific files, then the package. A full-suite sweep is the user's call, not
+something to launch unprompted.
+
 
 ## Key invariants (do not break)
 

@@ -27,6 +27,7 @@ from typing import Any, Dict, List
 
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
+from utils import is_truthy_value
 from .store import MemoryStore
 from .retrieval import FactRetriever
 from hermes_cli.config import cfg_get
@@ -137,14 +138,11 @@ FACT_FEEDBACK_SCHEMA = {
 # ---------------------------------------------------------------------------
 
 def _load_plugin_config() -> dict:
-    from hermes_constants import get_hermes_home
-    config_path = get_hermes_home() / "config.yaml"
-    if not config_path.exists():
-        return {}
     try:
-        import yaml
-        with open(config_path, encoding="utf-8-sig") as f:
-            all_config = yaml.safe_load(f) or {}
+        # Canonical loader: behavioral read now honors the managed-scope
+        # overlay + ${VAR} expansion (e.g. an api key template) too.
+        from hermes_cli.config import load_config_readonly
+        all_config = load_config_readonly()
         return cfg_get(all_config, "plugins", "hermes-memory-store", default={}) or {}
     except Exception:
         return {}
@@ -189,10 +187,10 @@ class HolographicMemoryProvider(MemoryProvider):
         config_path = Path(hermes_home) / "config.yaml"
         try:
             import yaml
-            existing = {}
-            if config_path.exists():
-                with open(config_path, encoding="utf-8-sig") as f:
-                    existing = yaml.safe_load(f) or {}
+            # Write-back round-trip: raw read is correct (merged defaults
+            # must not be persisted back into the user's file).
+            from hermes_cli.config import read_user_config_raw
+            existing = read_user_config_raw(config_path)
             existing.setdefault("plugins", {})
             existing["plugins"]["hermes-memory-store"] = values
             with open(config_path, "w", encoding="utf-8") as f:
@@ -256,6 +254,16 @@ class HolographicMemoryProvider(MemoryProvider):
         # NOTE: do NOT touch self._scopes here. The provider is shared across
         # concurrent gateway sessions; re-initialising on one message must not
         # disturb other live scopes.
+        if not self._scope_isolation:
+            # Legacy/non-isolated mode has exactly one bundle, and upstream's
+            # provider contract is that initialize() opens it (callers and tests
+            # observe the connection right after init). Build it eagerly here.
+            # Under scope isolation the bundle stays lazy and per-scope, because
+            # the owning scope isn't known until a request arrives.
+            try:
+                self._bundle_for_current_scope()
+            except Exception as e:
+                logger.debug("holographic: eager store init skipped: %s", e)
 
     def _db_path_for_scope(self, scope: "tuple[str, str]") -> str:
         if not self._scope_isolation:
@@ -290,6 +298,30 @@ class HolographicMemoryProvider(MemoryProvider):
                 bundle = (store, retriever)
                 self._scopes[db_path] = bundle
             return bundle
+
+    @property
+    def _store(self):
+        """The current scope's already-open MemoryStore, or None.
+
+        Upstream's provider keeps a single ``self._store``; the fork replaced it
+        with per-scope bundles for multi-user isolation. Exposing the current
+        scope's store under the upstream name keeps that contract (and upstream's
+        tests) working: with ``scope_isolation`` off — the default — there is
+        exactly one bundle, so this IS upstream's single shared store.
+
+        Deliberately does NOT create a bundle — internal callers go through
+        ``_bundle_for_current_scope()`` for that. Reading this after
+        ``shutdown()`` correctly reports None instead of silently reopening
+        the database.
+        """
+        bundle = self._scopes.get(self._db_path_for_scope(_resolve_scope()))
+        return bundle[0] if bundle else None
+
+    @property
+    def _retriever(self):
+        """The current scope's FactRetriever. See :attr:`_store`."""
+        bundle = self._scopes.get(self._db_path_for_scope(_resolve_scope()))
+        return bundle[1] if bundle else None
 
     def _scope_label(self) -> str:
         kind, _ = _resolve_scope()
@@ -422,7 +454,10 @@ class HolographicMemoryProvider(MemoryProvider):
         return tool_error(f"Unknown tool: {tool_name}")
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        if not self._config.get("auto_extract", False):
+        # is_truthy_value: the config schema declares auto_extract as a string
+        # enum ("false"/"true"), and a plain truthiness check treats the string
+        # "false" as enabled (#57682).
+        if not is_truthy_value(self._config.get("auto_extract", False)):
             return
         if not messages:
             return
@@ -453,10 +488,29 @@ class HolographicMemoryProvider(MemoryProvider):
                 logger.debug("Holographic memory_write mirror failed: %s", e)
 
     def shutdown(self) -> None:
-        # Provider is a process-global singleton; do NOT close cached per-scope
-        # stores here — other concurrent sessions may still be using them.
-        # SQLite connections are released at process exit.
-        pass
+        """Release this provider's SQLite connections.
+
+        Under ``scope_isolation`` the provider is a process-global singleton
+        holding one store PER SCOPE, and another concurrent session may still be
+        using any of them — so closing here would pull a live connection out from
+        under it. Leave those to process exit.
+
+        With scope isolation off (the default) there is exactly one shared
+        bundle owned by this provider, and upstream's deterministic close
+        applies: dropping the reference alone defers fd finalization to GC,
+        which keeps the write lock alive on a long-running gateway. close() is
+        idempotent and refcount-guarded.
+        """
+        if self._scope_isolation:
+            return
+        with self._scopes_lock:
+            bundles = list(self._scopes.values())
+            self._scopes.clear()
+        for store, _retriever in bundles:
+            try:
+                store.close()
+            except Exception as e:
+                logger.debug("Holographic shutdown close() failed: %s", e)
 
     # -- Tool handlers -------------------------------------------------------
 
@@ -561,6 +615,35 @@ class HolographicMemoryProvider(MemoryProvider):
     # -- Auto-extraction (on_session_end) ------------------------------------
 
     def _auto_extract_facts(self, store, messages: list) -> None:
+        # Local import (pattern used in initialize()): the compressor module is
+        # heavier than this plugin and is only needed when auto_extract is on.
+        from agent.context_compressor import (
+            _MERGED_PRIOR_CONTEXT_HEADER,
+            _MERGED_SUMMARY_DELIMITER,
+            is_compaction_summary_message,
+        )
+
+        def _pre_delimiter_user_segment(msg: dict):
+            """Return the genuine user text preceding a merged-into-tail
+            compaction summary, or None when the whole message is a summary.
+
+            Merge-into-tail messages (agent/context_compressor.py ~3163-3190)
+            wrap real prior tail content BEFORE ``_MERGED_SUMMARY_DELIMITER``,
+            prefixed with ``_MERGED_PRIOR_CONTEXT_HEADER``, then append the
+            generated handoff summary AFTER the delimiter. Dropping the whole
+            row (as ``is_compaction_summary_message`` alone would suggest)
+            discards that genuine pre-delimiter content too (#57690 review).
+            Only the summary suffix must be excluded from harvesting.
+            """
+            content = msg.get("content", "")
+            if not isinstance(content, str) or _MERGED_SUMMARY_DELIMITER not in content:
+                return None
+            pre = content.split(_MERGED_SUMMARY_DELIMITER, 1)[0]
+            if pre.startswith(_MERGED_PRIOR_CONTEXT_HEADER):
+                pre = pre[len(_MERGED_PRIOR_CONTEXT_HEADER):]
+            pre = pre.strip()
+            return pre or None
+
         _PREF_PATTERNS = [
             re.compile(r'\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)', re.IGNORECASE),
             re.compile(r'\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)', re.IGNORECASE),
@@ -575,7 +658,20 @@ class HolographicMemoryProvider(MemoryProvider):
         for msg in messages:
             if msg.get("role") != "user":
                 continue
-            content = msg.get("content", "")
+            # Compaction handoff summaries can be inserted as role="user"
+            # messages; their prose reliably matches the decision patterns, so
+            # without this guard the compactor's own output is stored as a
+            # durable "fact" on every rollover (#57682). A merge-into-tail
+            # summary also carries genuine pre-delimiter user content in the
+            # SAME row; harvest that segment instead of dropping the whole
+            # message (#57690 review).
+            pre_delimiter_segment = _pre_delimiter_user_segment(msg)
+            if pre_delimiter_segment is not None:
+                content = pre_delimiter_segment
+            elif is_compaction_summary_message(msg):
+                continue
+            else:
+                content = msg.get("content", "")
             if not isinstance(content, str) or len(content) < 10:
                 continue
 

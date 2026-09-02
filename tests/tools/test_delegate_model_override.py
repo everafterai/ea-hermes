@@ -74,7 +74,7 @@ class TestDelegateModelOverride(unittest.TestCase):
 
         with patch("run_agent.AIAgent") as MockAgent:
             MockAgent.return_value = _mock_child()
-            delegate_task(goal="g", model="cheap-model", parent_agent=parent)
+            delegate_task(goal="investigate g thoroughly", model="cheap-model", parent_agent=parent)
             _, kwargs = MockAgent.call_args
             self.assertEqual(kwargs["model"], "cheap-model")
 
@@ -96,7 +96,7 @@ class TestDelegateModelOverride(unittest.TestCase):
         ):
             MockAgent.return_value = _mock_child()
             delegate_task(
-                goal="g", model="gpt-5-mini", provider="openai", parent_agent=parent
+                goal="investigate g thoroughly", model="gpt-5-mini", provider="openai", parent_agent=parent
             )
             _, kwargs = MockAgent.call_args
             self.assertEqual(kwargs["model"], "gpt-5-mini")
@@ -119,7 +119,7 @@ class TestDelegateModelOverride(unittest.TestCase):
 
         with patch("run_agent.AIAgent") as MockAgent:
             MockAgent.return_value = _mock_child()
-            delegate_task(goal="g", model="call-model", parent_agent=parent)
+            delegate_task(goal="investigate g thoroughly", model="call-model", parent_agent=parent)
             _, kwargs = MockAgent.call_args
             self.assertEqual(kwargs["model"], "call-model")
 
@@ -134,8 +134,8 @@ class TestDelegateModelOverride(unittest.TestCase):
             MockAgent.return_value = _mock_child()
             delegate_task(
                 tasks=[
-                    {"goal": "a", "model": "task-model"},
-                    {"goal": "b"},
+                    {"goal": "investigate a thoroughly", "model": "task-model"},
+                    {"goal": "investigate b thoroughly"},
                 ],
                 model="top-model",
                 parent_agent=parent,
@@ -152,7 +152,7 @@ class TestDelegateModelOverride(unittest.TestCase):
 
         with patch("run_agent.AIAgent") as MockAgent:
             MockAgent.return_value = _mock_child()
-            delegate_task(goal="g", parent_agent=parent)
+            delegate_task(goal="investigate g thoroughly", parent_agent=parent)
             _, kwargs = MockAgent.call_args
             # No overrides anywhere → child inherits the parent's model.
             self.assertEqual(kwargs["model"], parent.model)
@@ -172,7 +172,7 @@ class TestDelegateModelOverride(unittest.TestCase):
         ):
             MockAgent.return_value = _mock_child()
             result = delegate_task(
-                goal="g", model="m", provider="openai", parent_agent=parent
+                goal="investigate g thoroughly", model="m", provider="openai", parent_agent=parent
             )
             parsed = json.loads(result)
             self.assertIn("error", parsed)

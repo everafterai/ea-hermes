@@ -19,7 +19,7 @@ Optional knobs (under ``web.xai`` in ``config.yaml``)::
 
     web:
       xai:
-        model: "grok-4.3"             # reasoning model required by web_search
+        model: "grok-build-0.1"       # reasoning model required by web_search
         allowed_domains: ["x.ai"]     # max 5 — mutually exclusive with excluded_domains
         excluded_domains: ["bad.com"] # max 5 — mutually exclusive with allowed_domains
         timeout: 90                   # seconds (default 90)
@@ -46,7 +46,7 @@ from tools.xai_http import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "grok-4.3"
+DEFAULT_MODEL = "grok-build-0.1"
 DEFAULT_TIMEOUT = 90
 _MAX_DOMAIN_FILTERS = 5  # xAI hard cap on allowed_domains / excluded_domains
 
@@ -101,12 +101,12 @@ class XAIWebSearchProvider(WebSearchProvider):
     back to the Responses API ``citations`` list if Grok ignores the JSON
     schema instruction (rare for grok-4.3 but cheap insurance).
 
-    No extract capability — pair with Firecrawl / Tavily / Exa for
+    No extract capability — pair with Firecrawl / Keenable / Exa for
     ``web_extract`` if you need page content.
 
     Trust model
     -----------
-    Unlike index-backed providers (Brave / Tavily / Exa) which return
+    Unlike index-backed providers (Brave / Keenable / Exa) which return
     verbatim search-engine results, this backend is an LLM in a trench
     coat: Grok decides which URLs to surface, generates the titles and
     descriptions itself, and is influenced by the *content of the query*.
@@ -270,7 +270,10 @@ class XAIWebSearchProvider(WebSearchProvider):
                         "refresh and retrying once.",
                     )
                     try:
-                        refreshed = resolve_xai_http_credentials(force_refresh=True)
+                        refreshed = resolve_xai_http_credentials(
+                            force_refresh=True,
+                            api_key_hint=api_key,
+                        )
                         refreshed_key = str(refreshed.get("api_key") or "").strip()
                         if refreshed_key and refreshed_key != api_key:
                             api_key = refreshed_key

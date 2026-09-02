@@ -72,7 +72,12 @@ def test_codex_incomplete_finishes_silently_in_quiet_channel():
 
 def test_codex_incomplete_surfaces_warning_outside_quiet_channel():
     res = _codex_incomplete_exhausted_result([{"role": "x"}], 4, False)
-    assert res["final_response"] is None
+    # Upstream surfaces the warning as the response text (rather than a bare
+    # None) so the user sees why the turn stopped; the fork's quiet-channel
+    # silence is unaffected and covered by the sibling test.
+    assert res["final_response"] == (
+        "Codex response remained incomplete after 3 continuation attempts"
+    )
     assert res["partial"] is True
     assert "remained incomplete" in res["error"]
 

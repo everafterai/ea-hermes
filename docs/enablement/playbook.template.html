@@ -1,0 +1,637 @@
+<title>Off Your Plate — Playbook</title>
+<style>
+/*FONTS*/
+
+:root{
+  --purple:#8F4AFB; --pink:#F84E8E;
+  --ink:#17131F; --body:#3A3348; --muted:#6B6480;
+  --ground:#FFFFFF; --ground-2:#F7F5FB; --card:#FFFFFF;
+  --line:#E8E3F2; --line-soft:#F0ECF8;
+  --tint-purple:#F3EEFA; --tint-pink:#FCE4EC; --tint-peach:#FFEEDF;
+  --shadow:0 1px 2px rgba(23,19,31,.04), 0 8px 24px -16px rgba(23,19,31,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --purple:#AC82FF; --pink:#FF7FAF;
+    --ink:#F2EEFA; --body:#CFC8DE; --muted:#948CAB;
+    --ground:#131019; --ground-2:#1A1624; --card:#1A1624;
+    --line:#2E2740; --line-soft:#241E31;
+    --tint-purple:#241C36; --tint-pink:#33202C; --tint-peach:#33261C;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --purple:#AC82FF; --pink:#FF7FAF;
+  --ink:#F2EEFA; --body:#CFC8DE; --muted:#948CAB;
+  --ground:#131019; --ground-2:#1A1624; --card:#1A1624;
+  --line:#2E2740; --line-soft:#241E31;
+  --tint-purple:#241C36; --tint-pink:#33202C; --tint-peach:#33261C;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.6);
+}
+:root[data-theme="light"]{
+  --purple:#8F4AFB; --pink:#F84E8E;
+  --ink:#17131F; --body:#3A3348; --muted:#6B6480;
+  --ground:#FFFFFF; --ground-2:#F7F5FB; --card:#FFFFFF;
+  --line:#E8E3F2; --line-soft:#F0ECF8;
+  --tint-purple:#F3EEFA; --tint-pink:#FCE4EC; --tint-peach:#FFEEDF;
+  --shadow:0 1px 2px rgba(23,19,31,.04), 0 8px 24px -16px rgba(23,19,31,.18);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--body);
+  font-family:'Lato',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:16.5px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:940px; margin:0 auto; padding:0 28px 120px}
+h1,h2,h3,h4{font-family:'Poppins',sans-serif; font-weight:600; color:var(--ink); text-wrap:balance; margin:0}
+p{margin:0}
+a{color:var(--purple)}
+strong{font-weight:700; color:var(--ink)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em; background:var(--tint-purple); color:var(--ink); padding:.12em .38em; border-radius:4px}
+
+/* ---------- masthead ---------- */
+.rule{height:3px; background:linear-gradient(90deg,var(--purple),var(--pink))}
+.mast{padding:72px 0 0; display:flex; flex-direction:column; gap:22px}
+.brand{font-family:'Poppins',sans-serif; font-weight:600; font-size:13px; letter-spacing:.16em; text-transform:uppercase; color:var(--purple)}
+h1{font-size:clamp(34px,5.2vw,52px); line-height:1.1; letter-spacing:-.025em}
+.standfirst{font-size:19px; line-height:1.6; color:var(--muted); max-width:60ch}
+.meta{display:flex; flex-wrap:wrap; gap:10px; padding-top:4px}
+.chip{font-family:'Poppins',sans-serif; font-weight:500; font-size:12px; letter-spacing:.05em; text-transform:uppercase;
+  padding:6px 12px; border-radius:999px; border:1px solid var(--line); color:var(--muted); background:var(--card)}
+
+/* ---------- sections ---------- */
+section{padding-top:64px}
+.eyebrow{font-family:'Poppins',sans-serif; font-weight:500; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--purple); margin-bottom:12px}
+h2{font-size:clamp(24px,3.2vw,31px); letter-spacing:-.02em; line-height:1.2; margin-bottom:16px}
+h3{font-size:19px; letter-spacing:-.01em; margin-bottom:8px}
+h4{font-family:'Poppins',sans-serif; font-weight:500; font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:10px}
+.lede{font-size:18px; color:var(--muted); max-width:66ch; margin-bottom:12px}
+.stack{display:flex; flex-direction:column; gap:16px; max-width:70ch}
+.stack.wide{max-width:none}
+
+/* ---------- cards ---------- */
+.card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:24px; box-shadow:var(--shadow)}
+.grid{display:grid; gap:16px}
+@media(min-width:720px){ .grid.two{grid-template-columns:1fr 1fr} .grid.three{grid-template-columns:repeat(3,1fr)} }
+
+/* ---------- run of show ---------- */
+.row{display:grid; grid-template-columns:92px 1fr; gap:24px; padding:20px 0; border-top:1px solid var(--line-soft)}
+.row:first-of-type{border-top:0}
+.time{font-family:'Poppins',sans-serif; font-weight:600; font-size:14px; color:var(--ink); font-variant-numeric:tabular-nums; padding-top:2px}
+.dur{display:block; font-weight:500; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:3px}
+.row .body p{color:var(--muted); font-size:15.5px; margin-top:5px}
+.row.pin .time{color:var(--purple)}
+.row.rest{opacity:.62}
+
+/* ---------- the four blocks ---------- */
+.blocks{display:grid; gap:12px}
+@media(min-width:760px){ .blocks{grid-template-columns:repeat(4,1fr)} }
+.block{border:1px solid var(--line); border-radius:10px; padding:18px; background:var(--card)}
+.block .k{font-family:'Poppins',sans-serif; font-weight:600; font-size:15px; color:var(--ink); margin-bottom:6px}
+.block p{font-size:14.5px; color:var(--muted); line-height:1.55}
+.block:nth-child(1){background:var(--tint-purple); border-color:transparent}
+.block:nth-child(2){background:var(--tint-pink); border-color:transparent}
+.block:nth-child(3){background:var(--tint-peach); border-color:transparent}
+.block:nth-child(4){background:var(--tint-purple); border-color:transparent}
+
+/* ---------- lists ---------- */
+ul.clean{list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:9px}
+ul.clean li{position:relative; padding-left:20px; font-size:15.5px}
+ul.clean li::before{content:""; position:absolute; left:2px; top:.62em; width:6px; height:6px; border-radius:50%; background:var(--purple)}
+ul.check li::before{content:"✓"; font-family:'Poppins',sans-serif; font-size:12px; font-weight:600; color:var(--purple); background:none; width:auto; height:auto; top:0; left:0}
+ul.check li{padding-left:22px}
+ul.no li::before{background:var(--pink)}
+
+.mode{display:inline-block; font-family:'Poppins',sans-serif; font-weight:500; font-size:10px;
+  letter-spacing:.07em; text-transform:uppercase; padding:2px 6px; border-radius:5px; margin-left:6px;
+  vertical-align:1px; white-space:nowrap; color:var(--ink)}
+.m-script{background:var(--tint-peach)}
+.m-agent{background:var(--tint-purple)}
+.m-hybrid{background:var(--tint-pink)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:13.5px; color:var(--muted); margin-bottom:18px}
+.legend .mode{margin-left:0; margin-right:4px}
+
+/* ---------- callout ---------- */
+.say{border-left:3px solid; border-image:linear-gradient(180deg,var(--purple),var(--pink)) 1;
+  padding:4px 0 4px 20px; font-size:18px; line-height:1.55; color:var(--ink); font-family:'Poppins',sans-serif; font-weight:500; letter-spacing:-.01em}
+.note{background:var(--ground-2); border:1px solid var(--line); border-radius:10px; padding:18px 20px; font-size:15px; color:var(--muted)}
+.note strong{color:var(--ink)}
+
+/* ---------- beats ---------- */
+.beat{display:grid; grid-template-columns:30px 1fr; gap:16px; padding:16px 0; border-top:1px solid var(--line-soft)}
+.beat:first-of-type{border-top:0; padding-top:0}
+.n{font-family:'Poppins',sans-serif; font-weight:600; font-size:13px; color:var(--purple); border:1.5px solid var(--purple); border-radius:50%;
+  width:28px; height:28px; display:flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums}
+.beat p{font-size:15.5px; color:var(--muted); margin-top:5px}
+.prompt{background:var(--tint-purple); border-radius:8px; padding:16px 18px; margin-top:12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:14px; line-height:1.6; color:var(--ink)}
+
+/* ---------- squads ---------- */
+.squad{border:1px solid var(--line); border-radius:10px; padding:20px; background:var(--card)}
+.squad h3{display:flex; align-items:baseline; gap:9px; margin-bottom:12px}
+.squad h3 .dot{width:8px; height:8px; border-radius:50%; background:var(--purple); flex:none; transform:translateY(-2px)}
+.squad ul.clean li{font-size:14.8px; line-height:1.5}
+.squad ul.clean li::before{width:5px; height:5px; opacity:.55}
+
+/* ---------- worksheet ---------- */
+.sheet{border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--card)}
+.field{display:grid; grid-template-columns:150px 1fr; gap:20px; padding:16px 20px; border-top:1px solid var(--line-soft)}
+.field:first-child{border-top:0}
+.field .lbl{font-family:'Poppins',sans-serif; font-weight:500; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--purple); padding-top:3px}
+.field .desc{font-size:15px; color:var(--muted)}
+@media(max-width:600px){ .field{grid-template-columns:1fr; gap:6px} .row{grid-template-columns:1fr; gap:8px} }
+
+/* ---------- table ---------- */
+.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--card)}
+table{border-collapse:collapse; width:100%; min-width:520px}
+th,td{text-align:left; padding:13px 18px; border-top:1px solid var(--line-soft); font-size:15px; vertical-align:top}
+th{font-family:'Poppins',sans-serif; font-weight:500; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); border-top:0}
+td strong{font-family:'Poppins',sans-serif; font-weight:600}
+
+footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--line); font-size:14px; color:var(--muted)}
+:focus-visible{outline:2px solid var(--purple); outline-offset:3px; border-radius:3px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="rule"></div>
+<div class="wrap">
+
+<header class="mast">
+  <div class="brand">Base&nbsp;·&nbsp;Off Your Plate</div>
+  <h1>Three hours to turn twenty people into automation owners</h1>
+  <p class="standfirst">A working session on what our automations can do, what they are deliberately not allowed to do, and what each team is going to build on the day.</p>
+  <div class="meta">
+    <span class="chip">3 hours</span>
+    <span class="chip">~20 people</span>
+    <span class="chip">6 squads</span>
+    <span class="chip">4 champions on call</span>
+  </div>
+</header>
+
+<section>
+  <div class="eyebrow">The point</div>
+  <h2>What has to be true when everyone walks out</h2>
+  <div class="stack">
+    <p>The failure mode for a session like this is a room full of polite nodding and zero adoption. People find the capabilities interesting, nobody maps them onto their own Tuesday, and in two weeks nothing has changed. So the session is built backwards from four outcomes.</p>
+    <ul class="clean check">
+      <li><strong>Everyone can describe an automation in one sentence.</strong> Trigger, context, judgment, action — the same four blocks every time.</li>
+      <li><strong>Every squad has designed one automation</strong> written on a worksheet, including the access it needs.</li>
+      <li><strong>Every squad has a named driver</strong> with a role, a channel, and a scope card — and knows which champion to grab.</li>
+      <li><strong>Every squad demos something running</strong> before anyone leaves the room.</li>
+    </ul>
+    <p>That last one is the accountability loop, and it is why the demos sit inside the session rather than in a follow-up meeting two weeks later. A list of ideas decays inside a week; a thing that ran in front of colleagues does not.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Prep</div>
+  <h2>Before the day</h2>
+  <div class="grid two">
+    <div class="card">
+      <h4>The week before</h4>
+      <ul class="clean check">
+        <li>Confirm each squad's <strong>driver</strong> — curiosity over seniority, not the most senior person in the squad</li>
+        <li>Create a Slack channel per squad</li>
+        <li>Give the <strong>drivers</strong> roles in <code>config.yaml</code> — the champions already have access; it is the drivers who get blocked</li>
+        <li>Brief the four champions on what floating means: circulate, advise, unblock, never take the keyboard</li>
+        <li>Write six scope cards — one per squad</li>
+        <li>Point the automation-creation monitor and the weekly activity report at a channel the whole company can see — that is the ongoing loop, in place of a follow-up meeting</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>The day before</h4>
+      <ul class="clean check">
+        <li>Create <code>#radar</code></li>
+        <li>Assemble the watch list: the customer logos already public on base.ai, plus target prospects and two or three competitors</li>
+        <li><strong>Rehearse the exact demo build</strong>, end to end, then tear it down</li>
+        <li>Note which item in the output is the one to point at — ideally about an account someone in the room owns</li>
+        <li>Have a screen recording of the successful run as a fallback</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note" style="margin-top:16px">
+    <strong>Why rehearsal matters more than usual here.</strong> The demo's payoff depends on the agent surfacing something genuinely surprising. Running it the day before tells you whether the news is rich or thin — and if it's thin, you widen the list before the room is watching rather than after.
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Run of show</div>
+  <h2>Three hours, minute by minute</h2>
+  <p class="lede">Teaching front-loaded, hands-on at the back. The room needs to understand and trust the thing before being asked to have ideas about it.</p>
+
+  <div class="card wide">
+    <div class="row pin">
+      <div class="time">0:00<span class="dur">10 min</span></div>
+      <div class="body"><h3>Open on the numbers</h3>
+      <p>No capability slide, no preamble. Yesterday's figures from our own gateway: eight automations, 1,274 runs, zero errors, seventy-four messages. Then the board of what those eight are, then BA-282. Proof first, theory after.</p></div>
+    </div>
+    <div class="row">
+      <div class="time">0:10<span class="dur">22 min</span></div>
+      <div class="body"><h3>What this actually is</h3>
+      <p>The four blocks, then scripts versus agents, then the filter and the honest good-at / bad-at list. Every abstraction here has a live example on the board to point back at.</p></div>
+    </div>
+    <div class="row">
+      <div class="time">0:32<span class="dur">10 min</span></div>
+      <div class="body"><h3>What it can and cannot see</h3>
+      <p>Deliberately placed <em>before</em> the brainstorm. Unresolved anxiety kills idea generation in both directions — some people won't propose anything touching data they assume is off-limits, others get quietly uneasy about being watched. Name the boundaries out loud and both problems go away.</p></div>
+    </div>
+    <div class="row pin">
+      <div class="time">0:42<span class="dur">12 min</span></div>
+      <div class="body"><h3>Demo — build The Radar, live</h3>
+      <p>The centrepiece. Show the cage first, ask for the automation in plain English, run it immediately, then point at what it found. Full script below.</p></div>
+    </div>
+    <div class="row rest">
+      <div class="time">0:54<span class="dur">10 min</span></div>
+      <div class="body"><h3>Break</h3>
+      <p>Hand the scope cards out here, quietly, so squads start with the constraint already in hand.</p></div>
+    </div>
+    <div class="row">
+      <div class="time">1:04<span class="dur">4 min</span></div>
+      <div class="body"><h3>Squad brief</h3>
+      <p>Show the squad slide, hand out worksheets and scope cards, and make every squad <strong>name its driver out loud</strong> — that is the one thing that must happen in these four minutes. Say the champions are a pool, not owners.</p></div>
+    </div>
+    <div class="row pin">
+      <div class="time">1:08<span class="dur">1 hr 30</span></div>
+      <div class="body"><h3>Design it, then build it</h3>
+      <p>One continuous block that squads manage themselves — roughly twenty-five minutes designing from the seeded menu, the rest building. Offer that split as a guideline, not a bell: a squad that designs for fifteen and builds for seventy-five is doing it right.</p>
+      <p>There is no checkpoint, which means <strong>you</strong> are the checkpoint. Get to every squad inside the first ten minutes and shrink anything whose access list is long before they invest in it. Around the twenty-five-minute mark, flip to the "stop designing" slide as a nudge — the failure mode here isn't laziness, it's a squad enjoying the design conversation too much.</p></div>
+    </div>
+    <div class="row pin">
+      <div class="time">2:38<span class="dur">17 min</span></div>
+      <div class="body"><h3>Show us what you made</h3>
+      <p>Three minutes per squad, timer visible and held. They run it, live, however crude. A squad that didn't get there shows the worksheet and names what blocked it — a legitimate result that tells you what to unblock this week.</p></div>
+    </div>
+    <div class="row">
+      <div class="time">2:55<span class="dur">5 min</span></div>
+      <div class="body"><h3>What happens tomorrow</h3>
+      <p>The ongoing loop, then one sentence from each driver about what they'll finish this week. Close.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Opening block</div>
+  <h2>Open on what is already running</h2>
+  <p class="lede">The strongest thing available is not a capability tour or a live parlour trick — it is that this is already working, at volume, built by three people around their actual jobs. Lead with the numbers, then the board, then one concrete catch.</p>
+  <div class="grid two">
+    <div class="card">
+      <h4>Yesterday, in figures</h4>
+      <ul class="clean">
+        <li><strong>8</strong> automations running on our gateway</li>
+        <li><strong>1,274</strong> runs</li>
+        <li><strong>0</strong> errors</li>
+        <li><strong>74</strong> messages sent</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>What the ratio means</h4>
+      <p style="margin-top:8px">Twelve hundred runs, seventy-four messages. Say out loud that the silence is deliberate: an automation that speaks every time it runs gets muted inside a week. You will reuse this when the Radar demo posts nothing on a quiet day.</p>
+    </div>
+  </div>
+  <div class="tablewrap" style="margin-top:16px">
+    <table>
+      <thead><tr><th>Owner</th><th>What it does</th><th>How often</th><th>Engine</th></tr></thead>
+      <tbody>
+        <tr><td>—</td><td>Signed order forms in Drive into the MRR sheet</td><td>Daily, 05:00</td><td>Both</td></tr>
+        <tr><td>Shai</td><td>Drafts Base blog posts in Notion</td><td>Every 30m</td><td>Agent</td></tr>
+        <tr><td>Adi</td><td>Watches the blog pipeline and scans for topics</td><td>Hourly</td><td>Both</td></tr>
+        <tr><td>Shai</td><td>Flags any new automation the moment it appears</td><td>Every minute</td><td>Both</td></tr>
+        <tr><td>Shai</td><td>Daily digest of what every automation did</td><td>Hourly</td><td>Both</td></tr>
+        <tr><td>Shai</td><td>Weekly automation activity report</td><td>Sundays</td><td>Both</td></tr>
+        <tr><td>Shachar</td><td>BA acceptance collector</td><td>Every 5m</td><td>Script</td></tr>
+        <tr><td>Shai</td><td>Reconciles Jira status against open GitHub PRs</td><td>Every 15m</td><td>Both</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="stack" style="margin-top:26px">
+    <p>Two things to point at rather than read. The <strong>owners</strong> column: three people, not a department. And the <strong>engine</strong> column: six of the eight are a script and an agent working together, which is exactly the distinction taught two sections later — so it arrives as an observation about our own system rather than as theory.</p>
+    <p class="say">"BA-282 was marked Done. It wasn't — a pull request was still open."</p>
+    <p>The reconciler caught the mismatch fifteen minutes after it happened, posted a warning, added a deployment-check note in Notion and updated the tracking state. Nobody asked it to look and nobody was watching. If someone in the room owns BA-282, turn to them. Then move on quickly — the mechanism gets unpacked later, and over-explaining here costs the moment.</p>
+    <p><strong>Be honest about the weak spot too.</strong> Several of these run flawlessly without us being able to prove they changed anything. Saying "it ran is not the same as it helped" costs nothing, buys real credibility, and sets the bar the Sunday report holds everyone to.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Teaching block · the core idea</div>
+  <h2>Every automation is four blocks</h2>
+  <p class="lede">This is the one thing everybody has to leave knowing. Teach it once, then use the same four words for the rest of the session — in the demo, on the worksheet, in the share-back.</p>
+  <div class="blocks">
+    <div class="block"><div class="k">Trigger</div><p>What sets it off. Someone posts in a channel, mentions it, or a schedule fires.</p></div>
+    <div class="block"><div class="k">Context</div><p>What it's allowed to look at. A channel, a database, a folder, the public web.</p></div>
+    <div class="block"><div class="k">Decision</div><p>The part that works something out — either rules you write down, or judgment you can only describe.</p></div>
+    <div class="block"><div class="k">Action</div><p>What it does about it. Post, file, draft, update, flag, notify.</p></div>
+  </div>
+  <div class="stack" style="margin-top:26px">
+    <p class="say">"If you can say — when X happens, go look at Y, work out Z, then do W — it's automatable. If you can't, it isn't yet, and the useful next step is figuring out which of the four is missing."</p>
+    <p>That last clause matters. Most ideas that feel impossible are missing exactly one block, usually the trigger. "I wish someone kept an eye on churn risk" has no trigger; "every Monday, check which accounts haven't been touched in 30 days" does. Coaching a squad from the first to the second is most of what you'll do during the brainstorm.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Teaching block · the second half of the idea</div>
+  <h2>Two kinds of automation, and half of them don't think at all</h2>
+  <p class="lede">The third block has two settings, and which one you pick decides what you're building. This is the credibility segment — saying plainly that much of what the team wants needs no model at all is what makes the agentic claims believable.</p>
+  <div class="grid two">
+    <div class="card">
+      <h3>Scripts</h3>
+      <p style="margin-top:8px">The rule is something you can write down. Scan Jira for tickets sitting in "ready to deploy", work out who owns them, nudge them. No reasoning — just steps, run reliably, on time, forever.</p>
+    </div>
+    <div class="card">
+      <h3>Agents</h3>
+      <p style="margin-top:8px">You can't write the rule down, only describe what good looks like. Is this message a bug report? Is this news worth anyone's attention? Turn this thread into a decision record.</p>
+    </div>
+  </div>
+  <div class="tablewrap" style="margin-top:16px">
+    <table>
+      <thead><tr><th></th><th>Script</th><th>Agent</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Decides by</strong></td><td>Rules you can state</td><td>Judgment you can only describe</td></tr>
+        <tr><td><strong>Same input twice</strong></td><td>Identical answer, always</td><td>Usually the same. Not guaranteed</td></tr>
+        <tr><td><strong>Costs per run</strong></td><td>Effectively nothing</td><td>Real, if small</td></tr>
+        <tr><td><strong>When it's wrong</strong></td><td>It breaks loudly</td><td>It can be quietly plausible</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="stack" style="margin-top:26px">
+    <p class="say">"Can you write the rule down? It's a script. Can you only describe what good looks like? It needs judgment."</p>
+    <p>That last row of the table is the one to land hardest. A script that breaks tells you. An agent that's wrong can be quietly plausible — which is precisely why anything that has to be exact belongs on the left-hand side.</p>
+    <p><strong>Most real automations are both,</strong> and the skill is carving the idea into the part you can write down and the small part you can't, then handing over only the second piece. It's the same instinct as the access rule: least information, least judgment. Every bit of either that you give away is a bit more that can drift.</p>
+  </div>
+
+  <h3 style="margin-top:36px">Worked example — the BA-282 catch</h3>
+  <p class="lede">Callback to the opening: this is the automation that caught BA-282. Walk the blocks and name the engine running each.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Block</th><th>What happens</th><th>Engine</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Trigger</strong></td><td>Every fifteen minutes</td><td>Script</td></tr>
+        <tr><td><strong>Context</strong></td><td>Jira issue status checked against open GitHub pull requests; a pre-filter script narrows it before the agent sees anything</td><td>Script</td></tr>
+        <tr><td><strong>Decision</strong></td><td>Is this mismatch genuinely worth interrupting someone about, and how should it be worded</td><td>Both</td></tr>
+        <tr><td><strong>Action</strong></td><td>Warning to Slack, deployment-check note in Notion, tracking state updated</td><td>Script</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="body" style="margin-top:14px; color:var(--muted)">Ninety runs yesterday, eighty-nine of them silent, one worth someone's attention. Three of four blocks are plain steps, and judgment only gets involved after a script has thrown away everything obvious. Ask the room which blocks they'd have assumed needed AI.</p>
+
+  <h3 style="margin-top:36px">Why a plain script still belongs in this session</h3>
+  <div class="stack">
+    <p>Because the script was never the hard part. What stopped anyone building the Jira reconciler was getting Jira, GitHub and Slack to talk to each other, somewhere to keep the credentials, a machine to run it on at 9am every day, noticing when it silently stopped, and knowing Python.</p>
+    <p>All five are gone. You describe it and it writes it; it already holds the connections; it owns the schedule; it tells you when it breaks; and you change it by asking, in English. <strong>No server, no auth wiring, no Python.</strong> That's the empowerment message, and it's the reason the non-engineers in the room should care about the script half at all.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The three-question filter</h2>
+  <p class="lede">For a first automation, all three need to be yes. Squads should apply this to their own ideas before pitching.</p>
+  <div class="grid three">
+    <div class="card"><h4>Frequency</h4><p>Does it happen <strong>at least weekly?</strong> Automating something quarterly is a hobby project.</p></div>
+    <div class="card"><h4>Judgment load</h4><p>Is it <strong>annoying and low-judgment</strong> — the kind of thing you'd hand to a sharp new hire?</p></div>
+    <div class="card"><h4>Error tolerance</h4><p>For judgment-based ones: if it's <strong>85% right</strong>, is it still useful? If it has to be exact every time, make it a script instead.</p></div>
+  </div>
+  <div class="grid two" style="margin-top:16px">
+    <div class="card">
+      <h4>Where it's strong</h4>
+      <ul class="clean">
+        <li>Reading far more than a person has time to read</li>
+        <li>Doing the same careful thing every single time, without drift</li>
+        <li>Watching things nobody has been assigned to watch</li>
+        <li>Getting a first draft to 80% in seconds</li>
+        <li>Classifying and routing a messy inbox of anything</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Where it isn't</h4>
+      <ul class="clean no">
+        <li>Anything where being quietly wrong is expensive — pricing, contracts, legal, money out the door. <strong>That should be a script.</strong></li>
+        <li>Work with no clear trigger, that happens "when it happens"</li>
+        <li>Judgment that depends on context nobody ever wrote down</li>
+        <li>Anything rare enough that you'd forget it exists</li>
+        <li>Being the last check before something reaches a customer</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Teaching block · trust</div>
+  <h2>What it can see, and what it can't</h2>
+  <div class="stack">
+    <p>Our constraint isn't technical, it's trust — we keep access deliberately narrow, and that shapes what people should be designing. Say this plainly rather than letting the room infer it.</p>
+    <ul class="clean">
+      <li><strong>Access is granted by role, not by person's seniority.</strong> A role is a named list of tools. Today we run admin, operator, marketing and readonly roles, and most of the company has no role at all — which is why most of the company has never seen it work.</li>
+      <li><strong>It doesn't roam.</strong> It works in the conversation it has been invited into, with the tools its role holds. It is not reading the company in the background.</li>
+      <li><strong>Every squad gets a written scope card</strong> — exactly which channel, which database, which folder. Legible limits read as design; vague limits read as distrust.</li>
+      <li><strong>Nothing customer-facing goes out unreviewed.</strong> Drafting is the job; sending stays with a person.</li>
+    </ul>
+    <p class="say">"The first design question for any automation is not what would I love to give it. It's what is the least information this could possibly need."</p>
+    <p>That reframe is the most transferable thing in the session. An automation that needs a trust decision waits on a conversation; an automation built on public data and one output channel ships this week. Tell squads to <strong>start outside the walls</strong> for their first build and earn their way inward.</p>
+    <div class="note"><strong>Check before you say it.</strong> Confirm the exact wording on what the agent can and can't reach against the current config before the session — the specifics move, and this is the one segment where being loosely accurate is worse than saying less.</div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">The demo</div>
+  <h2>The Radar</h2>
+  <p class="lede">Every weekday at 8am, the agent checks the outside world for news about our customers and prospects, and posts only what matters — with one line on why it matters to us.</p>
+  <div class="stack">
+    <p>Funding rounds. Exec changes at an account — the single best-known predictor of churn. Layoffs, acquisitions, product launches, a prospect announcing exactly the initiative we serve. Nobody at Base does this today, not because it's unimportant but because reading the news for forty companies every morning is nobody's job.</p>
+    <p><strong>It needs almost no access, and that's the point.</strong> The public web, a list of company names, one channel. No customer data, no Notion workspace, no Slack history, no repo, no Drive. The list is the logos already published on our own homepage, so it discloses nothing that isn't already public — and it can live in the instruction itself rather than in a connected system. It is the strongest possible demonstration of the actual thesis: a deliberately tiny grant, producing outsized value.</p>
+  </div>
+
+  <div class="card" style="margin-top:24px">
+    <h4>Beat by beat</h4>
+    <div class="beat">
+      <div class="n">1</div>
+      <div><h3>Show the cage first</h3>
+      <p>Put the role definition on screen before anything runs. Three permissions. <em>"This is everything it can touch. It cannot read our Notion, our Slack history, our code or our Drive. Watch what it can still do."</em> Pre-empting the anxiety is what lets the room enjoy the next four minutes.</p></div>
+    </div>
+    <div class="beat">
+      <div class="n">2</div>
+      <div><h3>Ask for it in plain language, in Slack, in front of them</h3>
+      <p>The fact that this paragraph <em>is</em> the entire authoring interface is a bigger mind-opener than the output. Slow down here and let people watch you type it.</p>
+      <div class="prompt">Every weekday at 8am, look up recent news for each company on this list — funding, exec changes, layoffs, acquisitions, product launches, big hiring pushes. Post anything meaningful to #radar with a link and one line on why it matters to us. If there's nothing worth reporting, say nothing.</div></div>
+    </div>
+    <div class="beat">
+      <div class="n">3</div>
+      <div><h3>Run it once, immediately</h3>
+      <p>Don't wait for tomorrow morning. Tell it to do today's pass now, and let the room watch the channel fill.</p></div>
+    </div>
+    <div class="beat">
+      <div class="n">4</div>
+      <div><h3>The payoff — turn to the person who owns it</h3>
+      <p>Find the item about an account someone in the room owns, and ask them: <em>"Did you know that?"</em> After rehearsal you'll know which one to point at. Nothing else in the session competes with a room watching the agent tell a colleague something true about their own account that they didn't know.</p></div>
+    </div>
+    <div class="beat">
+      <div class="n">5</div>
+      <div><h3>Bridge straight into the squads</h3>
+      <p class="say" style="margin-top:8px">"Web, a list, a channel. Three permissions and one paragraph of English, and the company knows something it didn't know an hour ago. So — what's the version of that for your team?"</p></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:16px">
+    <strong>The one failure mode.</strong> A quiet news week produces a boring pass. Rehearsing the identical build the day before tells you in advance; if it's thin, widen the list with prospects and competitors, because something is always happening across forty companies. And if it genuinely is quiet, say so — <em>"it reported nothing, because nothing happened. That's the design. It stays silent unless it matters."</em> That's a good beat too.
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Structure</div>
+  <h2>Squads, drivers and champions</h2>
+  <p class="lede">Six squads, each built around one shared workflow rather than one department. The four champions sit in <em>no</em> squad — they float, advise and unblock.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Squad</th><th>Members</th><th>Shared cause</th><th>First port of call</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Go-To-Market</strong></td><td>Adi Gorelik · Ohad Sagir · Gal Biran</td><td>Demand → pipeline → close</td><td>Shachar</td></tr>
+        <tr><td><strong>Customer</strong></td><td>Yonat Shain · Rona Aharonson · Uri Ronen Nesher</td><td>Onboarding → retention → expansion</td><td>Tal</td></tr>
+        <tr><td><strong>Product</strong></td><td>Itamar Amit · Roni Nakache · Vivian Berko</td><td>Discovery → spec → feedback</td><td>Shachar</td></tr>
+        <tr><td><strong>Release Pipeline</strong></td><td>Elad Sofer · Ben Pinhas · Ori Marko</td><td>Ticket → PR → QA → deploy</td><td>Gil</td></tr>
+        <tr><td><strong>Dev Experience</strong></td><td>Leetal Rivlin-Tal · Nir Fainshtein · Yahav Dan · Yiftach Badani</td><td>The daily developer loop</td><td>Gal Briner</td></tr>
+        <tr><td><strong>Internal Ops</strong></td><td>Pazit Lazar · Ayelet Morag · Ariel Lilaev</td><td>Running the company itself</td><td>Tal</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid two" style="margin-top:26px">
+    <div class="card">
+      <h4>The driver</h4>
+      <ul class="clean">
+        <li>One person per squad, at the keyboard, owning the build and the scope card.</li>
+        <li><strong>Curiosity over seniority.</strong> You want the person who tinkers, not the person who approves.</li>
+        <li><strong>The driver needs the config role</strong>, not the champion — champions already have access, so it is the drivers who get blocked at 1:08.</li>
+        <li>They own the automation afterwards and become their squad's go-to, which is how this spreads without you.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>The champions</h4>
+      <ul class="clean">
+        <li>Gal Briner, Gil Hobot, Shachar Avrahami and Tal Shemesh — a <strong>pool</strong>, not squad members.</li>
+        <li>Named per squad only as a first port of call; any squad can grab any of them.</li>
+        <li><strong>Brief them beforehand:</strong> advise, unblock, answer — never take the keyboard. A champion who builds it leaves a squad with nothing they can maintain.</li>
+        <li>Two champions cover two squads each, and those four are the non-technical squads — expect them to be busiest, and back them up rather than the engineering tables.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note" style="margin-top:16px">
+    <strong>Two deliberate placements.</strong> The CEO is inside Go-To-Market rather than observing — a chief executive who builds something is a far stronger signal than one who watches, though in a squad of three he will dominate unless you say so. And Release Pipeline is QA plus the R&amp;D lead rather than developers: it is the exact pipeline BA-282 came out of, so the opening story doubles as that squad's brief.
+  </div>
+  <div class="note" style="margin-top:12px">
+    <strong>Show the trust segment to Ariel before the day.</strong> He is the CISO and he is a participant, which makes the 0:32 block a security briefing delivered with the security officer in the room. Best case he co-signs it or says a sentence himself, turning the most likely source of objection into the person validating the answer. Worst case he corrects something you would otherwise have said wrong in front of everyone.
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Brainstorm fuel</div>
+  <h2>Seeded ideas, by function</h2>
+  <p class="lede">Hand each squad only their own card. A blank page produces either wish lists or silence; a menu produces arguments about which one is best, which is exactly the conversation you want. Everything here fits a narrow scope. <strong>Check on Internal Ops first</strong> — it is the squad furthest from an obvious idea and the most likely to stall.</p>
+  <div class="legend"><span><span class="mode m-script">script</span>rules only</span><span><span class="mode m-agent">agent</span>needs judgment</span><span><span class="mode m-hybrid">both</span>script gathers, agent handles the messy bit</span></div>
+  <div class="grid two">
+    <div class="squad">
+      <h3><span class="dot"></span>Go-To-Market</h3>
+      <ul class="clean">
+        <li>Drop a domain, get a prospect brief before the call<span class="mode m-agent">agent</span></li>
+        <li>Weekly pipeline movement: what changed stage, what went quiet<span class="mode m-script">script</span></li>
+        <li>One blog post into five LinkedIn variants, with images<span class="mode m-agent">agent</span></li>
+        <li>Competitor content watch — and what we should answer<span class="mode m-hybrid">both</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Customer</h3>
+      <ul class="clean">
+        <li>Renewal prep pack assembled two weeks out<span class="mode m-hybrid">both</span></li>
+        <li>Quiet-account alert: nothing anywhere in 30 days<span class="mode m-script">script</span></li>
+        <li>Onboarding stall nudge to whoever owns the step<span class="mode m-script">script</span></li>
+        <li>Follow-up and account notes drafted from a call<span class="mode m-agent">agent</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Product</h3>
+      <ul class="clean">
+        <li>Monthly roll-up clustering feature requests by theme<span class="mode m-agent">agent</span></li>
+        <li>PRD skeleton drafted from a thread or a call<span class="mode m-agent">agent</span></li>
+        <li>What customers asked for vs what we actually shipped<span class="mode m-hybrid">both</span></li>
+        <li>Competitor release watch from public changelogs<span class="mode m-hybrid">both</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Release Pipeline</h3>
+      <ul class="clean">
+        <li>Extend the BA-282 reconciler to other mismatch shapes<span class="mode m-hybrid">both</span></li>
+        <li>Nudge tickets sitting in &quot;ready for QA&quot; past a threshold<span class="mode m-script">script</span></li>
+        <li>Test checklist assembled from the ticket and its diff<span class="mode m-agent">agent</span></li>
+        <li>Release notes drafted from merged pull requests<span class="mode m-hybrid">both</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Dev Experience</h3>
+      <ul class="clean">
+        <li>Stale PR nudge to whoever is sitting on the review<span class="mode m-script">script</span></li>
+        <li>Incident context pack: every related past issue and PR<span class="mode m-hybrid">both</span></li>
+        <li>Dependency and CVE watch on public advisories<span class="mode m-script">script</span></li>
+        <li>First-pass review on your own PR before a human sees it<span class="mode m-agent">agent</span></li>
+      </ul>
+    </div>
+    <div class="squad">
+      <h3><span class="dot"></span>Internal Ops</h3>
+      <ul class="clean">
+        <li>Security questionnaire drafted from our previous answers<span class="mode m-agent">agent</span></li>
+        <li>Candidate pipeline digest: who is stuck at which stage<span class="mode m-script">script</span></li>
+        <li>Onboarding checklist that chases its own owners<span class="mode m-script">script</span></li>
+        <li>Vendor and tool renewals: what expires when, who owns it<span class="mode m-hybrid">both</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">The artefact</div>
+  <h2>Squad worksheet</h2>
+  <p class="lede">One per squad, filled in by the end of the brainstorm. The access field is the important one — it turns scope into something squads design within and own, rather than something you veto afterwards.</p>
+  <div class="sheet">
+    <div class="field"><div class="lbl">In one line</div><div class="desc">When <em>X</em> happens, look at <em>Y</em>, work out <em>Z</em>, then do <em>W</em>.</div></div>
+    <div class="field"><div class="lbl">Trigger</div><div class="desc">A message in a channel, a mention, or a schedule. Be specific about which.</div></div>
+    <div class="field"><div class="lbl">Access needed</div><div class="desc">Exactly which channel, database, folder or public source. If this list is long, the idea is too big — shrink it.</div></div>
+    <div class="field"><div class="lbl">What it works out</div><div class="desc">Classify, compare, summarise, decide, draft.</div></div>
+    <div class="field"><div class="lbl">Rules or judgment</div><div class="desc">Which parts could you write down as rules, and which genuinely need judgment? Give the agent only the second kind.</div></div>
+    <div class="field"><div class="lbl">What it does</div><div class="desc">The output, and where it lands.</div></div>
+    <div class="field"><div class="lbl">Human checkpoint</div><div class="desc">What a person approves before anything leaves the building — or "none needed, it's internal".</div></div>
+    <div class="field"><div class="lbl">Good enough looks like</div><div class="desc">If it's 85% right, what does that mean here, and is it still worth having?</div></div>
+    <div class="field"><div class="lbl">Owner</div><div class="desc">Your driver, plus who checks it's still useful in a month.</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Afterwards</div>
+  <h2>The demos, and what replaces a follow-up meeting</h2>
+  <div class="stack">
+    <p>Three minutes per squad, at 2:38, with a visible timer. Six squads is seventeen minutes with nothing spare, so hold it. They run it live, however crude.</p>
+    <p><strong>Say the bar out loud before they start, because it is deliberately low: it runs.</strong> Nobody has had an hour and also proved their automation helped anyone, and pretending otherwise makes the room defensive at exactly the wrong moment. Celebrate anything that executes. A squad that didn't get there shows its worksheet and names the blocker — that is a real result, and it hands you a list of things to unblock this week.</p>
+    <p>The honest version of the bar is that <em>"it ran" is not "it helped"</em> — but that test belongs to the Sunday report, not to a room an hour into building.</p>
+    <p><strong>Without a follow-up meeting, something has to carry the loop</strong>, or a session like this decays inside a week. The good news is that it already exists and is already running: the automation-creation monitor announces every new automation the moment it appears, and the weekly activity report posts what everything did. Point both at a channel the whole company can see and the scoreboard becomes ambient instead of a meeting. Then close by having each driver — not each champion — say one sentence out loud about what they will finish this week.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Facilitator notes</div>
+  <h2>What goes wrong, and the fix</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Failure</th><th>Where it shows up</th><th>The fix, already built in</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Room nods, nothing changes</strong></td><td>The week after</td><td>Every squad demos in-session; new automations announce themselves publicly; drivers commit out loud</td></tr>
+        <tr><td><strong>Squad designs something you have to refuse</strong></td><td>Mid-build</td><td>The access field forces the constraint in during design; you circulate in the first ten minutes of the build</td></tr>
+        <tr><td><strong>Brainstorm goes quiet</strong></td><td>First five minutes of the 30</td><td>Seeded menu per function — they argue about options instead of staring at a blank page</td></tr>
+        <tr><td><strong>Demo finds nothing interesting</strong></td><td>Live, in front of everyone</td><td>Rehearse the identical build the day before; widen the watch list if thin</td></tr>
+        <tr><td><strong>People get uneasy about surveillance</strong></td><td>Mid-brainstorm, unspoken</td><td>The access segment runs before the brainstorm, not after</td></tr>
+        <tr><td><strong>A squad never names a driver</strong></td><td>Ten minutes into the build</td><td>Drivers named out loud during the brief; picked for curiosity, not seniority</td></tr>
+        <tr><td><strong>A champion builds it for a squad</strong></td><td>During the build</td><td>Brief them beforehand — advise and unblock, never take the keyboard</td></tr>
+        <tr><td><strong>Ideas are all "I wish someone watched X"</strong></td><td>Throughout the brainstorm</td><td>Coach the missing block — almost always the trigger</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  Off Your Plate — Agent Building Adventure · Facilitator playbook · Demo: The Radar
+</footer>
+
+</div>
