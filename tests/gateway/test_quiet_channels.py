@@ -72,3 +72,42 @@ def test_normalize_surfaces_partial_even_when_quiet():
 def test_normalize_passes_through_real_text_when_quiet():
     out = _normalize_empty_agent_response({"api_calls": 1}, "hello", quiet_completion_ok=True)
     assert out == "hello"
+
+
+def test_every_normalize_call_site_passes_quiet_completion_ok():
+    """Every caller of ``_normalize_empty_agent_response`` must pass the flag.
+
+    The flag defaults to False, so a call site that omits it silently emits
+    "no response was generated" into a quiet channel and breaks the
+    silent-listener contract. That is exactly what happened after the v0.20.6
+    sync: upstream extracted the turn loop into ``TurnRunner`` and added a
+    SECOND normalize call there, which ran before the gateway path that already
+    carried the flag. Nothing failed — the bot just started talking in channels
+    that are supposed to stay silent.
+
+    Scanning the source (rather than asserting behaviour at one seam) is what
+    catches the NEXT call site an upstream refactor introduces.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "gateway" / "run.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+
+    missing = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+        if name != "_normalize_empty_agent_response":
+            continue
+        if not any(kw.arg == "quiet_completion_ok" for kw in node.keywords):
+            missing.append(node.lineno)
+
+    assert not missing, (
+        "gateway/run.py calls _normalize_empty_agent_response without "
+        f"quiet_completion_ok at line(s) {missing}. That call site will post "
+        "'no response was generated' into quiet channels. Pass "
+        "quiet_completion_ok=_is_quiet_channel(<source>, _load_gateway_config())."
+    )

@@ -7245,8 +7245,17 @@ class TurnRunner:
         )
 
         if not final_response:
+            # Quiet channels: an emoji-only turn is a legitimate completion, not
+            # a fault. Without this flag the normalizer emits the "no response
+            # was generated" warning and breaks the silent-listener contract.
+            # This call site is upstream's (added when the turn loop was
+            # extracted into TurnRunner) and runs BEFORE the older gateway path
+            # that already passed the flag — so it has to carry it too.
             final_response = _normalize_empty_agent_response(
                 result, final_response or "", history_len=len(agent_history),
+                quiet_completion_ok=_is_quiet_channel(
+                    ctx.source, _load_gateway_config()
+                ),
             )
             final_response = _sanitize_gateway_final_response(ctx.source.platform, final_response)
             if not final_response:
