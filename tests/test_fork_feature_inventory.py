@@ -98,6 +98,10 @@ WIRING = [
     ("Home-path collapse", "agent/display.py", "return collapse_home_path(preview) if preview else preview", "applied at boundary"),
     ("Slack author anchor", "plugins/platforms/slack/adapter.py", "def _anchor_message_author", "helper"),
     ("Slack author anchor", "plugins/platforms/slack/adapter.py", "text = _anchor_message_author(text, user_name, is_dm)", "call site"),
+    # ── Agentic outbound messaging (fork override of an upstream removal) ──
+    ("send_message registered", "tools/send_message_tool.py", 'registry.register(', "registration restored"),
+    ("send_message registered", "tools/send_message_tool.py", 'toolset="messaging"', "under the messaging toolset"),
+    ("messaging toolset", "toolsets.py", '"messaging": {', "toolset restored"),
     ("Memory global-only", "tools/memory_tool.py", "def memory_schema_for", "global-only schema"),
     ("Holographic scopes", "plugins/memory/holographic/__init__.py", "def _bundle_for_current_scope", "per-scope stores"),
     # ── Config plumbing ───────────────────────────────────────────────────
@@ -155,6 +159,36 @@ def test_floor_toolsets_reach_valid_role_users_only():
         assert policy.can_use_tool("U_OP", floor), f"floor {floor} denied to a valid role"
         assert not policy.can_use_tool("U_NOBODY", floor), (
             f"floor {floor} leaked to a roleless user — deny-until-assigned is broken"
+        )
+
+
+def test_agent_can_still_choose_to_send_messages():
+    """The bot must be able to DM a user by agentic choice.
+
+    Upstream removed the ``messaging`` toolset and the ``send_message``
+    registration on the view that an agent should not decide to send messages on
+    its own (see the NOTE in tools/send_message_tool.py). The fork's automations
+    depend on exactly that — a cron worker reporting back to whoever asked, an
+    ownership hand-off notice, a triage bot following up.
+
+    This is the silent kind of regression: the module keeps importing, every
+    direct caller (cron delivery, ``hermes send``, ``automation_ownership.
+    _send_dm``) keeps working, and the suite stays green — while the model can no
+    longer choose to send. So assert the model-facing wiring, not the import.
+    """
+    import toolsets
+
+    all_toolsets = toolsets.get_all_toolsets()
+    assert "messaging" in all_toolsets, (
+        "the 'messaging' toolset is gone — the agent can no longer choose to "
+        "send a message. An upstream sync most likely removed it again; restore "
+        "the entry in toolsets.py."
+    )
+
+    entry = toolsets.TOOLSETS["messaging"] if hasattr(toolsets, "TOOLSETS") else None
+    if entry is not None:
+        assert "send_message" in entry.get("tools", []), (
+            "'messaging' no longer contains send_message"
         )
 
 

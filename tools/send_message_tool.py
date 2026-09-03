@@ -2361,14 +2361,36 @@ async def _send_yuanbao(chat_id, message, media_files=None):
 # --- Registry ---
 from tools.registry import tool_error
 
-# NOTE: ``send_message`` is intentionally NOT registered as an agent-callable
-# model tool. The agent should not decide on its own to fire off cross-platform
-# messages or reactions. The send engine in this module (``_send_to_platform``,
-# ``_send_via_adapter``, ``_parse_target_ref``, the per-platform ``_send_*``
-# helpers) remains the shared transport used by:
+# UPSTREAM NOTE (kept for context): upstream does NOT register ``send_message``
+# as an agent-callable model tool. Its view is that the agent should not decide
+# on its own to fire off cross-platform messages or reactions. The send engine in
+# this module (``_send_to_platform``, ``_send_via_adapter``, ``_parse_target_ref``,
+# the per-platform ``_send_*`` helpers) is the shared transport used by:
 #   - cron delivery (cron/scheduler.py)
 #   - the ``hermes send`` CLI command (hermes_cli/send_cmd.py)
 #   - the gateway kanban notifier (dashboard-toggled, outside agent control)
 #   - the standalone MCP server (mcp_serve.py), which is an opt-in surface
-# Those callers import the helpers directly; none of them need the registry
-# entry.
+# Those callers import the helpers directly and do not need the registry entry.
+#
+# FORK OVERRIDE (EverAfter): we DO register it. Our automations depend on the bot
+# DMing a user by agentic choice — a cron worker reporting a result back to the
+# person who asked for it, an ownership hand-off notice, a triage bot following
+# up on a report. Removing the registration silently drops that capability: the
+# module keeps working for the direct callers above (which is why the test suite
+# stays green and ``agent/automation_ownership._send_dm`` is unaffected), but the
+# model can no longer choose to send. The `messaging` toolset in toolsets.py
+# exists for this tool, so RBAC still gates it per role.
+#
+# If a future upstream sync deletes this block again,
+# tests/test_fork_feature_inventory.py fails loudly rather than shipping a
+# gateway that has quietly lost agentic DM.
+from tools.registry import registry, tool_error  # noqa: E402
+
+registry.register(
+    name="send_message",
+    toolset="messaging",
+    schema=SEND_MESSAGE_SCHEMA,
+    handler=send_message_tool,
+    check_fn=_check_send_message,
+    emoji="📨",
+)

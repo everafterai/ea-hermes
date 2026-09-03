@@ -196,7 +196,23 @@ TOOLSETS = {
         "tools": ["cronjob"],
         "includes": []
     },
-    
+
+    # FORK OVERRIDE (EverAfter). Upstream removed this toolset and the
+    # ``send_message`` registration with it, on the view that an agent should not
+    # decide on its own to fire off cross-platform messages (see the NOTE at the
+    # bottom of tools/send_message_tool.py). Our automations depend on exactly
+    # that: the bot DMs a user by agentic choice — a cron worker reporting a
+    # result to the person who asked, an ownership hand-off notice, a triage
+    # bot following up. Restored deliberately.
+    #
+    # It stays its OWN toolset (not folded into a floor) so RBAC gates it: a
+    # role must be granted ``messaging`` to send unprompted messages, and a
+    # roleless user can never reach it.
+    "messaging": {
+        "description": "Cross-platform messaging: send messages to Telegram, Discord, Slack, SMS, etc.",
+        "tools": ["send_message"],
+        "includes": []
+    },
 
     "file": {
         "description": "File manipulation tools: read, write, patch (with fuzzy matching), and search (content + files)",
