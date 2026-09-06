@@ -1,6 +1,7 @@
 """check_edit truth table + ownership mutations."""
 import agent.automation_ownership as ao
 from agent.automation_ownership import Identity, EditDecision
+from hermes_constants import get_hermes_home
 
 ALICE = Identity("slack", "U_ALICE", "Alice")
 BOB = Identity("slack", "U_BOB", "Bob")
@@ -69,6 +70,41 @@ def test_owned_no_identity_blocked():
     k = _own()
     r = ao.check_edit(k, None)
     assert r.decision == EditDecision.NO_IDENTITY and not r.allowed
+
+
+def test_owned_cron_can_edit_its_same_owner_declared_bundle_only():
+    """Cron output can be written without fabricating a platform user identity."""
+    bundle = get_hermes_home() / "automations" / "weekly-report"
+    bundle.mkdir(parents=True, exist_ok=True)
+    _own(key="cron:weekly", owner=ALICE)
+    _own(key="automation:weekly-report", owner=ALICE)
+    _own(key="automation:other-report", owner=ALICE)
+
+    token = ao.enter_owned_cron_bundle_edit_scope(
+        {"id": "weekly", "workdir": str(bundle)}
+    )
+    try:
+        assert ao.check_edit("automation:weekly-report", None).allowed
+        assert not ao.check_edit("automation:other-report", None).allowed
+    finally:
+        ao.exit_owned_cron_bundle_edit_scope(token)
+
+    assert not ao.check_edit("automation:weekly-report", None).allowed
+
+
+def test_owned_cron_scope_rejects_different_bundle_owner():
+    bundle = get_hermes_home() / "automations" / "weekly-report"
+    bundle.mkdir(parents=True, exist_ok=True)
+    _own(key="cron:weekly", owner=ALICE)
+    _own(key="automation:weekly-report", owner=BOB)
+
+    token = ao.enter_owned_cron_bundle_edit_scope(
+        {"id": "weekly", "workdir": str(bundle)}
+    )
+    try:
+        assert not ao.check_edit("automation:weekly-report", None).allowed
+    finally:
+        ao.exit_owned_cron_bundle_edit_scope(token)
 
 
 def test_register_creator_sets_owner_once():

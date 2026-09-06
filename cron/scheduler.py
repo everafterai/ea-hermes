@@ -6047,6 +6047,7 @@ def run_job(
     _cron_session_var = _VAR_MAP["HERMES_CRON_SESSION"]
     _cron_session_token = None
     _non_dispatcher_token = None
+    _owned_bundle_edit_token = None
     _session_db = None
     try:
         if not _cwd_lock_acquired:
@@ -6070,6 +6071,16 @@ def run_job(
         # which would suppress the legacy os.environ fallback used by standalone
         # cron entrypoints and tests.
         _cron_session_token = _cron_session_var.set("1")
+
+        # Cron has no interactive sender identity by design. Grant only the
+        # declared workdir bundle's same recorded owner a scoped file-write
+        # capability, so report/render jobs can update generated output without
+        # impersonating a Slack user or opening other bundles.
+        try:
+            from agent.automation_ownership import enter_owned_cron_bundle_edit_scope
+            _owned_bundle_edit_token = enter_owned_cron_bundle_edit_scope(job)
+        except Exception as e:
+            logger.debug("Job '%s': failed to establish owned-bundle edit scope: %s", job_id, e)
 
         # Mark this job as NOT the dispatcher-owned kanban worker.
         #
@@ -7004,6 +7015,12 @@ def run_job(
         clear_session_vars(_ctx_tokens)
         if _cron_session_token is not None:
             _cron_session_var.reset(_cron_session_token)
+        if _owned_bundle_edit_token is not None:
+            try:
+                from agent.automation_ownership import exit_owned_cron_bundle_edit_scope
+                exit_owned_cron_bundle_edit_scope(_owned_bundle_edit_token)
+            except Exception as e:
+                logger.debug("Job '%s': failed to clear owned-bundle edit scope: %s", job_id, e)
         if _non_dispatcher_token is not None:
             exit_non_dispatcher_owned_context(_non_dispatcher_token)
         for _var_name in _cron_delivery_vars:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -75,6 +76,66 @@ class Identity:
     platform: str
     user_id: str
     display_name: str
+
+
+_AUTONOMOUS_EDIT_GRANTS: ContextVar[frozenset[tuple[str, str, str]]] = ContextVar(
+    "AUTONOMOUS_EDIT_GRANTS", default=frozenset()
+)
+
+
+def enter_owned_cron_bundle_edit_scope(job: dict) -> Token:
+    """Grant one cron turn writes to its same-owner declared bundle only.
+
+    The job must have an ID and a real workdir classified as
+    ``automation:<name>``, and the cron and bundle must have the same recorded
+    platform/user owner. The scheduler supplies the persisted job object;
+    neither model output nor delivery-origin metadata is trusted. Missing or
+    malformed ownership fails closed to an empty grant.
+    """
+    grants: frozenset[tuple[str, str, str]] = frozenset()
+    try:
+        job_id = str(job.get("id") or "").strip()
+        workdir = str(job.get("workdir") or "").strip()
+        classified = path_to_artifact_key(workdir) if workdir else None
+        if not job_id or not classified:
+            return _AUTONOMOUS_EDIT_GRANTS.set(grants)
+        bundle_key, kind = classified
+        if kind != "automation":
+            return _AUTONOMOUS_EDIT_GRANTS.set(grants)
+        cron_record = get_record(artifact_key("cron", job_id)) or {}
+        bundle_record = get_record(bundle_key) or {}
+        cron_owner = cron_record.get("owner") or {}
+        bundle_owner = bundle_record.get("owner") or {}
+        platform = str(cron_owner.get("platform") or "")
+        user_id = str(cron_owner.get("user_id") or "")
+        if (
+            platform
+            and user_id
+            and platform == str(bundle_owner.get("platform") or "")
+            and user_id == str(bundle_owner.get("user_id") or "")
+        ):
+            grants = frozenset({(bundle_key, platform, user_id)})
+    except Exception:
+        # Ownership must never make the scheduler fail, but uncertainty must
+        # not widen autonomous write access.
+        grants = frozenset()
+    return _AUTONOMOUS_EDIT_GRANTS.set(grants)
+
+
+def exit_owned_cron_bundle_edit_scope(token: Token) -> None:
+    """Restore the caller's autonomous-edit scope after a cron turn."""
+    _AUTONOMOUS_EDIT_GRANTS.reset(token)
+
+
+def _has_owned_cron_bundle_grant(key: str, record: dict) -> bool:
+    """True only when the current bundle owner still matches the scoped grant."""
+    owner = record.get("owner") or {}
+    target = (
+        key,
+        str(owner.get("platform") or ""),
+        str(owner.get("user_id") or ""),
+    )
+    return target in _AUTONOMOUS_EDIT_GRANTS.get()
 
 
 def current_identity() -> Optional[Identity]:
@@ -276,6 +337,9 @@ def check_edit(key: str, identity: Optional[Identity], *, confirm: Optional[str]
         if identity is None:
             return EditResult(EditDecision.UNOWNED, True, "", None)
         return EditResult(EditDecision.UNOWNED, True, _claim_nudge(key), None)
+
+    if identity is None and _has_owned_cron_bundle_grant(key, record):
+        return EditResult(EditDecision.OWNER, True, "", record)
 
     if identity is None:
         return EditResult(
