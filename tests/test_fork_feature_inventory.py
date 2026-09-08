@@ -110,6 +110,11 @@ WIRING = [
     ("Config bridge", "gateway/config.py", 'bridged["quiet_channels"]', "quiet_channels -> extra"),
     ("Config defaults", "hermes_cli/config_defaults.py", '"quiet_channels"', "fork slack defaults"),
     ("Slack yaml hook", "plugins/platforms/slack/adapter.py", "SLACK_HOME_CHANNEL_PROMPT", "home_channel_prompt bridged"),
+    # ── Bot-authored thread roots must not become a permanent wake zone ────
+    ("Bot-thread wake opt-in", "plugins/platforms/slack/adapter.py", "def _slack_wake_in_bot_authored_threads", "helper"),
+    ("Bot-thread wake opt-in", "plugins/platforms/slack/adapter.py", "and self._slack_wake_in_bot_authored_threads()", "gates check 4"),
+    ("Bot-thread wake opt-in", "plugins/platforms/slack/adapter.py", "SLACK_WAKE_IN_BOT_AUTHORED_THREADS", "yaml -> env bridge"),
+    ("Bot-thread wake opt-in", "hermes_cli/config_defaults.py", '"wake_in_bot_authored_threads": False', "defaults to pre-sync behaviour"),
 ]
 
 

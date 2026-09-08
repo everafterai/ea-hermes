@@ -5990,10 +5990,21 @@ class SlackAdapter(BasePlatformAdapter):
         ):
             return True
         # 4th check: bot-initiated thread via direct chat.postMessage.
-        if is_thread_reply and await self._bot_authored_thread_root(
-            channel_id=channel_id,
-            thread_ts=event_thread_ts,
-            team_id=team_id,
+        # OPT-IN in this fork (default off) — see
+        # _slack_wake_in_bot_authored_threads. Unlike the checks above it is
+        # derived from Slack history rather than process memory, so leaving it
+        # on turns every thread the bot has ever started into a permanent
+        # free-response zone. Automation-feed channels post the root of every
+        # item, so that is the whole channel. The flag is checked FIRST so the
+        # opted-out path never pays for the conversations.replies probe.
+        if (
+            is_thread_reply
+            and self._slack_wake_in_bot_authored_threads()
+            and await self._bot_authored_thread_root(
+                channel_id=channel_id,
+                thread_ts=event_thread_ts,
+                team_id=team_id,
+            )
         ):
             return True
         # 5th check (#24848): the thread PARENT @-mentioned the bot, but the
@@ -8390,7 +8401,15 @@ class SlackAdapter(BasePlatformAdapter):
             if parent.get("ts", "") != thread_ts:
                 return ""
             bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
-            text = self._render_message_text(parent, bot_uid=bot_uid or "")
+            # _render_message_text strips the bot mention unconditionally when
+            # handed a uid, which would silently violate strip_bot_mention=False
+            # on this (cold-cache) path — and its caller, the #24848 wake check,
+            # searches the result for exactly that marker. Withhold the uid when
+            # the raw mention has to survive. Masked until now because check 4
+            # ran first and warmed the cache, whose branch recovers raw text.
+            text = self._render_message_text(
+                parent, bot_uid=(bot_uid or "") if strip_bot_mention else ""
+            )
             if strip_bot_mention and bot_uid:
                 text = text.replace(f"<@{bot_uid}>", "").strip()
             return text
@@ -9151,6 +9170,36 @@ class SlackAdapter(BasePlatformAdapter):
             "on",
         }
 
+    def _slack_wake_in_bot_authored_threads(self) -> bool:
+        """When true, an un-mentioned reply under a thread the BOT started wakes it.
+
+        Gates the 4th wake check in
+        :meth:`_should_wake_on_unmentioned_message` (``_bot_authored_thread_root``,
+        upstream #63530). Defaults to **False** — the fork's pre-sync behaviour.
+
+        Unlike the three in-memory checks it sits beside, root authorship is
+        read back from the Slack API, so it is retroactive and permanent: it
+        applies to every thread the bot has ever posted and survives restarts
+        instead of decaying with process memory. In an automation-feed channel
+        — where the bot posts the root of *every* item via ``slack_post_thread``
+        and humans discuss underneath — that silently converts the whole channel
+        into free-response and defeats ``require_mention``.
+
+        Operators who want upstream's behaviour (human replies in bot-initiated
+        threads are heard without a mention) set this to true.
+        """
+        configured = self.config.extra.get("wake_in_bot_authored_threads")
+        if configured is not None:
+            if isinstance(configured, str):
+                return configured.lower() in {"true", "1", "yes", "on"}
+            return bool(configured)
+        return os.getenv("SLACK_WAKE_IN_BOT_AUTHORED_THREADS", "false").lower() in {
+            "true",
+            "1",
+            "yes",
+            "on",
+        }
+
     def _slack_thread_require_mention(self) -> bool:
         """When true, Slack thread replies require an explicit @-mention.
 
@@ -9889,6 +9938,12 @@ def _apply_yaml_config(yaml_cfg: dict, slack_cfg: dict) -> dict | None:
     ):
         os.environ["SLACK_THREAD_REQUIRE_MENTION"] = str(
             slack_cfg["thread_require_mention"]
+        ).lower()
+    if "wake_in_bot_authored_threads" in slack_cfg and not os.getenv(
+        "SLACK_WAKE_IN_BOT_AUTHORED_THREADS"
+    ):
+        os.environ["SLACK_WAKE_IN_BOT_AUTHORED_THREADS"] = str(
+            slack_cfg["wake_in_bot_authored_threads"]
         ).lower()
     if "allow_bots" in slack_cfg and not os.getenv("SLACK_ALLOW_BOTS"):
         os.environ["SLACK_ALLOW_BOTS"] = str(slack_cfg["allow_bots"]).lower()

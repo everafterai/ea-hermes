@@ -2377,6 +2377,12 @@ DEFAULT_CONFIG = {
         "ignore_other_user_mentions": False,
         # If True, require @mention in Slack thread replies too.
         "thread_require_mention": False,
+        # If True, an un-mentioned reply under a thread the BOT started wakes it.
+        # Read from Slack history, so it is retroactive and survives restarts —
+        # in an automation-feed channel (bot posts every thread root) that turns
+        # the whole channel into free-response and defeats require_mention.
+        # Default off = pre-sync behaviour. Env: SLACK_WAKE_IN_BOT_AUTHORED_THREADS.
+        "wake_in_bot_authored_threads": False,
         "quiet_channels": "",          # Comma-separated channel IDs: hide tool-progress + allow emoji-only (silent) completion
         "relevance_gate_model": "",    # Cheap/fast model for the quiet-channel relevance pre-gate (empty = use main turn model)
         "relevance_gate_purpose": {},  # Per-channel {chat_id: purpose}; classifier "what to act on" (falls back to channel_prompts)

@@ -87,7 +87,15 @@ def _make_adapter(bot_authored_root: bool = False):
     adapter.platform = Platform.SLACK
     adapter.config = PlatformConfig(
         enabled=True,
-        extra={"require_mention": True, "strict_mention": False},
+        extra={
+            "require_mention": True,
+            "strict_mention": False,
+            # Check 4 is opt-in in this fork (default off) — these tests
+            # exercise upstream's behaviour, so they enable it explicitly.
+            # See tests/gateway/test_slack_wake_bot_authored_threads_optin.py
+            # for why the default was flipped.
+            "wake_in_bot_authored_threads": True,
+        },
     )
     adapter._bot_user_id = BOT_USER_ID
     adapter._team_bot_user_ids = {}

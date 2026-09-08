@@ -45,6 +45,28 @@ Structural changes from that sync that affect where fork work goes:
   `/resume` identity gate (upstream's `_resume_target_allowed` /
   `_resume_row_visible` are stricter), and the fork's `reference_images`
   image-to-image implementation.
+- **An upstream default is overridden: bot-authored thread roots no longer
+  wake the bot.** The sync added a 4th check to
+  `_should_wake_on_unmentioned_message`
+  ([plugins/platforms/slack/adapter.py](plugins/platforms/slack/adapter.py)):
+  if the *thread root* was authored by the bot, any un-mentioned reply wakes
+  it (upstream #63530). Unlike the three in-memory checks beside it, that one
+  reads Slack history, so it is **retroactive and permanent** — every thread
+  the bot ever started, surviving restarts. In an automation-feed channel
+  (the bot posts the root of every item via `slack_post_thread`, and humans
+  discuss underneath) that silently converts the whole channel to
+  free-response and defeats `require_mention`. It is now opt-in via
+  `slack.wake_in_bot_authored_threads` (default **false** = pre-sync
+  behaviour; env `SLACK_WAKE_IN_BOT_AUTHORED_THREADS`, bridged in the
+  adapter's `_apply_yaml_config`). Check 5 (the thread *parent* @-mentions
+  the bot, #24848) is deliberately **not** gated — that carries explicit
+  human intent. Gating check 4 exposed a latent bug in check 5:
+  `_fetch_thread_parent_text(strip_bot_mention=False)` returned text with the
+  mention already stripped, because `_render_message_text` removes it
+  unconditionally — so check 5 only ever worked when check 4 had warmed the
+  thread-context cache. Both are covered by
+  [tests/gateway/test_slack_wake_bot_authored_threads_optin.py](tests/gateway/test_slack_wake_bot_authored_threads_optin.py)
+  and guarded in `tests/test_fork_feature_inventory.py`.
 
 ## Fork-specific work: Slack per-user RBAC + multi-user session isolation
 
