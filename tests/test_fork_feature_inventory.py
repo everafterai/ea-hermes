@@ -140,12 +140,13 @@ def test_fork_feature_is_wired(feature, relpath, needle, proves):
 
 
 def test_fork_toolsets_are_registered():
-    """The fork's four integrations plus ownership must exist as their own
+    """The fork's integrations plus ownership must exist as their own
     toolsets, so RBAC can gate each independently."""
     import toolsets
 
     all_toolsets = set(toolsets.get_all_toolsets())
-    for name in ("notion", "jira", "slack_post", "webflow_assets", "ownership", "slack"):
+    for name in ("notion", "jira", "slack_post", "webflow_assets", "ownership",
+                 "slack", "video_frames"):
         assert name in all_toolsets, (
             f"toolset '{name}' is not registered — RBAC cannot gate it, and any "
             f"role granting it becomes a no-op."

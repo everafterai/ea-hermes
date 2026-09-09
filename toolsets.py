@@ -372,6 +372,17 @@ TOOLSETS = {
         "includes": [],
     },
 
+    # Separate from `video` (video_analyze) on purpose: that one sends a clip
+    # to a model and returns prose, this one writes image files off a user's
+    # upload. Granting "describe this video" should not grant "extract and
+    # republish its frames" — and neither should require `terminal`, which is
+    # the only other way to reach ffmpeg.
+    "video_frames": {
+        "description": "Extract still frames (PNG) from a local video file via ffmpeg",
+        "tools": ["video_frames"],
+        "includes": [],
+    },
+
     "slack_post": {
         "description": "Post a text message into a specific Slack thread (explicit chat_id + thread_ts)",
         "tools": ["slack_post_thread"],

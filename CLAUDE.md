@@ -139,11 +139,11 @@ demoting/deleting removes them.
 
 ### `hermes tools rbac` — lists tools by toolset with built-in role coverage.
 
-### Fork-added toolsets — Notion, Jira, Slack thread posting, Webflow assets
+### Fork-added toolsets — Notion, Jira, Slack thread posting, Webflow assets, video frames
 
-Four fork-only integrations, each registered as its **own** registry toolset so RBAC
-gates them independently. All of them self-heal `~/.hermes/.env` for cron/delegation runs
-that never loaded it (the same pattern), so they work headless.
+Five fork-only integrations, each registered as its **own** registry toolset so RBAC
+gates them independently. The four API-backed ones self-heal `~/.hermes/.env` for
+cron/delegation runs that never loaded it (the same pattern), so they work headless.
 
 - **`notion_api` (`notion` toolset)** — [tools/notion_api_tool.py](tools/notion_api_tool.py).
   Wraps the `ntn` CLI (`ntn api <v1/...> -X <METHOD>`, JSON body via **stdin**,
@@ -198,6 +198,27 @@ that never loaded it (the same pattern), so they work headless.
   so a credential store or another user's session data can never be published to a CDN
   URL. **Deployment:** must also be listed in `platform_toolsets.slack` (an explicit
   list shadows defaults) or the tool is silently missing. No design doc.
+- **`video_frames` (`video_frames` toolset)** — [tools/video_frames_tool.py](tools/video_frames_tool.py).
+  Extracts still PNG frames from a **local** video file via ffmpeg and returns their
+  paths, so `vision_analyze` can QA them and `webflow_asset_upload` can push them to
+  the CDN. Exists because the upstream `video` toolset's `video_analyze` returns
+  **prose, not images** — it base64s the whole clip to a multimodal model — so an agent
+  handed a demo MP4 in Slack had no route to a screenshot except `terminal`, i.e. a host
+  shell for a screen grab. Takes explicit `timestamps` (seconds or `"1:05"` clock form)
+  or a `count` sampled evenly across the duration (offset half a step at each end, since
+  the first/last frame of a screen recording is usually a fade or title card). ffprobe
+  supplies the duration; `asyncio.create_subprocess_exec` with a **fixed argv** (no shell,
+  no string interpolation) runs both legs; `max_width` scales via `scale='min(W,iw)':-2`
+  so it never upscales. Frames land in `$HERMES_HOME/cache/images/`. Source paths go
+  through `raise_if_read_blocked` ([agent/file_safety.py](agent/file_safety.py)) **before**
+  the existence check, so the tool can't be used to probe for another user's files, and
+  through an extension allowlist. Capped at 24 frames/call. `check_fn` hides the tool when
+  ffmpeg/ffprobe are absent rather than failing per call — so **the host needs
+  `apt-get install -y ffmpeg`** or the tool silently never appears. **Deliberately a
+  separate toolset from `video`** — "describe this clip" should not imply "extract and
+  republish its frames", and neither should require `terminal`. Not in any built-in role;
+  grant it explicitly. **Deployment:** must also be listed in `platform_toolsets.slack`
+  (an explicit list shadows defaults) or the tool is silently missing. No design doc.
 
 ### Session visibility / multi-user isolation — [hermes_state.py](hermes_state.py)
 
