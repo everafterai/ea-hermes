@@ -1247,6 +1247,24 @@ class TestLoadGatewayConfig:
         assert extra["user_names"] == {"U_ALICE": "Alice", "123456": "Bob"}
         assert extra["user_roles"] == {"U_ALICE": "operator"}
 
+    def test_bridges_user_emails_from_config_yaml(self, tmp_path, monkeypatch):
+        """``user_emails`` reaches ``extra`` beside ``user_names`` (Drive per-user check)."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "slack:\n"
+            "  user_roles:\n"
+            "    U_ALICE: operator\n"
+            "  user_emails:\n"
+            "    U_ALICE: alice@everafter.ai\n"
+            "    123456: bob@everafter.ai\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        extra = load_gateway_config().platforms[Platform.SLACK].extra
+        assert extra["user_emails"] == {"U_ALICE": "alice@everafter.ai", "123456": "bob@everafter.ai"}
+
     def test_channel_models_not_bridged_for_discord(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

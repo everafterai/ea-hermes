@@ -8,6 +8,9 @@ under ``slack:``, NOT under ``slack.extra``):
 
   - ``user_roles``      — map ``{user_id: role}``; its presence ACTIVATES RBAC.
   - ``user_names``      — optional map ``{user_id: human_name}``.
+  - ``user_emails``     — optional map ``{user_id: google_workspace_email}``,
+                          used by the Drive per-user access check. Does NOT
+                          require the user to be in ``user_roles``.
   - ``allow_admin_from``— list of ``user_id`` granted slash-admin. Kept in sync
                           with the ``admin`` role: promoting a user to admin
                           ADDs them; any non-admin role (or delete) REMOVEs them.
@@ -109,6 +112,32 @@ def _user_names(extra: Dict[str, Any]) -> Dict[str, Any]:
     return existing
 
 
+def _user_emails(extra: Dict[str, Any]) -> Dict[str, Any]:
+    existing = _as_map(extra.get("user_emails"), "user_emails")
+    if existing is None:
+        existing = {}
+        extra["user_emails"] = existing
+    return existing
+
+
+def _canonical_email(email: str) -> str:
+    canon = str(email or "").strip().lower()
+    if "@" not in canon or canon.startswith("@") or canon.endswith("@"):
+        raise UsersError(f"{email!r} is not an email address")
+    return canon
+
+
+def apply_set_email(extra: Dict[str, Any], user_id: str, email: str) -> MutationResult:
+    """Record ``user_id → email`` in ``slack.user_emails``.
+
+    Deliberately does NOT require the user to be in ``user_roles``: the Drive
+    per-user access check writes back emails it resolved from Slack for users
+    who already passed the message gate, and RBAC may be off entirely.
+    """
+    _user_emails(extra)[user_id] = _canonical_email(email)
+    return MutationResult()
+
+
 def _coerce_admin_list(raw: Any) -> List[str]:
     """Normalize an ``allow_admin_from`` value into an ordered, de-duped list.
 
@@ -170,8 +199,9 @@ def apply_add(
     user_id: str,
     role: str,
     name: Optional[str],
+    email: Optional[str] = None,
 ) -> MutationResult:
-    """Add a brand-new user with ``role`` (and optional ``name``)."""
+    """Add a brand-new user with ``role`` (and optional ``name`` / ``email``)."""
     role = _canonical_role(extra, role)
     user_roles = _user_roles(extra)
     if user_id in user_roles:
@@ -182,6 +212,8 @@ def apply_add(
     user_roles[user_id] = role
     if name is not None:
         _user_names(extra)[user_id] = name
+    if email is not None:
+        _user_emails(extra)[user_id] = _canonical_email(email)
     added, removed = _sync_admin(extra, user_id, role)
     return MutationResult(
         rbac_activated=rbac_activated,
@@ -195,13 +227,14 @@ def apply_update(
     user_id: str,
     role: Optional[str],
     name: Optional[str],
+    email: Optional[str] = None,
 ) -> MutationResult:
-    """Update an existing user's ``role`` and/or ``name``."""
+    """Update an existing user's ``role`` and/or ``name`` and/or ``email``."""
     user_roles = _user_roles(extra)
     if user_id not in user_roles:
         raise UsersError(f"user {user_id!r} does not exist; use `add` to create it")
-    if role is None and name is None:
-        raise UsersError("nothing to update; pass a role and/or --name")
+    if role is None and name is None and email is None:
+        raise UsersError("nothing to update; pass a role, --name and/or --email")
     result = MutationResult()
     if role is not None:
         role = _canonical_role(extra, role)
@@ -211,11 +244,13 @@ def apply_update(
         result.admin_removed = removed
     if name is not None:
         _user_names(extra)[user_id] = name
+    if email is not None:
+        _user_emails(extra)[user_id] = _canonical_email(email)
     return result
 
 
 def apply_delete(extra: Dict[str, Any], user_id: str) -> MutationResult:
-    """Remove a user from ``user_roles``, ``user_names`` and ``allow_admin_from``."""
+    """Remove a user from ``user_roles``, ``user_names``, ``user_emails`` and ``allow_admin_from``."""
     user_roles = _user_roles(extra)
     if user_id not in user_roles:
         raise UsersError(f"user {user_id!r} does not exist")
@@ -224,6 +259,9 @@ def apply_delete(extra: Dict[str, Any], user_id: str) -> MutationResult:
     names = extra.get("user_names")
     if isinstance(names, dict) and user_id in names:
         del names[user_id]
+    emails = extra.get("user_emails")
+    if isinstance(emails, dict) and user_id in emails:
+        del emails[user_id]
     if "allow_admin_from" in extra:
         allow = _allow_admin_from(extra)  # coerces CSV/scalar -> list in place
         if user_id in allow:
@@ -347,6 +385,7 @@ def handle_users_list(args) -> int:
     try:
         user_roles = _as_map(extra.get("user_roles"), "user_roles") or {}
         user_names = _as_map(extra.get("user_names"), "user_names") or {}
+        user_emails = _as_map(extra.get("user_emails"), "user_emails") or {}
     except UsersError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -360,6 +399,7 @@ def handle_users_list(args) -> int:
             {
                 "user_id": user_id,
                 "name": user_names.get(user_id) or "",
+                "email": user_emails.get(user_id) or "",
                 "role": user_roles.get(user_id) or "",
                 "admin": user_id in allow_set,
             }
@@ -389,16 +429,17 @@ def handle_users_list(args) -> int:
 
     id_w = max(len("USER_ID"), *(len(r["user_id"]) for r in rows))
     name_w = max(len("NAME"), *(len(r["name"]) for r in rows))
+    email_w = max(len("EMAIL"), *(len(r["email"]) for r in rows))
     role_w = max(len("ROLE"), *(len(r["role"]) for r in rows))
     header = (
-        f"{'USER_ID':<{id_w}}  {'NAME':<{name_w}}  "
+        f"{'USER_ID':<{id_w}}  {'NAME':<{name_w}}  {'EMAIL':<{email_w}}  "
         f"{'ROLE':<{role_w}}  ADMIN"
     )
     print(header)
     for r in rows:
         admin_mark = "✓" if r["admin"] else ""
         print(
-            f"{r['user_id']:<{id_w}}  {r['name']:<{name_w}}  "
+            f"{r['user_id']:<{id_w}}  {r['name']:<{name_w}}  {r['email']:<{email_w}}  "
             f"{r['role']:<{role_w}}  {admin_mark}"
         )
     return 0
@@ -407,9 +448,10 @@ def handle_users_list(args) -> int:
 def handle_users_add(args) -> int:
     """Add a new Slack RBAC user."""
     name = getattr(args, "name", None)
+    email = getattr(args, "email", None)
     try:
         result = _mutate_slack(
-            lambda extra: apply_add(extra, args.user_id, args.role, name)
+            lambda extra: apply_add(extra, args.user_id, args.role, name, email=email)
         )
     except UsersError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -418,6 +460,8 @@ def handle_users_add(args) -> int:
     detail = f"Added Slack user {args.user_id} with role {args.role.lower()}"
     if name:
         detail += f" (name: {name})"
+    if email:
+        detail += f" (email: {email})"
     print(detail + ".")
 
     if result.rbac_activated:
@@ -434,12 +478,13 @@ def handle_users_add(args) -> int:
 
 
 def handle_users_update(args) -> int:
-    """Update an existing Slack RBAC user's role and/or name."""
+    """Update an existing Slack RBAC user's role and/or name and/or email."""
     role = getattr(args, "role", None)
     name = getattr(args, "name", None)
+    email = getattr(args, "email", None)
     try:
         result = _mutate_slack(
-            lambda extra: apply_update(extra, args.user_id, role, name)
+            lambda extra: apply_update(extra, args.user_id, role, name, email=email)
         )
     except UsersError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -450,6 +495,8 @@ def handle_users_update(args) -> int:
         parts.append(f"role={role.lower()}")
     if name is not None:
         parts.append(f"name={name}")
+    if email is not None:
+        parts.append(f"email={email}")
     print(f"Updated Slack user {args.user_id} ({', '.join(parts)}).")
 
     if result.admin_added:
@@ -546,13 +593,15 @@ def register_users_subcommands(subparsers) -> None:
     p_add.add_argument("user_id", help="Slack user id, e.g. U0123ABCD")
     p_add.add_argument("role", help="admin | operator | readonly | chat_only | <custom>")
     p_add.add_argument("--name", default=None, help="Optional human name (for auditing)")
+    p_add.add_argument("--email", default=None, help="Google Workspace email (Drive per-user access check)")
     p_add.set_defaults(func=_exit_on_failure(handle_users_add))
 
     p_update = users_sub.add_parser("update", help="Change a Slack user's role and/or name")
     p_update.add_argument("user_id")
     p_update.add_argument("role", nargs="?", default=None,
-                          help="New role (omit to change only --name)")
+                          help="New role (omit to change only --name/--email)")
     p_update.add_argument("--name", default=None, help="New human name")
+    p_update.add_argument("--email", default=None, help="Google Workspace email (Drive per-user access check)")
     p_update.set_defaults(func=_exit_on_failure(handle_users_update))
 
     p_delete = users_sub.add_parser("delete", help="Remove a Slack user")

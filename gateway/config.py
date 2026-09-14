@@ -1758,6 +1758,14 @@ def load_gateway_config() -> GatewayConfig:
                         bridged["user_names"] = {str(k): v for k, v in user_names.items()}
                     else:
                         bridged["user_names"] = user_names
+                if "user_emails" in platform_cfg:
+                    # Drive per-user access check: platform user id → Google
+                    # Workspace email. Same stringification as user_names.
+                    user_emails = platform_cfg["user_emails"]
+                    if isinstance(user_emails, dict):
+                        bridged["user_emails"] = {str(k): v for k, v in user_emails.items()}
+                    else:
+                        bridged["user_emails"] = user_emails
                 if plat == Platform.SLACK and "channel_roles" in platform_cfg:
                     channel_roles = platform_cfg["channel_roles"]
                     if isinstance(channel_roles, dict):

@@ -4,6 +4,7 @@ from hermes_cli.users import (
     apply_add,
     apply_update,
     apply_delete,
+    apply_set_email,
     UsersError,
 )
 from gateway.tool_access import BUILTIN_ROLES
@@ -154,3 +155,37 @@ def test_custom_role_exact_config_name_accepted():
     extra = {"roles": {"Auditor": {"toolsets": ["web"]}}}
     apply_add(extra, "U1", "Auditor", name=None)
     assert extra["user_roles"]["U1"] == "auditor"  # stored canonical
+
+
+# --- user_emails (Drive per-user access check) ---
+
+def test_apply_set_email_creates_map_without_requiring_role():
+    extra = {}
+    apply_set_email(extra, "U1", "Alice@EverAfter.ai")
+    assert extra["user_emails"] == {"U1": "alice@everafter.ai"}
+    assert "user_roles" not in extra
+
+
+def test_apply_set_email_rejects_non_email():
+    extra = {}
+    with pytest.raises(UsersError):
+        apply_set_email(extra, "U1", "not-an-email")
+
+
+def test_apply_add_with_email():
+    extra = {}
+    apply_add(extra, "U1", "operator", None, email="a@x.io")
+    assert extra["user_emails"] == {"U1": "a@x.io"}
+
+
+def test_apply_update_email_only():
+    extra = {"user_roles": {"U1": "operator"}}
+    apply_update(extra, "U1", None, None, email="a@x.io")
+    assert extra["user_emails"] == {"U1": "a@x.io"}
+    assert extra["user_roles"] == {"U1": "operator"}
+
+
+def test_apply_delete_removes_email():
+    extra = {"user_roles": {"U1": "operator"}, "user_emails": {"U1": "a@x.io"}}
+    apply_delete(extra, "U1")
+    assert extra["user_emails"] == {}
