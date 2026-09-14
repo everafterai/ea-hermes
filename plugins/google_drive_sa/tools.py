@@ -95,12 +95,25 @@ def create_drive_file(
 
 
 def _requester_for_create(folder_id: str) -> "access.Requester | None":
-    """Gate a create: writer on the parent when given, else the requester to share with."""
+    """Gate a create: writer on the parent when given, else the requester to share with.
+
+    A root-create (no folder) with the check active but an unresolvable
+    requester must deny rather than silently create a file only the SA can
+    see (``share_with_requester(fid, None)`` is a no-op).
+    """
     if folder_id:
         return access.require_access(folder_id, access.WRITER)
     if not access.is_check_active():
         return None
-    return access.resolve_requester()
+    requester = access.resolve_requester()
+    if requester is None:
+        raise access.DriveAccessDenied(
+            "Access denied: the requesting user could not be identified, so a "
+            "new file cannot be shared with you. (No platform identity in "
+            "this session, or no email is mapped for it — an operator can "
+            "set slack.user_emails.)"
+        )
+    return requester
 
 
 # --------------------------------------------------------------------------- #
@@ -388,7 +401,10 @@ def _handle_drive_upload(args: dict, **_: Any) -> str:
                     result["share_warning"] = warning
             action = "created"
 
-        return tool_result({"success": True, "action": action, "file": result})
+        out: dict[str, Any] = {"success": True, "action": action, "file": result}
+        if result.get("share_warning"):
+            out["share_warning"] = result.pop("share_warning")
+        return tool_result(out)
     except Exception as exc:  # noqa: BLE001
         return _drive_error(exc)
 

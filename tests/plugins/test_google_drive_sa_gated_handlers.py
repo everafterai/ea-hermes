@@ -258,11 +258,26 @@ def test_create_in_root_shares_with_requester(services, gate, name, call):
     assert created[0]["body"]["role"] == "writer"
 
 
-def test_create_in_root_reports_share_failure(services, gate, monkeypatch):
+@pytest.mark.parametrize("name,call", CREATE_ROOT_CASES, ids=[c[0] for c in CREATE_ROOT_CASES])
+def test_create_in_root_reports_share_failure(services, gate, monkeypatch, name, call):
     monkeypatch.setattr(access, "share_with_requester", lambda fid, r: "File created, but sharing failed")
-    out = json.loads(sh._handle_sheets_create({"title": "t"}))
+    out = json.loads(call())
     assert out["success"] is True
     assert "sharing failed" in out["share_warning"]
+
+
+@pytest.mark.parametrize("name,call", CREATE_ROOT_CASES, ids=[c[0] for c in CREATE_ROOT_CASES])
+def test_create_in_root_denies_when_requester_unresolvable(services, monkeypatch, name, call):
+    """An active check with no resolvable requester must deny, not silently
+    create an orphan file only the SA can see."""
+    monkeypatch.setattr(access, "is_check_active", lambda: True)
+    monkeypatch.setattr(access, "resolve_requester", lambda: None)
+    out = json.loads(call())
+    assert out.get("success") is not True
+    assert "could not be identified" in out.get("error", "")
+    drive = services[0]
+    assert drive.files().calls == []
+    assert drive.permissions().created == []
 
 
 def test_create_in_root_does_not_share_when_check_inactive(services, monkeypatch):
