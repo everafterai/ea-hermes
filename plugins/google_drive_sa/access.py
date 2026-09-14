@@ -328,9 +328,10 @@ def _audit_denied(
             tool="google_drive",
             action="drive_access_denied",
             target=(
-                f"drive:{file_id} name={name!r} level={level} requester={requester or '-'} "
+                f"drive:{file_id} level={level} requester={requester or '-'} "
                 f"granted={granted_role or '-'} reason={reason} "
-                f"unmapped_groups={','.join(unmapped_groups) or '-'}"
+                f"unmapped_groups={','.join(unmapped_groups) or '-'} "
+                f"name={name[:80]!r}"
             ),
         )
     except Exception:  # pragma: no cover - auditing never breaks a tool

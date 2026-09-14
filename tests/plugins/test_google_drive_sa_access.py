@@ -407,6 +407,27 @@ def test_require_access_allows_reader(drive, alice):
     assert alice == []
 
 
+def test_require_access_acl_cache_is_per_file_not_per_decision(drive, engaged, monkeypatch):
+    fake = drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": [
+        {"type": "user", "emailAddress": ALICE, "role": "reader"}]}))
+    audit = []
+    monkeypatch.setattr(access, "_audit_denied", lambda **kw: audit.append(kw))
+
+    monkeypatch.setattr(
+        access, "resolve_requester",
+        lambda: access.Requester(platform="slack", user_id="U1", email=ALICE),
+    )
+    r = access.require_access("f1", access.READER)
+    assert r.email == ALICE
+
+    bob = access.Requester(platform="slack", user_id="U2", email="bob@everafter.ai")
+    monkeypatch.setattr(access, "resolve_requester", lambda: bob)
+    with pytest.raises(access.DriveAccessDenied):
+        access.require_access("f1", access.READER)
+
+    assert len(fake.get_calls) == 1  # served from cache; Bob still denied
+
+
 def test_require_access_denies_writer_for_reader(drive, alice):
     drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": [
         {"type": "user", "emailAddress": ALICE, "role": "reader"}]}))
@@ -459,6 +480,21 @@ def test_audit_denied_writes_record_access(monkeypatch):
     assert calls[0]["action"] == "drive_access_denied"
     assert "finance@everafter.ai" in calls[0]["target"]
     assert "f1" in calls[0]["target"] and ALICE in calls[0]["target"]
+
+
+def test_audit_denied_keeps_unmapped_groups_when_name_is_long(monkeypatch):
+    calls = []
+    import agent.data_access_audit as daa
+
+    monkeypatch.setattr(daa, "record_access", lambda **kw: calls.append(kw))
+    long_name = "x" * 300
+    access._audit_denied(
+        file_id="f1", name=long_name, level="reader", requester=ALICE,
+        granted_role=None, unmapped_groups=("finance@everafter.ai",), reason="denied",
+    )
+    target = calls[0]["target"]
+    assert "finance@everafter.ai" in target
+    assert len(target) <= 500
 
 
 # --------------------------------------------------------------------------- #
