@@ -292,10 +292,11 @@ def test_create_in_root_does_not_share_when_check_inactive(services, monkeypatch
 # --------------------------------------------------------------------------- #
 
 class _ListDrive(_Drive):
-    def __init__(self, files, perms_by_id=None):
+    def __init__(self, files, perms_by_id=None, next_page_token=None):
         super().__init__()
         self._list_files = files
         self._perms_by_id = perms_by_id or {}
+        self._next_page_token = next_page_token
         self.list_kw = None
         self.perm_list_calls = []
 
@@ -305,7 +306,10 @@ class _ListDrive(_Drive):
         class _F(_Files):
             def list(self_inner, **kw):
                 outer.list_kw = kw
-                return _Req({"files": outer._list_files})
+                resp = {"files": outer._list_files}
+                if outer._next_page_token is not None:
+                    resp["nextPageToken"] = outer._next_page_token
+                return _Req(resp)
 
         f = _F()
         f.calls = self._files.calls
@@ -328,8 +332,8 @@ class _ListDrive(_Drive):
 def listing(monkeypatch):
     from plugins.google_drive_sa import client as gd_client
 
-    def _install(files, perms_by_id=None):
-        d = _ListDrive(files, perms_by_id)
+    def _install(files, perms_by_id=None, next_page_token=None):
+        d = _ListDrive(files, perms_by_id, next_page_token=next_page_token)
         monkeypatch.setattr(gd_client, "get_service", lambda: d)
         access.reset_cache()
         return d
@@ -420,3 +424,53 @@ def test_list_primes_cache_for_following_read(listing, alice_active, monkeypatch
     name, acl = access.fetch_acl("ok")
     assert name == "Mine" and acl[0]["emailAddress"] == ALICE
     assert d.files().calls == []  # served from cache, no files.get
+
+
+def test_list_hides_next_page_token_when_check_active(listing, alice_active):
+    """drive_list_files takes no page_token input, so a raw nextPageToken
+    can't be used to page — it would only signal "more matches exist" for
+    files filtered out of `files`, an existence oracle over content the
+    requester can't see."""
+    listing([], next_page_token="tok")
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert out["next_page_token"] is None
+
+
+def test_list_keeps_next_page_token_when_check_inactive(listing, monkeypatch):
+    monkeypatch.setattr(access, "is_check_active", lambda: False)
+    listing([], next_page_token="tok")
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert out["next_page_token"] == "tok"
+
+
+def test_list_resolves_requester_on_caller_thread_not_pool_workers(listing, monkeypatch):
+    """Pins that the requester is resolved once on the caller's thread before
+    fanning ACL fetches out to the pool — not re-resolved (or silently
+    unresolved) inside each worker."""
+    from gateway.session_context import set_session_vars, clear_session_vars
+
+    monkeypatch.setattr(access, "is_check_active", lambda: True)
+    monkeypatch.setattr(access, "load_access_config", lambda: access.AccessConfig())
+
+    def _resolve_email(platform, user_id):
+        assert (platform, user_id) == ("slack", "U1")
+        return ALICE
+
+    monkeypatch.setattr(access, "_resolve_email", _resolve_email)
+
+    listing(
+        [
+            {"id": "sd1", "name": "A", "driveId": "D"},
+            {"id": "sd2", "name": "B", "driveId": "D"},
+        ],
+        perms_by_id={
+            "sd1": [{"type": "user", "emailAddress": ALICE, "role": "reader"}],
+            "sd2": [],
+        },
+    )
+    tokens = set_session_vars(platform="slack", user_id="U1")
+    try:
+        out = json.loads(gd._handle_drive_list_files({}))
+    finally:
+        clear_session_vars(tokens)
+    assert [f["id"] for f in out["files"]] == ["sd1"]

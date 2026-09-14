@@ -234,18 +234,40 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   `audit/data-access.log` (`drive_access_denied`) so you can see what to map.
   Email comes from `slack.user_emails` → Slack `users.info` (needs the
   `users:read.email` scope) → written back into `slack.user_emails`
-  (`hermes users add/update --email`). Files created without a folder are shared
-  with the requester as writer. No requester in a gateway/cron session → deny;
-  local CLI (session context never engaged) → skipped. A root-create (no folder)
-  with the check active but no resolvable requester is **denied** rather than
-  silently created SA-only-visible (`_requester_for_create` in
-  [plugins/google_drive_sa/tools.py](plugins/google_drive_sa/tools.py)). The
-  Drive/Sheets/Docs `googleapiclient` service is built **per-thread**
+  (`hermes users add/update --email`); a failed lookup (API error, not just a
+  missing mapping) is caught in `resolve_requester()` and denies rather than
+  raising. Files created without a folder are shared with the requester as
+  writer, and a root-create (no folder) with the check active but no
+  resolvable requester is **denied** rather than silently created
+  SA-only-visible (`_requester_for_create` in
+  [plugins/google_drive_sa/tools.py](plugins/google_drive_sa/tools.py)). No
+  requester in a gateway/cron session → deny. A local operator session is
+  skipped (`_is_local_operator_session`): a plain CLI never engages the
+  session-context system at all, and `hermes --tui`/the desktop app *do*
+  engage it but bind `source="tui"`/`"desktop"` with no platform — both read
+  as the operator's own machine, the fork's "a shell caller is an admin"
+  rule; cron binds an empty platform *and* empty source together, so it's
+  never mistaken for local. `drive_list_files` filters results the same way
+  and, with the check active, always returns `next_page_token: null` even
+  when Drive returned one — the tool takes no `page_token` input, so a raw
+  token can't be used to page and would only leak "more matches exist" for
+  files filtered out of the response, an existence oracle over content the
+  requester can't see. `fetch_acl` treats an empty inline `permissions: []`
+  the same as absent and falls back to `permissions.list` — an SA-visible
+  file always has at least the SA's own entry, so `[]` can never be the real
+  ACL. The Drive/Sheets/Docs `googleapiclient` service is built **per-thread**
   (`threading.local`, [plugins/google_drive_sa/client.py](plugins/google_drive_sa/client.py))
   because its `httplib2` transport isn't thread-safe and ACL fetches fan out
   over a thread pool — credentials are cached process-wide, only the service
   object is per-thread. Kill switch
-  `google_drive.access_check: false`. Design:
+  `google_drive.access_check: false`. **Deployment:** default-on with no
+  `google_drive:` config block, so before enabling on the VM: add the
+  `users:read.email` Slack scope and reinstall the app → set
+  `google_drive.everyone_groups` for any domain-wide-share groups → give
+  every Drive-reading cron job an owner (`hermes own claim cron:<id>`, or the
+  `ownership` tool) so it isn't ownerless-and-thus-denied → deploy; or ship
+  first with `google_drive.access_check: false` and flip it on once the above
+  is in place. Design:
   [docs/superpowers/specs/2026-09-14-drive-per-user-access-check-design.md](docs/superpowers/specs/2026-09-14-drive-per-user-access-check-design.md).
 
 ### Session visibility / multi-user isolation — [hermes_state.py](hermes_state.py)

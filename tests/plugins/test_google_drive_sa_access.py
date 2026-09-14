@@ -174,10 +174,10 @@ def engaged(monkeypatch):
     monkeypatch.setattr(access, "load_access_config", lambda: _cfg())
 
 
-def _session(monkeypatch, platform="slack", user_id="U1"):
+def _session(monkeypatch, platform="slack", user_id="U1", source=""):
     from gateway.session_context import set_session_vars, clear_session_vars
 
-    tokens = set_session_vars(platform=platform, user_id=user_id)
+    tokens = set_session_vars(platform=platform, user_id=user_id, source=source)
     return lambda: clear_session_vars(tokens)
 
 
@@ -193,6 +193,18 @@ def test_resolve_requester_from_session(monkeypatch, engaged):
 
 def test_resolve_requester_none_when_email_unresolvable(monkeypatch, engaged):
     monkeypatch.setattr(access, "_resolve_email", lambda p, u: None)
+    undo = _session(monkeypatch)
+    try:
+        assert access.resolve_requester() is None
+    finally:
+        undo()
+
+
+def test_resolve_requester_none_when_resolve_email_raises(monkeypatch, engaged):
+    def _boom(platform, user_id):
+        raise RuntimeError("slack API down")
+
+    monkeypatch.setattr(access, "_resolve_email", _boom)
     undo = _session(monkeypatch)
     try:
         assert access.resolve_requester() is None
@@ -267,6 +279,30 @@ def test_check_inactive_when_disabled(monkeypatch):
 
 def test_check_active(monkeypatch, engaged):
     assert access.is_check_active() is True
+
+
+def test_check_inactive_for_local_tui_session(monkeypatch, engaged):
+    undo = _session(monkeypatch, platform="", user_id="", source="tui")
+    try:
+        assert access.is_check_active() is False
+    finally:
+        undo()
+
+
+def test_check_active_for_api_server_session(monkeypatch, engaged):
+    undo = _session(monkeypatch, platform="", user_id="", source="api_server")
+    try:
+        assert access.is_check_active() is True
+    finally:
+        undo()
+
+
+def test_check_active_when_platform_set_even_with_local_source(monkeypatch, engaged):
+    undo = _session(monkeypatch, platform="slack", user_id="U1", source="tui")
+    try:
+        assert access.is_check_active() is True
+    finally:
+        undo()
 
 
 # --------------------------------------------------------------------------- #
@@ -369,6 +405,21 @@ def test_fetch_acl_cached_within_ttl(drive, monkeypatch):
     t[0] += 60  # past TTL
     access.fetch_acl("f1")
     assert len(fake.get_calls) == 2
+
+
+def test_fetch_acl_falls_back_when_inline_permissions_empty(drive):
+    """An empty inline `permissions: []` can never be a file's real ACL (the
+    SA's own entry is always on it) — it means files.get didn't return one,
+    so fetch_acl must fall back to permissions.list rather than treating []
+    as "no one has access"."""
+    fake = drive(_FakeDrive(
+        get={"id": "f1", "name": "x", "permissions": []},
+        perms=[{"type": "user", "emailAddress": ALICE, "role": "reader"}],
+    ))
+    name, acl = access.fetch_acl("f1")
+    assert name == "x"
+    assert acl == [{"type": "user", "emailAddress": ALICE, "role": "reader"}]
+    assert len(fake.list_calls) == 1
 
 
 def test_fetch_acl_raises_on_api_error(drive):

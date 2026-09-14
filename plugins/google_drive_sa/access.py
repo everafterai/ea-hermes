@@ -176,6 +176,31 @@ def _engaged() -> bool:
     return session_context_engaged()
 
 
+# Sources bound only for the operator's own machine — the fork's "a shell
+# caller is an admin" rule. Deliberately excludes "" (cron binds both
+# platform and source to "") so a cron run is never mistaken for a local
+# session.
+_LOCAL_SOURCES = frozenset({"cli", "tui", "desktop"})
+
+
+def _is_local_operator_session() -> bool:
+    """True when this session is the operator's own machine, not a chat platform.
+
+    ``hermes --tui`` and the desktop app bind session vars with
+    ``source="tui"``/``"desktop"`` and no platform — which otherwise looks
+    "engaged" to :func:`is_check_active` and denies every Drive call on the
+    operator's own box. Any bound platform wins over source (a Slack session
+    is never local, whatever ``source`` happens to be).
+    """
+    from gateway.session_context import get_session_env
+
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "").strip()
+    if platform:
+        return False
+    source = get_session_env("HERMES_SESSION_SOURCE", "").strip()
+    return source in _LOCAL_SOURCES
+
+
 def _resolve_email(platform: str, user_id: str) -> Optional[str]:
     from plugins.google_drive_sa.identity import resolve_email
 
@@ -206,10 +231,17 @@ def _cron_owner() -> Optional[tuple]:
 def is_check_active() -> bool:
     """The check runs only inside a gateway/cron process with it enabled.
 
-    A plain CLI (never engaged the session-context system) is the operator's
-    own shell and skips it — the fork's "a shell caller is an admin" rule.
+    A plain CLI that never engaged the session-context system skips it, and
+    so does a TUI/desktop session that *did* engage it but bound no platform
+    (:func:`_is_local_operator_session`) — both are the operator's own
+    machine, the fork's "a shell caller is an admin" rule. Cron binds an
+    empty platform *and* empty source, so it is never mistaken for local.
     """
-    return load_access_config().enabled and _engaged()
+    if not load_access_config().enabled:
+        return False
+    if not _engaged():
+        return False
+    return not _is_local_operator_session()
 
 
 def resolve_requester() -> Optional[Requester]:
@@ -222,7 +254,13 @@ def resolve_requester() -> Optional[Requester]:
         if owner is None:
             return None
         platform, user_id = owner
-    email = _resolve_email(platform, user_id)
+    try:
+        email = _resolve_email(platform, user_id)
+    except Exception as exc:
+        logger.warning(
+            "email resolution for %s/%s failed (%s); denying", platform, user_id, exc
+        )
+        return None
     if not email:
         return None
     return Requester(platform=platform, user_id=user_id, email=email.lower())
@@ -302,7 +340,12 @@ def fetch_acl(file_id: str) -> tuple:
     meta = svc.files().get(fileId=file_id, fields=_GET_FIELDS, supportsAllDrives=True).execute() or {}
     name = str(meta.get("name") or "")
     acl = meta.get("permissions")
-    if acl is None:
+    if not acl:
+        # An SA-visible file always has at least the SA's own entry on its
+        # ACL, so an empty (or absent) inline `permissions` can never be the
+        # real ACL — it means `files.get` didn't return one (shared-drive
+        # items, or files the SA can only read) and permissions.list is
+        # needed instead.
         acl = _list_permissions(svc, file_id)
     _cache_put(file_id, name, acl)
     return name, list(acl)

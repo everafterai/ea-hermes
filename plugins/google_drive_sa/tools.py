@@ -199,13 +199,18 @@ def _handle_drive_list_files(args: dict, **_: Any) -> str:
             .execute()
         )
         files = access.filter_listing(resp.get("files", []), access.READER)
+        # With the access check active, the raw nextPageToken can't be used to
+        # page anyway (this tool takes no page_token input) — it would only
+        # leak "more matches exist" for files filtered out of `files` above,
+        # an existence oracle over content the requester can't see.
+        next_page_token = None if access.is_check_active() else resp.get("nextPageToken")
         return tool_result(
             {
                 "success": True,
                 "query": q,
                 "count": len(files),
                 "files": files,
-                "next_page_token": resp.get("nextPageToken"),
+                "next_page_token": next_page_token,
             }
         )
     except Exception as exc:  # noqa: BLE001 — normalize to tool_error
