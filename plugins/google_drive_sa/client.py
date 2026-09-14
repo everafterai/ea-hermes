@@ -17,6 +17,14 @@ blast radius to exactly what's shared.
 Heavy google-* imports are lazy so the plugin can register its tools at
 startup without the deps installed; first real use triggers a venv-scoped
 install via :mod:`tools.lazy_deps`.
+
+The built ``googleapiclient`` service wraps an ``httplib2.Http`` transport
+that is NOT thread-safe, but ``plugins/google_drive_sa/access.py::filter_listing``
+fans ACL fetches out over a thread pool (and two concurrent gateway turns can
+call in on the same process besides). Credentials are safe to share across
+threads, so they're cached process-wide; the *service* objects are cached
+per-thread (``threading.local()``) so each worker thread gets its own
+transport instead of racing on one.
 """
 
 from __future__ import annotations
@@ -40,7 +48,8 @@ _DEFAULT_SCOPES = (
 _LAZY_FEATURE = "plugin.google_drive_sa"
 
 _lock = threading.Lock()
-_services: dict[tuple[str, str], Any] = {}
+_credentials: Any | None = None
+_thread_services = threading.local()
 _avail: bool | None = None
 
 
@@ -89,23 +98,45 @@ def _load_credentials() -> Any:
     return creds
 
 
+def _get_credentials() -> Any:
+    """Return the process-wide credentials, loading once.
+
+    Credentials are safe to share across threads (unlike the built service's
+    ``httplib2.Http`` transport — see module docstring), so this is cached
+    globally rather than per-thread.
+    """
+    global _credentials
+    if _credentials is not None:
+        return _credentials
+    with _lock:
+        if _credentials is None:
+            _credentials = _load_credentials()
+        return _credentials
+
+
 def _get_service(api: str, version: str) -> Any:
-    """Return a cached googleapiclient service, installing deps + building once."""
+    """Return a per-thread cached googleapiclient service, building once per
+    (thread, api, version).
+
+    The service is NOT process-wide: its ``httplib2.Http`` transport is not
+    thread-safe, and callers (e.g. the listing-filter thread pool) may invoke
+    it concurrently from multiple threads. Credentials are cached separately
+    and shared.
+    """
     key = (api, version)
-    svc = _services.get(key)
+    services: dict[tuple[str, str], Any] = getattr(_thread_services, "services", None)
+    if services is None:
+        services = {}
+        _thread_services.services = services
+    svc = services.get(key)
     if svc is not None:
         return svc
-    with _lock:
-        svc = _services.get(key)
-        if svc is not None:
-            return svc
-        _ensure_deps()
-        from googleapiclient.discovery import build
+    _ensure_deps()
+    from googleapiclient.discovery import build
 
-        creds = _load_credentials()
-        svc = build(api, version, credentials=creds, cache_discovery=False)
-        _services[key] = svc
-        return svc
+    svc = build(api, version, credentials=_get_credentials(), cache_discovery=False)
+    services[key] = svc
+    return svc
 
 
 def get_service() -> Any:
@@ -147,8 +178,16 @@ def check_available() -> bool:
 
 
 def reset_cache() -> None:
-    """Drop cached services/availability (used by tests and after re-auth)."""
-    global _avail
+    """Drop cached services/credentials/availability (used by tests and after
+    re-auth).
+
+    Only the *calling* thread's service cache is cleared — the service cache
+    is per-thread by design (see module docstring); other threads' cached
+    services are dropped naturally as those threads exit (e.g. pool workers
+    recycled between listings).
+    """
+    global _avail, _credentials
     with _lock:
-        _services.clear()
+        _thread_services.services = {}
+        _credentials = None
         _avail = None

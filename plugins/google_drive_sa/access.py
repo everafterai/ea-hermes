@@ -429,6 +429,10 @@ def share_with_requester(file_id: str, requester: Optional[Requester]) -> Option
 # --------------------------------------------------------------------------- #
 
 _LIST_POOL_WORKERS = 8
+# Persistent pool (not one-per-call) so worker threads — and the per-thread
+# googleapiclient service each one builds (see client.py's module docstring)
+# — are reused across listings instead of rebuilt every call.
+_LIST_POOL = ThreadPoolExecutor(max_workers=_LIST_POOL_WORKERS, thread_name_prefix="gdrive-acl")
 
 
 def _strip_acl(files: list) -> list:
@@ -471,15 +475,16 @@ def filter_listing(files: list, level: str = READER) -> list:
             _cache_put(file_id, str(f.get("name") or ""), acl)
         return evaluate(acl, requester.email, cfg).satisfies(level)
 
-    inline = [f for f in files if isinstance(f, dict) and f.get("permissions") is not None]
-    remote = [f for f in files if isinstance(f, dict) and f.get("permissions") is None]
+    inline = [(i, f) for i, f in enumerate(files) if isinstance(f, dict) and f.get("permissions") is not None]
+    remote = [(i, f) for i, f in enumerate(files) if isinstance(f, dict) and f.get("permissions") is None]
     allowed: set = set()
-    for f in inline:
+    for i, f in inline:
         if _decide(f):
-            allowed.add(id(f))
+            allowed.add(i)
     if remote:
-        with ThreadPoolExecutor(max_workers=min(_LIST_POOL_WORKERS, len(remote))) as pool:
-            for f, ok in zip(remote, pool.map(_decide, remote)):
-                if ok:
-                    allowed.add(id(f))
-    return _strip_acl([f for f in files if id(f) in allowed])
+        remote_indices = [i for i, _ in remote]
+        remote_files = [f for _, f in remote]
+        for i, ok in zip(remote_indices, list(_LIST_POOL.map(_decide, remote_files))):
+            if ok:
+                allowed.add(i)
+    return _strip_acl([f for i, f in enumerate(files) if i in allowed])

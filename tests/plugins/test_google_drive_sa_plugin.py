@@ -295,6 +295,63 @@ def test_toolsets_are_default_off():
 
 
 # --------------------------------------------------------------------------- #
+# Client: per-thread service, process-wide credentials
+# --------------------------------------------------------------------------- #
+
+
+def test_get_service_is_per_thread_credentials_are_shared(monkeypatch):
+    """httplib2.Http (inside the built service) is not thread-safe, so the
+    service must be cached per-thread; credentials are safe to share and are
+    loaded only once."""
+    import threading
+
+    gd_client.reset_cache()
+
+    monkeypatch.setattr(gd_client, "_ensure_deps", lambda **kw: None)
+
+    sentinel_creds = object()
+    load_calls = []
+
+    def _fake_load_credentials():
+        load_calls.append(1)
+        return sentinel_creds
+
+    monkeypatch.setattr(gd_client, "_load_credentials", _fake_load_credentials)
+
+    build_calls = []
+
+    def _fake_build(api, version, credentials=None, cache_discovery=None):
+        build_calls.append(credentials)
+        return object()
+
+    pkg = sys.modules.get("googleapiclient") or types.ModuleType("googleapiclient")
+    discovery_mod = types.ModuleType("googleapiclient.discovery")
+    discovery_mod.build = _fake_build
+    monkeypatch.setitem(sys.modules, "googleapiclient", pkg)
+    monkeypatch.setitem(sys.modules, "googleapiclient.discovery", discovery_mod)
+
+    try:
+        first = gd_client.get_service()
+        second = gd_client.get_service()
+        assert first is second
+
+        other_thread_service = {}
+
+        def _in_thread():
+            other_thread_service["svc"] = gd_client.get_service()
+
+        t = threading.Thread(target=_in_thread)
+        t.start()
+        t.join()
+
+        assert other_thread_service["svc"] is not first
+        assert len(load_calls) == 1
+        assert build_calls == [sentinel_creds, sentinel_creds]
+    finally:
+        gd_client.reset_cache()
+
+
+# --------------------------------------------------------------------------- #
 # Sheets
 # --------------------------------------------------------------------------- #
 
