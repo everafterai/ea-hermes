@@ -27,7 +27,7 @@ def set_cron_tool_context(*, owner_grant, acked_tools, job_id=None):
     t1 = _owner_grant.set(frozenset(owner_grant) if owner_grant is not None else None)
     t2 = _acked_tools.set(frozenset(acked_tools or ()))
     t3 = _active.set(True)
-    t4 = _job_id.set(str(job_id) if job_id else None)
+    t4 = _job_id.set(str(job_id) if job_id is not None else None)
     return (t1, t2, t3, t4)
 
 
