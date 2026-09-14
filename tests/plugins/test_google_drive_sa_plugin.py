@@ -351,6 +351,52 @@ def test_get_service_is_per_thread_credentials_are_shared(monkeypatch):
         gd_client.reset_cache()
 
 
+def test_ensure_deps_serialized_across_concurrent_threads(monkeypatch):
+    """``_ensure_deps`` (which may ``pip install`` on a cold process) must run
+    at most once even when several pool threads race to build a service for
+    the first time — a concurrent pip install into the same venv is unsafe."""
+    import threading
+
+    gd_client.reset_cache()
+
+    ensure_calls = []
+
+    def _fake_ensure_deps(**kw):
+        ensure_calls.append(1)
+
+    monkeypatch.setattr(gd_client, "_ensure_deps", _fake_ensure_deps)
+
+    sentinel_creds = object()
+    load_calls = []
+
+    def _fake_load_credentials():
+        load_calls.append(1)
+        return sentinel_creds
+
+    monkeypatch.setattr(gd_client, "_load_credentials", _fake_load_credentials)
+
+    def _fake_build(api, version, credentials=None, cache_discovery=None):
+        return object()
+
+    pkg = sys.modules.get("googleapiclient") or types.ModuleType("googleapiclient")
+    discovery_mod = types.ModuleType("googleapiclient.discovery")
+    discovery_mod.build = _fake_build
+    monkeypatch.setitem(sys.modules, "googleapiclient", pkg)
+    monkeypatch.setitem(sys.modules, "googleapiclient.discovery", discovery_mod)
+
+    try:
+        threads = [threading.Thread(target=gd_client.get_service) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(ensure_calls) == 1
+        assert len(load_calls) == 1
+    finally:
+        gd_client.reset_cache()
+
+
 # --------------------------------------------------------------------------- #
 # Sheets
 # --------------------------------------------------------------------------- #

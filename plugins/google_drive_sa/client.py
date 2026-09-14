@@ -51,6 +51,7 @@ _lock = threading.Lock()
 _credentials: Any | None = None
 _thread_services = threading.local()
 _avail: bool | None = None
+_deps_ready = False
 
 
 def _scopes() -> list[str]:
@@ -65,6 +66,24 @@ def _ensure_deps(*, prompt: bool = False) -> None:
     from tools import lazy_deps
 
     lazy_deps.ensure(_LAZY_FEATURE, prompt=prompt)
+
+
+def _ensure_deps_once() -> None:
+    """Run ``_ensure_deps`` at most once process-wide.
+
+    ``_ensure_deps`` can shell out to ``pip install`` on a cold process, and
+    up to ``_LIST_POOL_WORKERS`` (see ``access.py``) threads may reach this
+    concurrently on first use — a pip install must never run concurrently
+    from the listing pool (parallel installs into the same venv can corrupt
+    it). Double-checked so the common warm-process case never takes the lock.
+    """
+    global _deps_ready
+    if _deps_ready:
+        return
+    with _lock:
+        if not _deps_ready:
+            _ensure_deps()
+            _deps_ready = True
 
 
 def _load_credentials() -> Any:
@@ -108,6 +127,7 @@ def _get_credentials() -> Any:
     global _credentials
     if _credentials is not None:
         return _credentials
+    _ensure_deps_once()
     with _lock:
         if _credentials is None:
             _credentials = _load_credentials()
@@ -131,7 +151,7 @@ def _get_service(api: str, version: str) -> Any:
     svc = services.get(key)
     if svc is not None:
         return svc
-    _ensure_deps()
+    _ensure_deps_once()
     from googleapiclient.discovery import build
 
     svc = build(api, version, credentials=_get_credentials(), cache_discovery=False)
@@ -186,8 +206,9 @@ def reset_cache() -> None:
     services are dropped naturally as those threads exit (e.g. pool workers
     recycled between listings).
     """
-    global _avail, _credentials
+    global _avail, _credentials, _deps_ready
     with _lock:
         _thread_services.services = {}
         _credentials = None
         _avail = None
+        _deps_ready = False
