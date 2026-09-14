@@ -26,7 +26,8 @@ _GOOGLE_EXPORT_DEFAULTS = {
 _MAX_TEXT_CHARS = 200_000
 
 _LIST_FIELDS = (
-    "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents, webViewLink)"
+    "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents, webViewLink, "
+    "driveId, permissions(type,emailAddress,domain,role))"
 )
 
 
@@ -123,9 +124,8 @@ def _requester_for_create(folder_id: str) -> "access.Requester | None":
 DRIVE_LIST_SCHEMA = {
     "name": "drive_list_files",
     "description": (
-        "List or search Google Drive files/folders the service account can "
-        "see (i.e. files shared with the SA's email, plus shared drives it's a "
-        "member of). Combine filters, or pass a raw Drive `query`."
+        "List or search Google Drive files/folders you have access to. "
+        "Combine filters, or pass a raw Drive `query`."
     ),
     "parameters": {
         "type": "object",
@@ -198,7 +198,7 @@ def _handle_drive_list_files(args: dict, **_: Any) -> str:
             )
             .execute()
         )
-        files = resp.get("files", [])
+        files = access.filter_listing(resp.get("files", []), access.READER)
         return tool_result(
             {
                 "success": True,

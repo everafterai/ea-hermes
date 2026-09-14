@@ -422,3 +422,64 @@ def share_with_requester(file_id: str, requester: Optional[Requester]) -> Option
             f"File created, but sharing it with {requester.email} failed "
             f"({type(exc).__name__}: {exc}); they may not be able to open it."
         )
+
+
+# --------------------------------------------------------------------------- #
+# Listing filter
+# --------------------------------------------------------------------------- #
+
+_LIST_POOL_WORKERS = 8
+
+
+def _strip_acl(files: list) -> list:
+    out = []
+    for f in files:
+        if isinstance(f, dict):
+            f = {k: v for k, v in f.items() if k != "permissions"}
+        out.append(f)
+    return out
+
+
+def filter_listing(files: list, level: str = READER) -> list:
+    """Drop listed files the requester cannot access at *level*.
+
+    Files that came back with an inline ``permissions`` array are evaluated
+    in place (and prime the ACL cache). The rest — shared-drive items, or
+    files the SA can't share — are fetched in a small thread pool. A file
+    whose ACL cannot be fetched is dropped (fail closed). No count of hidden
+    items is exposed anywhere.
+    """
+    if not is_check_active():
+        return _strip_acl(files)
+    requester = resolve_requester()
+    if requester is None:
+        return []
+    cfg = load_access_config()
+
+    def _decide(f: dict) -> bool:
+        file_id = str(f.get("id") or "")
+        if not file_id:
+            return False
+        acl = f.get("permissions")
+        if acl is None:
+            try:
+                _, acl = fetch_acl(file_id)
+            except Exception as exc:
+                logger.debug("listing: ACL fetch for %s failed (%s); hiding", file_id, exc)
+                return False
+        else:
+            _cache_put(file_id, str(f.get("name") or ""), acl)
+        return evaluate(acl, requester.email, cfg).satisfies(level)
+
+    inline = [f for f in files if isinstance(f, dict) and f.get("permissions") is not None]
+    remote = [f for f in files if isinstance(f, dict) and f.get("permissions") is None]
+    allowed: set = set()
+    for f in inline:
+        if _decide(f):
+            allowed.add(id(f))
+    if remote:
+        with ThreadPoolExecutor(max_workers=min(_LIST_POOL_WORKERS, len(remote))) as pool:
+            for f, ok in zip(remote, pool.map(_decide, remote)):
+                if ok:
+                    allowed.add(id(f))
+    return _strip_acl([f for f in files if id(f) in allowed])

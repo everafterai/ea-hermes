@@ -285,3 +285,138 @@ def test_create_in_root_does_not_share_when_check_inactive(services, monkeypatch
     out = json.loads(dc._handle_docs_create({"title": "t"}))
     assert out["success"] is True
     assert services[0].permissions().created == []
+
+
+# --------------------------------------------------------------------------- #
+# drive_list_files
+# --------------------------------------------------------------------------- #
+
+class _ListDrive(_Drive):
+    def __init__(self, files, perms_by_id=None):
+        super().__init__()
+        self._list_files = files
+        self._perms_by_id = perms_by_id or {}
+        self.list_kw = None
+        self.perm_list_calls = []
+
+    def files(self):
+        outer = self
+
+        class _F(_Files):
+            def list(self_inner, **kw):
+                outer.list_kw = kw
+                return _Req({"files": outer._list_files})
+
+        f = _F()
+        f.calls = self._files.calls
+        return f
+
+    def permissions(self):
+        outer = self
+
+        class _P(_Perms):
+            def list(self_inner, **kw):
+                outer.perm_list_calls.append(kw["fileId"])
+                return _Req({"permissions": outer._perms_by_id.get(kw["fileId"], [])})
+
+        p = _P()
+        p.created = self._perms.created
+        return p
+
+
+@pytest.fixture
+def listing(monkeypatch):
+    from plugins.google_drive_sa import client as gd_client
+
+    def _install(files, perms_by_id=None):
+        d = _ListDrive(files, perms_by_id)
+        monkeypatch.setattr(gd_client, "get_service", lambda: d)
+        access.reset_cache()
+        return d
+
+    return _install
+
+
+@pytest.fixture
+def alice_active(monkeypatch):
+    monkeypatch.setattr(access, "is_check_active", lambda: True)
+    monkeypatch.setattr(
+        access, "resolve_requester",
+        lambda: access.Requester(platform="slack", user_id="U1", email=ALICE),
+    )
+    monkeypatch.setattr(
+        access, "load_access_config",
+        lambda: access.AccessConfig(everyone_groups=frozenset({"all@everafter.ai"})),
+    )
+
+
+def test_list_requests_permissions_inline(listing, alice_active):
+    d = listing([])
+    gd._handle_drive_list_files({})
+    assert "permissions(type,emailAddress,domain,role)" in d.list_kw["fields"]
+    assert "driveId" in d.list_kw["fields"]
+
+
+def test_list_filters_by_inline_acl_and_strips_permissions(listing, alice_active):
+    d = listing([
+        {"id": "ok", "name": "Mine", "permissions": [{"type": "user", "emailAddress": ALICE, "role": "reader"}]},
+        {"id": "no", "name": "ARR", "permissions": [{"type": "group", "emailAddress": "finance@everafter.ai", "role": "reader"}]},
+        {"id": "all", "name": "Handbook", "permissions": [{"type": "group", "emailAddress": "all@everafter.ai", "role": "reader"}]},
+    ])
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert [f["id"] for f in out["files"]] == ["ok", "all"]
+    assert out["count"] == 2
+    assert all("permissions" not in f for f in out["files"])
+    assert "hidden" not in json.dumps(out)
+    assert d.perm_list_calls == []
+
+
+def test_list_fetches_acl_for_shared_drive_items(listing, alice_active):
+    d = listing(
+        [
+            {"id": "sd1", "name": "A", "driveId": "D"},
+            {"id": "sd2", "name": "B", "driveId": "D"},
+        ],
+        perms_by_id={
+            "sd1": [{"type": "domain", "domain": "everafter.ai", "role": "reader"}],
+            "sd2": [],
+        },
+    )
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert [f["id"] for f in out["files"]] == ["sd1"]
+    assert sorted(d.perm_list_calls) == ["sd1", "sd2"]
+
+
+def test_list_drops_items_whose_acl_fetch_fails(listing, alice_active, monkeypatch):
+    listing([{"id": "sd1", "name": "A", "driveId": "D"}])
+
+    def _boom(file_id):
+        raise RuntimeError("403")
+
+    monkeypatch.setattr(access, "fetch_acl", _boom)
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert out["files"] == []
+
+
+def test_list_returns_nothing_when_active_but_no_requester(listing, monkeypatch):
+    listing([{"id": "x", "name": "X", "permissions": [{"type": "anyone", "role": "reader"}]}])
+    monkeypatch.setattr(access, "is_check_active", lambda: True)
+    monkeypatch.setattr(access, "resolve_requester", lambda: None)
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert out["files"] == []
+
+
+def test_list_unfiltered_when_check_inactive(listing, monkeypatch):
+    listing([{"id": "x", "name": "X", "permissions": [{"type": "user", "emailAddress": "z@z", "role": "reader"}]}])
+    monkeypatch.setattr(access, "is_check_active", lambda: False)
+    out = json.loads(gd._handle_drive_list_files({}))
+    assert [f["id"] for f in out["files"]] == ["x"]
+    assert "permissions" not in out["files"][0]
+
+
+def test_list_primes_cache_for_following_read(listing, alice_active, monkeypatch):
+    d = listing([{"id": "ok", "name": "Mine", "permissions": [{"type": "user", "emailAddress": ALICE, "role": "reader"}]}])
+    gd._handle_drive_list_files({})
+    name, acl = access.fetch_acl("ok")
+    assert name == "Mine" and acl[0]["emailAddress"] == ALICE
+    assert d.files().calls == []  # served from cache, no files.get
