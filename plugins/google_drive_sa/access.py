@@ -156,3 +156,268 @@ def evaluate(acl: list, email: str, cfg: AccessConfig) -> Decision:
         if matched and (best is None or _ROLE_RANK[role] > _ROLE_RANK[best]):
             best = role
     return Decision(granted_role=best, unmapped_groups=tuple(unmapped))
+
+
+# --------------------------------------------------------------------------- #
+# Requester
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class Requester:
+    platform: str
+    user_id: str
+    email: str
+
+
+def _engaged() -> bool:
+    """Seam: has any session been bound in this process (gateway/cron)?"""
+    from gateway.session_context import session_context_engaged
+
+    return session_context_engaged()
+
+
+def _resolve_email(platform: str, user_id: str) -> Optional[str]:
+    from plugins.google_drive_sa.identity import resolve_email
+
+    return resolve_email(platform, user_id)
+
+
+def _cron_owner() -> Optional[tuple]:
+    """``(platform, user_id)`` of the running cron job's owner, else None."""
+    try:
+        from cron.tool_approval_context import get_cron_job_id
+
+        job_id = get_cron_job_id()
+        if not job_id:
+            return None
+        from agent import automation_ownership as ao
+
+        record = ao.get_record(ao.artifact_key("cron", job_id)) or {}
+        owner = record.get("owner") or {}
+        platform = str(owner.get("platform") or "").strip()
+        user_id = str(owner.get("user_id") or "").strip()
+        if platform and user_id:
+            return (platform, user_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("cron owner lookup failed: %s", exc)
+    return None
+
+
+def is_check_active() -> bool:
+    """The check runs only inside a gateway/cron process with it enabled.
+
+    A plain CLI (never engaged the session-context system) is the operator's
+    own shell and skips it — the fork's "a shell caller is an admin" rule.
+    """
+    return load_access_config().enabled and _engaged()
+
+
+def resolve_requester() -> Optional[Requester]:
+    from gateway.session_context import get_session_env
+
+    platform = get_session_env("HERMES_SESSION_PLATFORM", "").strip()
+    user_id = get_session_env("HERMES_SESSION_USER_ID", "").strip()
+    if not (platform and user_id):
+        owner = _cron_owner()
+        if owner is None:
+            return None
+        platform, user_id = owner
+    email = _resolve_email(platform, user_id)
+    if not email:
+        return None
+    return Requester(platform=platform, user_id=user_id, email=email.lower())
+
+
+# --------------------------------------------------------------------------- #
+# ACL fetch + cache
+# --------------------------------------------------------------------------- #
+
+_PERM_FIELDS = "permissions(type,emailAddress,domain,role)"
+_GET_FIELDS = f"id,name,driveId,{_PERM_FIELDS}"
+
+_cache_lock = threading.Lock()
+# file_id -> (fetched_at, name, acl)
+_acl_cache: dict[str, tuple] = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def reset_cache() -> None:
+    with _cache_lock:
+        _acl_cache.clear()
+
+
+def _cache_put(file_id: str, name: str, acl: list) -> None:
+    with _cache_lock:
+        _acl_cache[file_id] = (_now(), name, list(acl))
+
+
+def _cache_get(file_id: str) -> Optional[tuple]:
+    ttl = load_access_config().cache_ttl
+    with _cache_lock:
+        hit = _acl_cache.get(file_id)
+    if hit is None:
+        return None
+    fetched_at, name, acl = hit
+    if _now() - fetched_at > ttl:
+        return None
+    return name, acl
+
+
+def _list_permissions(svc: Any, file_id: str) -> list:
+    acl: list = []
+    token: Optional[str] = None
+    while True:
+        kw: dict[str, Any] = dict(
+            fileId=file_id,
+            supportsAllDrives=True,
+            pageSize=100,
+            fields=f"nextPageToken,{_PERM_FIELDS}",
+        )
+        if token:
+            kw["pageToken"] = token
+        resp = svc.permissions().list(**kw).execute() or {}
+        acl.extend(resp.get("permissions") or [])
+        token = resp.get("nextPageToken")
+        if not token:
+            return acl
+
+
+def fetch_acl(file_id: str) -> tuple:
+    """``(name, acl)`` for *file_id*, cached. Raises on any API failure.
+
+    ``files.get`` returns the ACL inline for My Drive files the SA can share;
+    shared-drive items (and files the SA can only read) come back without
+    ``permissions`` and need ``permissions.list`` — which also includes the
+    drive-level memberships shared-drive access is usually granted through.
+    """
+    cached = _cache_get(file_id)
+    if cached is not None:
+        return cached
+    from plugins.google_drive_sa import client
+
+    svc = client.get_service()
+    meta = svc.files().get(fileId=file_id, fields=_GET_FIELDS, supportsAllDrives=True).execute() or {}
+    name = str(meta.get("name") or "")
+    acl = meta.get("permissions")
+    if acl is None:
+        acl = _list_permissions(svc, file_id)
+    _cache_put(file_id, name, acl)
+    return name, list(acl)
+
+
+# --------------------------------------------------------------------------- #
+# require_access
+# --------------------------------------------------------------------------- #
+
+class DriveAccessDenied(Exception):
+    """Raised by require_access; ``str(exc)`` is safe to show the model."""
+
+
+def _audit_denied(
+    *, file_id: str, name: str, level: str, requester: str,
+    granted_role: Optional[str], unmapped_groups: tuple, reason: str,
+) -> None:
+    """Audit-log a denial with the detail the tool result deliberately omits."""
+    try:
+        from agent.data_access_audit import record_access
+
+        record_access(
+            tool="google_drive",
+            action="drive_access_denied",
+            target=(
+                f"drive:{file_id} name={name!r} level={level} requester={requester or '-'} "
+                f"granted={granted_role or '-'} reason={reason} "
+                f"unmapped_groups={','.join(unmapped_groups) or '-'}"
+            ),
+        )
+    except Exception:  # pragma: no cover - auditing never breaks a tool
+        pass
+
+
+def _denial_text(email: str, level: str) -> str:
+    verb = "edit" if level == WRITER else "access"
+    return (
+        f"Access denied: {email} does not have permission to {verb} this file. "
+        "Ask the file's owner to share it with you (or with a group the "
+        "operator has mapped), then try again."
+    )
+
+
+def require_access(file_id: str, level: str) -> Optional[Requester]:
+    """Gate one tool call. Returns the requester, or None if the check is off.
+
+    Raises :class:`DriveAccessDenied` when the requester cannot be resolved,
+    the ACL cannot be fetched, or the ACL does not grant *level*.
+    """
+    if not is_check_active():
+        return None
+    requester = resolve_requester()
+    if requester is None:
+        _audit_denied(
+            file_id=file_id, name="", level=level, requester="",
+            granted_role=None, unmapped_groups=(), reason="no_requester",
+        )
+        raise DriveAccessDenied(
+            "Access denied: the requesting user could not be identified, so "
+            "Drive access cannot be verified. (No platform identity in this "
+            "session, or no email is mapped for it — an operator can set "
+            "slack.user_emails.)"
+        )
+    try:
+        name, acl = fetch_acl(file_id)
+    except Exception as exc:
+        logger.warning("ACL fetch for %s failed (%s); denying", file_id, exc)
+        _audit_denied(
+            file_id=file_id, name="", level=level, requester=requester.email,
+            granted_role=None, unmapped_groups=(), reason="acl_fetch_failed",
+        )
+        raise DriveAccessDenied(
+            f"Access denied: could not verify {requester.email}'s access to this "
+            f"file ({type(exc).__name__}). Check the file ID, or that the file "
+            "is shared with the service account."
+        ) from exc
+    decision = evaluate(acl, requester.email, load_access_config())
+    if decision.satisfies(level):
+        return requester
+    _audit_denied(
+        file_id=file_id, name=name, level=level, requester=requester.email,
+        granted_role=decision.granted_role, unmapped_groups=decision.unmapped_groups,
+        reason="denied",
+    )
+    raise DriveAccessDenied(_denial_text(requester.email, level))
+
+
+# --------------------------------------------------------------------------- #
+# share_with_requester
+# --------------------------------------------------------------------------- #
+
+def share_with_requester(file_id: str, requester: Optional[Requester]) -> Optional[str]:
+    """Add *requester* as writer on a file the SA just created in its own root.
+
+    Without this, nobody but the SA is on the new file's ACL and the person
+    who asked for it could not read it back. Returns an error string on
+    failure (the file exists; the caller reports it), None on success/no-op.
+    """
+    if requester is None:
+        return None
+    try:
+        from plugins.google_drive_sa import client
+
+        client.get_service().permissions().create(
+            fileId=file_id,
+            body={"type": "user", "role": "writer", "emailAddress": requester.email},
+            sendNotificationEmail=False,
+            supportsAllDrives=True,
+        ).execute()
+        with _cache_lock:
+            _acl_cache.pop(file_id, None)
+        return None
+    except Exception as exc:
+        logger.warning("could not share %s with %s: %s", file_id, requester.email, exc)
+        return (
+            f"File created, but sharing it with {requester.email} failed "
+            f"({type(exc).__name__}: {exc}); they may not be able to open it."
+        )

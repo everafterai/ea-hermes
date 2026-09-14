@@ -155,3 +155,341 @@ def test_load_access_config_survives_read_error(monkeypatch):
 
     monkeypatch.setattr(access, "_raw_config", boom)
     assert access.load_access_config().enabled is True
+
+
+# --------------------------------------------------------------------------- #
+# Requester resolution
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _reset_access_cache():
+    access.reset_cache()
+    yield
+    access.reset_cache()
+
+
+@pytest.fixture
+def engaged(monkeypatch):
+    monkeypatch.setattr(access, "_engaged", lambda: True)
+    monkeypatch.setattr(access, "load_access_config", lambda: _cfg())
+
+
+def _session(monkeypatch, platform="slack", user_id="U1"):
+    from gateway.session_context import set_session_vars, clear_session_vars
+
+    tokens = set_session_vars(platform=platform, user_id=user_id)
+    return lambda: clear_session_vars(tokens)
+
+
+def test_resolve_requester_from_session(monkeypatch, engaged):
+    monkeypatch.setattr(access, "_resolve_email", lambda p, u: "alice@everafter.ai" if (p, u) == ("slack", "U1") else None)
+    undo = _session(monkeypatch)
+    try:
+        r = access.resolve_requester()
+    finally:
+        undo()
+    assert r == access.Requester(platform="slack", user_id="U1", email="alice@everafter.ai")
+
+
+def test_resolve_requester_none_when_email_unresolvable(monkeypatch, engaged):
+    monkeypatch.setattr(access, "_resolve_email", lambda p, u: None)
+    undo = _session(monkeypatch)
+    try:
+        assert access.resolve_requester() is None
+    finally:
+        undo()
+
+
+def test_resolve_requester_none_without_identity(monkeypatch, engaged):
+    monkeypatch.setattr(access, "_resolve_email", lambda p, u: "x@y.z")
+    monkeypatch.setattr(access, "_cron_owner", lambda: None)
+    undo = _session(monkeypatch, platform="", user_id="")
+    try:
+        assert access.resolve_requester() is None
+    finally:
+        undo()
+
+
+def test_resolve_requester_from_cron_owner(monkeypatch, engaged):
+    monkeypatch.setattr(access, "_cron_owner", lambda: ("slack", "U9"))
+    monkeypatch.setattr(access, "_resolve_email", lambda p, u: "owner@everafter.ai" if u == "U9" else None)
+    undo = _session(monkeypatch, platform="", user_id="")
+    try:
+        r = access.resolve_requester()
+    finally:
+        undo()
+    assert r.email == "owner@everafter.ai" and r.user_id == "U9"
+
+
+def test_cron_owner_reads_ownership_registry(monkeypatch):
+    from cron.tool_approval_context import set_cron_tool_context, clear_cron_tool_context
+    from agent import automation_ownership as ao
+
+    monkeypatch.setattr(
+        ao, "get_record",
+        lambda key: {"owner": {"platform": "slack", "user_id": "U7"}} if key == "cron:j1" else None,
+    )
+    tok = set_cron_tool_context(owner_grant=None, acked_tools=[], job_id="j1")
+    try:
+        assert access._cron_owner() == ("slack", "U7")
+    finally:
+        clear_cron_tool_context(tok)
+    assert access._cron_owner() is None  # no job id → no owner
+
+
+def test_cron_owner_none_for_ownerless_job(monkeypatch):
+    from cron.tool_approval_context import set_cron_tool_context, clear_cron_tool_context
+    from agent import automation_ownership as ao
+
+    monkeypatch.setattr(ao, "get_record", lambda key: None)
+    tok = set_cron_tool_context(owner_grant=None, acked_tools=[], job_id="j2")
+    try:
+        assert access._cron_owner() is None
+    finally:
+        clear_cron_tool_context(tok)
+
+
+# --------------------------------------------------------------------------- #
+# is_check_active()
+# --------------------------------------------------------------------------- #
+
+def test_check_inactive_when_not_engaged(monkeypatch):
+    monkeypatch.setattr(access, "_engaged", lambda: False)
+    monkeypatch.setattr(access, "load_access_config", lambda: _cfg())
+    assert access.is_check_active() is False
+
+
+def test_check_inactive_when_disabled(monkeypatch):
+    monkeypatch.setattr(access, "_engaged", lambda: True)
+    monkeypatch.setattr(access, "load_access_config", lambda: _cfg(enabled=False))
+    assert access.is_check_active() is False
+
+
+def test_check_active(monkeypatch, engaged):
+    assert access.is_check_active() is True
+
+
+# --------------------------------------------------------------------------- #
+# ACL fetch + cache
+# --------------------------------------------------------------------------- #
+
+class _Req:
+    def __init__(self, result):
+        self._r = result
+
+    def execute(self):
+        if isinstance(self._r, Exception):
+            raise self._r
+        return self._r
+
+
+class _FakeDrive:
+    """files().get / permissions().list / permissions().create recorder."""
+
+    def __init__(self, *, get=None, perms=None, perm_pages=None):
+        self.get_calls = []
+        self.list_calls = []
+        self.create_calls = []
+        self._get = get
+        self._perm_pages = perm_pages if perm_pages is not None else (
+            [{"permissions": perms or []}]
+        )
+
+    def files(self):
+        outer = self
+
+        class _F:
+            def get(self, **kw):
+                outer.get_calls.append(kw)
+                return _Req(outer._get)
+
+        return _F()
+
+    def permissions(self):
+        outer = self
+
+        class _P:
+            def list(self, **kw):
+                outer.list_calls.append(kw)
+                page = len(outer.list_calls) - 1
+                return _Req(outer._perm_pages[min(page, len(outer._perm_pages) - 1)])
+
+            def create(self, **kw):
+                outer.create_calls.append(kw)
+                return _Req({"id": "perm1"})
+
+        return _P()
+
+
+@pytest.fixture
+def drive(monkeypatch):
+    def _install(fake):
+        from plugins.google_drive_sa import client as gd_client
+
+        monkeypatch.setattr(gd_client, "get_service", lambda: fake)
+        return fake
+
+    return _install
+
+
+def test_fetch_acl_uses_inline_permissions(drive):
+    fake = drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": [
+        {"type": "user", "emailAddress": ALICE, "role": "reader"}]}))
+    name, acl = access.fetch_acl("f1")
+    assert name == "Doc" and acl[0]["emailAddress"] == ALICE
+    assert fake.list_calls == []
+    assert fake.get_calls[0]["supportsAllDrives"] is True
+    assert "permissions(" in fake.get_calls[0]["fields"]
+
+
+def test_fetch_acl_falls_back_to_permissions_list_and_pages(drive):
+    fake = drive(_FakeDrive(
+        get={"id": "f1", "name": "SD", "driveId": "D1"},
+        perm_pages=[
+            {"permissions": [{"type": "user", "emailAddress": "a@x", "role": "reader"}], "nextPageToken": "p2"},
+            {"permissions": [{"type": "domain", "domain": "x", "role": "writer"}]},
+        ],
+    ))
+    _, acl = access.fetch_acl("f1")
+    assert [e["type"] for e in acl] == ["user", "domain"]
+    assert len(fake.list_calls) == 2
+    assert fake.list_calls[1]["pageToken"] == "p2"
+    assert fake.list_calls[0]["supportsAllDrives"] is True
+
+
+def test_fetch_acl_cached_within_ttl(drive, monkeypatch):
+    fake = drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": []}))
+    monkeypatch.setattr(access, "load_access_config", lambda: _cfg(cache_ttl=100.0))
+    t = [1000.0]
+    monkeypatch.setattr(access, "_now", lambda: t[0])
+    access.fetch_acl("f1")
+    t[0] += 50
+    access.fetch_acl("f1")
+    assert len(fake.get_calls) == 1
+    t[0] += 60  # past TTL
+    access.fetch_acl("f1")
+    assert len(fake.get_calls) == 2
+
+
+def test_fetch_acl_raises_on_api_error(drive):
+    drive(_FakeDrive(get=RuntimeError("403")))
+    with pytest.raises(RuntimeError):
+        access.fetch_acl("f1")
+
+
+# --------------------------------------------------------------------------- #
+# require_access()
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def alice(monkeypatch, engaged):
+    monkeypatch.setattr(
+        access, "resolve_requester",
+        lambda: access.Requester(platform="slack", user_id="U1", email=ALICE),
+    )
+    audit = []
+    monkeypatch.setattr(access, "_audit_denied", lambda **kw: audit.append(kw))
+    return audit
+
+
+def test_require_access_returns_none_when_inactive(monkeypatch, drive):
+    fake = drive(_FakeDrive(get={"id": "f1", "permissions": []}))
+    monkeypatch.setattr(access, "is_check_active", lambda: False)
+    assert access.require_access("f1", access.READER) is None
+    assert fake.get_calls == []
+
+
+def test_require_access_allows_reader(drive, alice):
+    drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": [
+        {"type": "user", "emailAddress": ALICE, "role": "reader"}]}))
+    r = access.require_access("f1", access.READER)
+    assert r.email == ALICE
+    assert alice == []
+
+
+def test_require_access_denies_writer_for_reader(drive, alice):
+    drive(_FakeDrive(get={"id": "f1", "name": "Doc", "permissions": [
+        {"type": "user", "emailAddress": ALICE, "role": "reader"}]}))
+    with pytest.raises(access.DriveAccessDenied) as ei:
+        access.require_access("f1", access.WRITER)
+    assert ALICE in str(ei.value)
+    assert "edit" in str(ei.value)
+    assert alice[0]["level"] == "writer" and alice[0]["granted_role"] == "reader"
+
+
+def test_require_access_denial_never_names_groups_but_audits_them(drive, alice):
+    drive(_FakeDrive(get={"id": "f1", "name": "ARR", "permissions": [
+        {"type": "group", "emailAddress": "finance@everafter.ai", "role": "reader"}]}))
+    with pytest.raises(access.DriveAccessDenied) as ei:
+        access.require_access("f1", access.READER)
+    assert "finance@" not in str(ei.value)
+    assert alice[0]["unmapped_groups"] == ("finance@everafter.ai",)
+    assert alice[0]["file_id"] == "f1" and alice[0]["name"] == "ARR"
+
+
+def test_require_access_denies_when_no_requester(monkeypatch, drive, engaged):
+    fake = drive(_FakeDrive(get={"id": "f1", "permissions": []}))
+    monkeypatch.setattr(access, "resolve_requester", lambda: None)
+    audit = []
+    monkeypatch.setattr(access, "_audit_denied", lambda **kw: audit.append(kw))
+    with pytest.raises(access.DriveAccessDenied) as ei:
+        access.require_access("f1", access.READER)
+    assert "requesting user" in str(ei.value)
+    assert fake.get_calls == []  # no identity → no API call
+    assert audit[0]["reason"] == "no_requester"
+
+
+def test_require_access_denies_on_fetch_error(drive, alice):
+    drive(_FakeDrive(get=RuntimeError("boom")))
+    with pytest.raises(access.DriveAccessDenied):
+        access.require_access("f1", access.READER)
+    assert alice[0]["reason"] == "acl_fetch_failed"
+
+
+def test_audit_denied_writes_record_access(monkeypatch):
+    calls = []
+    import agent.data_access_audit as daa
+
+    monkeypatch.setattr(daa, "record_access", lambda **kw: calls.append(kw))
+    access._audit_denied(
+        file_id="f1", name="ARR", level="reader", requester=ALICE,
+        granted_role=None, unmapped_groups=("finance@everafter.ai",), reason="denied",
+    )
+    assert calls[0]["tool"] == "google_drive"
+    assert calls[0]["action"] == "drive_access_denied"
+    assert "finance@everafter.ai" in calls[0]["target"]
+    assert "f1" in calls[0]["target"] and ALICE in calls[0]["target"]
+
+
+# --------------------------------------------------------------------------- #
+# share_with_requester()
+# --------------------------------------------------------------------------- #
+
+def test_share_with_requester_creates_writer_permission(drive):
+    fake = drive(_FakeDrive())
+    r = access.Requester(platform="slack", user_id="U1", email=ALICE)
+    assert access.share_with_requester("new1", r) is None
+    kw = fake.create_calls[0]
+    assert kw["fileId"] == "new1"
+    assert kw["body"] == {"type": "user", "role": "writer", "emailAddress": ALICE}
+    assert kw["sendNotificationEmail"] is False
+    assert kw["supportsAllDrives"] is True
+
+
+def test_share_with_requester_noop_without_requester(drive):
+    fake = drive(_FakeDrive())
+    assert access.share_with_requester("new1", None) is None
+    assert fake.create_calls == []
+
+
+def test_share_with_requester_reports_failure(drive, monkeypatch):
+    fake = drive(_FakeDrive())
+
+    class _BadP:
+        def create(self, **kw):
+            return _Req(RuntimeError("quota"))
+
+    monkeypatch.setattr(fake, "permissions", lambda: _BadP())
+    r = access.Requester(platform="slack", user_id="U1", email=ALICE)
+    msg = access.share_with_requester("new1", r)
+    assert msg and ALICE in msg and "quota" in msg
