@@ -37,6 +37,17 @@ def stub_googleapiclient_http(monkeypatch):
     monkeypatch.setitem(sys.modules, "googleapiclient.http", http_mod)
 
 
+@pytest.fixture(autouse=True)
+def _access_check_off(monkeypatch):
+    """These tests cover the Drive API plumbing, not the per-user gate
+    (tests/plugins/test_google_drive_sa_gated_handlers.py does). Force the
+    gate off so a process that happens to have engaged session context
+    doesn't turn every call into a denial."""
+    from plugins.google_drive_sa import access
+
+    monkeypatch.setattr(access, "is_check_active", lambda: False)
+
+
 # --------------------------------------------------------------------------- #
 # Fakes
 # --------------------------------------------------------------------------- #

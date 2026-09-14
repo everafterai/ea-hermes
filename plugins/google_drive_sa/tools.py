@@ -10,7 +10,7 @@ import base64
 import binascii
 from typing import Any
 
-from plugins.google_drive_sa import client
+from plugins.google_drive_sa import access, client
 from tools.registry import tool_error, tool_result
 
 # Google-native (Docs/Sheets/Slides) export defaults when the caller doesn't
@@ -65,6 +65,7 @@ def create_drive_file(
     mime_type: str,
     folder_id: str = "",
     fields: str = "id, name, mimeType, parents, webViewLink",
+    requester: "access.Requester | None" = None,
 ) -> dict:
     """Create an (empty) Drive file of *mime_type*, optionally in *folder_id*.
 
@@ -72,16 +73,34 @@ def create_drive_file(
     Drive API is the only create path that can drop a new Google-native file
     straight into a *shared* folder (the Docs/Sheets ``create`` endpoints
     always land in the SA's own My Drive root).
+
+    Without a folder the file lands in the SA's root with only the SA on its
+    ACL, so *requester* (when the access check is on) is added as writer;
+    a share failure is reported under ``share_warning``, not raised.
     """
     body: dict[str, Any] = {"name": name, "mimeType": mime_type}
     if folder_id:
         body["parents"] = [folder_id]
-    return (
+    result = (
         client.get_service()
         .files()
         .create(body=body, fields=fields, supportsAllDrives=True)
         .execute()
     )
+    if not folder_id and requester is not None:
+        warning = access.share_with_requester(str(result.get("id") or ""), requester)
+        if warning:
+            result["share_warning"] = warning
+    return result
+
+
+def _requester_for_create(folder_id: str) -> "access.Requester | None":
+    """Gate a create: writer on the parent when given, else the requester to share with."""
+    if folder_id:
+        return access.require_access(folder_id, access.WRITER)
+    if not access.is_check_active():
+        return None
+    return access.resolve_requester()
 
 
 # --------------------------------------------------------------------------- #
@@ -211,6 +230,10 @@ def _handle_drive_read_file(args: dict, **_: Any) -> str:
     if not file_id:
         return tool_error("file_id is required")
     try:
+        access.require_access(file_id, access.READER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
         svc = client.get_service()
         meta = (
             svc.files()
@@ -288,7 +311,7 @@ DRIVE_UPLOAD_SCHEMA = {
             },
             "folder_id": {
                 "type": "string",
-                "description": "Parent folder ID for a new file.",
+                "description": "Parent folder ID for a new file (you need edit access to it).",
             },
             "file_id": {
                 "type": "string",
@@ -318,6 +341,15 @@ def _handle_drive_upload(args: dict, **_: Any) -> str:
         return tool_error("Provide `content` or `content_base64`")
 
     mime_type = _str(args, "mime_type") or "text/plain"
+    folder_id = _str(args, "folder_id")
+    try:
+        requester = (
+            access.require_access(file_id, access.WRITER)
+            if file_id
+            else _requester_for_create(folder_id)
+        )
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     try:
         from googleapiclient.http import MediaInMemoryUpload
 
@@ -343,13 +375,17 @@ def _handle_drive_upload(args: dict, **_: Any) -> str:
             action = "updated"
         else:
             body: dict[str, Any] = {"name": name, "mimeType": mime_type}
-            if args.get("folder_id"):
-                body["parents"] = [_str(args, "folder_id")]
+            if folder_id:
+                body["parents"] = [folder_id]
             result = (
                 svc.files()
                 .create(body=body, media_body=media, fields=fields, supportsAllDrives=True)
                 .execute()
             )
+            if not folder_id and requester is not None:
+                warning = access.share_with_requester(str(result.get("id") or ""), requester)
+                if warning:
+                    result["share_warning"] = warning
             action = "created"
 
         return tool_result({"success": True, "action": action, "file": result})
@@ -382,20 +418,22 @@ def _handle_drive_create_folder(args: dict, **_: Any) -> str:
     name = _str(args, "name")
     if not name:
         return tool_error("name is required")
+    parent_id = _str(args, "parent_id")
     try:
-        body: dict[str, Any] = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
-        if args.get("parent_id"):
-            body["parents"] = [_str(args, "parent_id")]
-        result = (
-            client.get_service()
-            .files()
-            .create(
-                body=body,
-                fields="id, name, parents, webViewLink",
-                supportsAllDrives=True,
-            )
-            .execute()
+        requester = _requester_for_create(parent_id)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
+        result = create_drive_file(
+            name,
+            "application/vnd.google-apps.folder",
+            parent_id,
+            fields="id, name, parents, webViewLink",
+            requester=requester,
         )
-        return tool_result({"success": True, "folder": result})
+        out: dict[str, Any] = {"success": True, "folder": result}
+        if result.get("share_warning"):
+            out["share_warning"] = result.pop("share_warning")
+        return tool_result(out)
     except Exception as exc:  # noqa: BLE001
         return _drive_error(exc)

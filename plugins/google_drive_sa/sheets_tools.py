@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from plugins.google_drive_sa import client
-from plugins.google_drive_sa.tools import _drive_error, _str, create_drive_file
+from plugins.google_drive_sa import access, client
+from plugins.google_drive_sa.tools import _drive_error, _requester_for_create, _str, create_drive_file
 from tools.registry import tool_error, tool_result
 
 _VALUE_INPUT_OPTIONS = {"RAW", "USER_ENTERED"}
@@ -65,6 +65,10 @@ def _handle_sheets_get_values(args: dict, **_: Any) -> str:
     if not sid or not rng:
         return tool_error("spreadsheet_id and range are required")
     try:
+        access.require_access(sid, access.READER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
         resp = (
             client.get_sheets_service()
             .spreadsheets()
@@ -87,7 +91,7 @@ def _handle_sheets_get_values(args: dict, **_: Any) -> str:
 SHEETS_UPDATE_VALUES_SCHEMA = {
     "name": "sheets_update_values",
     "description": "Overwrite a range of cells in a Google Sheet with the given "
-    "values (2D array of rows). Needs Editor access.",
+    "values (2D array of rows). You need edit access to the sheet.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -113,6 +117,10 @@ def _handle_sheets_update_values(args: dict, **_: Any) -> str:
     sid, rng = _str(args, "spreadsheet_id"), _str(args, "range")
     if not sid or not rng:
         return tool_error("spreadsheet_id and range are required")
+    try:
+        access.require_access(sid, access.WRITER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     try:
         rows = _coerce_rows(args.get("values"))
     except (ValueError, json.JSONDecodeError) as exc:
@@ -175,6 +183,10 @@ def _handle_sheets_append_values(args: dict, **_: Any) -> str:
     if not sid or not rng:
         return tool_error("spreadsheet_id and range are required")
     try:
+        access.require_access(sid, access.WRITER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
         rows = _coerce_rows(args.get("values"))
     except (ValueError, json.JSONDecodeError) as exc:
         return tool_error(f"invalid values: {exc}")
@@ -228,6 +240,10 @@ def _handle_sheets_clear(args: dict, **_: Any) -> str:
     if not sid or not rng:
         return tool_error("spreadsheet_id and range are required")
     try:
+        access.require_access(sid, access.WRITER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
         resp = (
             client.get_sheets_service()
             .spreadsheets()
@@ -247,7 +263,7 @@ def _handle_sheets_clear(args: dict, **_: Any) -> str:
 SHEETS_CREATE_SCHEMA = {
     "name": "sheets_create",
     "description": "Create a new, empty Google Sheet, optionally inside a shared "
-    "folder (the SA must have Editor access on that folder).",
+    "folder (you need edit access to that folder).",
     "parameters": {
         "type": "object",
         "properties": {
@@ -263,10 +279,18 @@ def _handle_sheets_create(args: dict, **_: Any) -> str:
     title = _str(args, "title")
     if not title:
         return tool_error("title is required")
+    folder_id = _str(args, "folder_id")
+    try:
+        requester = _requester_for_create(folder_id)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     try:
         result = create_drive_file(
-            title, "application/vnd.google-apps.spreadsheet", _str(args, "folder_id")
+            title, "application/vnd.google-apps.spreadsheet", folder_id, requester=requester
         )
-        return tool_result({"success": True, "spreadsheet": result})
+        out: dict[str, Any] = {"success": True, "spreadsheet": result}
+        if result.get("share_warning"):
+            out["share_warning"] = result.pop("share_warning")
+        return tool_result(out)
     except Exception as exc:  # noqa: BLE001
         return _drive_error(exc)

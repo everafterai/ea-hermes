@@ -8,8 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from plugins.google_drive_sa import client
-from plugins.google_drive_sa.tools import _MAX_TEXT_CHARS, _drive_error, _str, create_drive_file
+from plugins.google_drive_sa import access, client
+from plugins.google_drive_sa.tools import (
+    _MAX_TEXT_CHARS,
+    _drive_error,
+    _requester_for_create,
+    _str,
+    create_drive_file,
+)
 from tools.registry import tool_error, tool_result
 
 
@@ -58,6 +64,10 @@ def _handle_docs_get(args: dict, **_: Any) -> str:
     doc_id = _str(args, "document_id")
     if not doc_id:
         return tool_error("document_id is required")
+    try:
+        access.require_access(doc_id, access.READER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     try:
         doc = client.get_docs_service().documents().get(documentId=doc_id).execute()
         text = _extract_text(doc)
@@ -110,6 +120,10 @@ def _handle_docs_insert_text(args: dict, **_: Any) -> str:
     if text is None or text == "":
         return tool_error("text is required")
     try:
+        access.require_access(doc_id, access.WRITER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
+    try:
         svc = client.get_docs_service()
         if args.get("index") is not None:
             try:
@@ -157,6 +171,10 @@ def _handle_docs_replace_text(args: dict, **_: Any) -> str:
     doc_id, find = _str(args, "document_id"), _str(args, "find")
     if not doc_id or not find:
         return tool_error("document_id and find are required")
+    try:
+        access.require_access(doc_id, access.WRITER)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     replace = args.get("replace", "")
     try:
         requests = [
@@ -189,7 +207,7 @@ def _handle_docs_replace_text(args: dict, **_: Any) -> str:
 DOCS_CREATE_SCHEMA = {
     "name": "docs_create",
     "description": "Create a new, empty Google Doc, optionally inside a shared "
-    "folder (the SA must have Editor access on that folder).",
+    "folder (you need edit access to that folder).",
     "parameters": {
         "type": "object",
         "properties": {
@@ -205,10 +223,18 @@ def _handle_docs_create(args: dict, **_: Any) -> str:
     title = _str(args, "title")
     if not title:
         return tool_error("title is required")
+    folder_id = _str(args, "folder_id")
+    try:
+        requester = _requester_for_create(folder_id)
+    except access.DriveAccessDenied as exc:
+        return tool_error(str(exc))
     try:
         result = create_drive_file(
-            title, "application/vnd.google-apps.document", _str(args, "folder_id")
+            title, "application/vnd.google-apps.document", folder_id, requester=requester
         )
-        return tool_result({"success": True, "document": result})
+        out: dict[str, Any] = {"success": True, "document": result}
+        if result.get("share_warning"):
+            out["share_warning"] = result.pop("share_warning")
+        return tool_result(out)
     except Exception as exc:  # noqa: BLE001
         return _drive_error(exc)
