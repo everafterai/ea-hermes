@@ -219,6 +219,34 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   republish its frames", and neither should require `terminal`. Not in any built-in role;
   grant it explicitly. **Deployment:** must also be listed in `platform_toolsets.slack`
   (an explicit list shadows defaults) or the tool is silently missing. No design doc.
+- **Google Drive per-user access check** — [plugins/google_drive_sa/access.py](plugins/google_drive_sa/access.py).
+  The Drive/Sheets/Docs plugin acts as ONE service account, so "shared with the
+  SA" would otherwise be "readable by every user whose role grants the toolset".
+  Every handler now calls `require_access(file_id, reader|writer)` before its API
+  call: resolve the requester (session contextvars, or the cron job's owner via
+  the ownership registry — `cron/tool_approval_context.get_cron_job_id`), fetch
+  the file's ACL as the SA (cached, `google_drive.acl_cache_ttl_seconds`), and
+  evaluate it. `drive_list_files` filters results the same way (inline
+  `permissions` from `files.list`; `permissions.list` in a thread pool for
+  shared-drive items). **Groups fail closed** — no DWD, so a group grant counts
+  only via `google_drive.everyone_groups` (treated as domain-wide) or
+  `google_drive.group_members` (manual map); denials audit the unmapped groups to
+  `audit/data-access.log` (`drive_access_denied`) so you can see what to map.
+  Email comes from `slack.user_emails` → Slack `users.info` (needs the
+  `users:read.email` scope) → written back into `slack.user_emails`
+  (`hermes users add/update --email`). Files created without a folder are shared
+  with the requester as writer. No requester in a gateway/cron session → deny;
+  local CLI (session context never engaged) → skipped. A root-create (no folder)
+  with the check active but no resolvable requester is **denied** rather than
+  silently created SA-only-visible (`_requester_for_create` in
+  [plugins/google_drive_sa/tools.py](plugins/google_drive_sa/tools.py)). The
+  Drive/Sheets/Docs `googleapiclient` service is built **per-thread**
+  (`threading.local`, [plugins/google_drive_sa/client.py](plugins/google_drive_sa/client.py))
+  because its `httplib2` transport isn't thread-safe and ACL fetches fan out
+  over a thread pool — credentials are cached process-wide, only the service
+  object is per-thread. Kill switch
+  `google_drive.access_check: false`. Design:
+  [docs/superpowers/specs/2026-09-14-drive-per-user-access-check-design.md](docs/superpowers/specs/2026-09-14-drive-per-user-access-check-design.md).
 
 ### Session visibility / multi-user isolation — [hermes_state.py](hermes_state.py)
 

@@ -1,8 +1,11 @@
 """Google Sheets tools (service-account / ADC) for Hermes.
 
-Structured cell-level editing via the Sheets v4 API. The SA needs **Editor**
-access on the spreadsheet (share it with the SA's email) for writes; reads
-need at least Viewer.
+Structured cell-level editing via the Sheets v4 API. The SA still needs
+**Editor** access on the spreadsheet (share it with the SA's email) for
+writes, and at least Viewer for reads — but that share alone is not
+sufficient: per-user access is enforced on top by
+:mod:`plugins.google_drive_sa.access`, and it is the requesting user's own
+ACL entry that actually grants a tool call.
 """
 
 from __future__ import annotations

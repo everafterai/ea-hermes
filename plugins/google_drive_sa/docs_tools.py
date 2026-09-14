@@ -1,7 +1,10 @@
 """Google Docs tools (service-account / ADC) for Hermes.
 
 Structured text editing via the Docs v1 API (``documents.batchUpdate``). The
-SA needs **Editor** access on the document for writes; reads need Viewer.
+SA still needs **Editor** access on the document for writes, and Viewer for
+reads — but that share alone is not sufficient: per-user access is enforced
+on top by :mod:`plugins.google_drive_sa.access`, and it is the requesting
+user's own ACL entry that actually grants a tool call.
 """
 
 from __future__ import annotations

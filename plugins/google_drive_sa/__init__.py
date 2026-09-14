@@ -5,6 +5,9 @@ Registers 13 tools across three default-off toolsets: ``google_drive`` (4),
 itself* via Application Default Credentials (``google.auth.default``) — on a
 GCP VM that's the attached workload identity, so no key files. Share the
 target file/folder with the SA's email (Editor for writes) to grant access.
+Per-user access is enforced on top by ``plugins.google_drive_sa.access`` — the
+SA's share is necessary, the requesting user's own ACL entry is what actually
+grants a tool call.
 
 Why ``kind: backend`` for a tool-providing plugin? The bundled plugin loader
 only auto-loads ``backend`` and ``platform`` kinds without an explicit

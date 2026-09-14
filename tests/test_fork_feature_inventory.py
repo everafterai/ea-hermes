@@ -44,6 +44,17 @@ WIRING = [
     ("slack_post_thread", "tools/slack_post_thread_tool.py", 'toolset="slack_post"', "non-floor toolset"),
     ("webflow_asset_upload", "tools/webflow_asset_tool.py", "is_protected_data_path", "credential-read guard"),
     ("ownership tool", "tools/ownership_tool.py", 'toolset="ownership"', "floor toolset"),
+    # ── Drive per-user access check ───────────────────────────────────────
+    ("Drive access check", "plugins/google_drive_sa/access.py", "def require_access", "gate"),
+    ("Drive access check", "plugins/google_drive_sa/access.py", "def filter_listing", "listing filter"),
+    ("Drive access check", "plugins/google_drive_sa/tools.py", "access.require_access(file_id, access.READER)", "read gated"),
+    ("Drive access check", "plugins/google_drive_sa/tools.py", "access.filter_listing(", "list gated"),
+    ("Drive access check", "plugins/google_drive_sa/sheets_tools.py", "access.require_access(sid, access.WRITER)", "sheet writes gated"),
+    ("Drive access check", "plugins/google_drive_sa/docs_tools.py", "access.require_access(doc_id, access.WRITER)", "doc writes gated"),
+    ("Drive access check", "plugins/google_drive_sa/identity.py", "def resolve_email", "email resolver"),
+    ("Drive access check", "cron/tool_approval_context.py", "def get_cron_job_id", "cron owner path"),
+    ("Drive access check", "cron/scheduler.py", "job_id=job.get(\"id\")", "scheduler passes job id"),
+    ("Config bridge", "gateway/config.py", 'bridged["user_emails"]', "user_emails -> extra"),
     # ── Multi-user session isolation ──────────────────────────────────────
     ("Session visibility", "hermes_state.py", "def build_visibility_where", "SQL scope fragment"),
     ("Session visibility", "hermes_state.py", "def session_row_visible", "row-level gate"),

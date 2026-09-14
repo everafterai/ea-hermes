@@ -12,7 +12,9 @@ GCP VM / Cloud Run with an *attached* service account and zero key files:
 
 The agent acts as the *service account itself* (no domain-wide delegation):
 share Drive files/folders with the SA's email to grant access. This keeps the
-blast radius to exactly what's shared.
+blast radius to exactly what's shared. Per-user access is enforced on top by
+:mod:`plugins.google_drive_sa.access` — the SA's share is necessary, the
+requesting user's own ACL entry is what actually grants a tool call.
 
 Heavy google-* imports are lazy so the plugin can register its tools at
 startup without the deps installed; first real use triggers a venv-scoped
