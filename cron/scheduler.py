@@ -598,7 +598,7 @@ def _enter_cron_tool_context(job: dict):
     except Exception:
         grant = None
     acked = job.get("unattended_approved_tools") or []
-    return set_cron_tool_context(owner_grant=grant, acked_tools=acked)
+    return set_cron_tool_context(owner_grant=grant, acked_tools=acked, job_id=job.get("id"))
 def _resolve_job_reasoning_config(job: dict, cfg: dict, model: str) -> dict | None:
     """Resolve the effective reasoning config for a cron run.
 
