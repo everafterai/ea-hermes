@@ -232,6 +232,22 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   republish its frames", and neither should require `terminal`. Not in any built-in role;
   grant it explicitly. **Deployment:** must also be listed in `platform_toolsets.slack`
   (an explicit list shadows defaults) or the tool is silently missing. No design doc.
+- **`pdf_pages` (`pdf_pages` toolset)** — [tools/pdf_pages_tool.py](tools/pdf_pages_tool.py).
+  The PDF sibling of `video_frames`: renders selected pages of a **local** PDF
+  to PNG via poppler (`pdfinfo` for the count, `pdftoppm -singlefile` per
+  page, fixed argv, no shell) into `$HERMES_HOME/cache/images/` so
+  `vision_analyze` can read them. Exists because a scanned PDF has no text
+  layer for `read_file`/`drive_read_file` to extract, and the extractor's own
+  `NEEDS OCR` hint ("render with pdftoppm, inspect via vision_analyze") assumes
+  a shell; upstream's shell-free route is hosted Firecrawl OCR
+  (`FIRECRAWL_API_KEY`), which we chose not to add — the agents already run on
+  vision models, which read Hebrew statements better than tesseract would.
+  Page spec `"1-3,7"`, cap 20 pages/call (`_MAX_PAGES`), dpi 50–300 (default
+  150). Source path through `raise_if_read_blocked` **before** the existence
+  check; `.pdf` only. `check_fn` hides the tool when poppler is absent —
+  **the host needs `apt-get install -y poppler-utils`** (present on the VM).
+  Own toolset for the `video_frames` reason; granted to `builder` (2026-09-16).
+  **Deployment:** must be listed in `platform_toolsets.slack`. No design doc.
 - **Google Drive per-user access check** — [plugins/google_drive_sa/access.py](plugins/google_drive_sa/access.py).
   The Drive/Sheets/Docs plugin acts as ONE service account, so "shared with the
   SA" would otherwise be "readable by every user whose role grants the toolset".

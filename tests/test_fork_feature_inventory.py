@@ -45,6 +45,7 @@ WIRING = [
     ("slack_post_thread", "tools/slack_post_thread_tool.py", 'toolset="slack_post"', "non-floor toolset"),
     ("webflow_asset_upload", "tools/webflow_asset_tool.py", "is_protected_data_path", "credential-read guard"),
     ("ownership tool", "tools/ownership_tool.py", 'toolset="ownership"', "floor toolset"),
+    ("pdf_pages", "tools/pdf_pages_tool.py", 'toolset="pdf_pages"', "own toolset, fixed argv"),
     # ── Drive per-user access check ───────────────────────────────────────
     ("Drive access check", "plugins/google_drive_sa/access.py", "def require_access", "gate"),
     ("Drive access check", "plugins/google_drive_sa/access.py", "def filter_listing", "listing filter"),
@@ -158,7 +159,7 @@ def test_fork_toolsets_are_registered():
 
     all_toolsets = set(toolsets.get_all_toolsets())
     for name in ("notion", "jira", "jira_write", "slack_post", "webflow_assets",
-                 "ownership", "slack", "video_frames"):
+                 "ownership", "slack", "video_frames", "pdf_pages"):
         assert name in all_toolsets, (
             f"toolset '{name}' is not registered — RBAC cannot gate it, and any "
             f"role granting it becomes a no-op."

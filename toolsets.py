@@ -392,6 +392,16 @@ TOOLSETS = {
         "includes": [],
     },
 
+    # The PDF sibling of `video_frames`: a scanned PDF has no text layer for
+    # read_file to extract, and the only shell-free alternative upstream offers
+    # is hosted OCR. Rendering pages for vision_analyze needs poppler, which
+    # would otherwise mean `terminal`. Own toolset for the same reason.
+    "pdf_pages": {
+        "description": "Render pages of a local PDF to PNG via poppler, for vision_analyze",
+        "tools": ["pdf_pages"],
+        "includes": [],
+    },
+
     "slack_post": {
         "description": "Post a text message into a specific Slack thread (explicit chat_id + thread_ts)",
         "tools": ["slack_post_thread"],
