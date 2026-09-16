@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -185,12 +185,82 @@ def test_read_google_doc_exports(fake_service, monkeypatch):
     assert files.calls["export_media"]["mimeType"] == "text/csv"
 
 
-def test_read_binary_falls_back_to_base64(fake_service, monkeypatch):
+# ── binaries: saved to the cache + extracted, never base64 ────────────────────
+#
+# A base64 blob is useless to the people who can call this tool: RBAC builders
+# have no shell to decode it, and admins with a shell want a path anyway. So a
+# binary lands at $HERMES_HOME/cache/drive/<file_id>/<name> for read_file /
+# vision_analyze / video_frames, and document formats are extracted to text on
+# the spot, exactly as read_file does for a local file.
+
+def _binary_file(fake_service, monkeypatch, name, payload):
     files = fake_service.files()
-    monkeypatch.setattr(files, "get_media", lambda **kw: _FakeRequest(b"\xff\xfe\x00"))
+    monkeypatch.setattr(
+        files, "get",
+        lambda **kw: _FakeRequest({"id": kw["fileId"], "name": name, "mimeType": "application/octet-stream"}),
+    )
+    monkeypatch.setattr(files, "get_media", lambda **kw: _FakeRequest(payload))
+
+
+def test_read_pdf_extracts_text_and_saves_locally(fake_service, monkeypatch):
+    pdf = b"%PDF-1.4\xff\xfe binary body"
+    _binary_file(fake_service, monkeypatch, "Leumi Aug.pdf", pdf)
+    seen = {}
+
+    def fake_extract(data, path):
+        seen["data"], seen["path"] = data, path
+        return "Date  Description  Amount\n01/08  Coffee  -12.00"
+
+    monkeypatch.setattr(gd.read_extract, "extract_document_bytes", fake_extract)
+    out = json.loads(gd._handle_drive_read_file({"file_id": "pdf1"}))
+    assert out["encoding"] == "text"
+    assert "Coffee" in out["content"]
+    assert seen["data"] == pdf and seen["path"].endswith(".pdf")
+    assert "content_base64" not in out
+    local = Path(out["local_path"])
+    assert local.is_file() and local.read_bytes() == pdf
+    assert local.name == "Leumi Aug.pdf" and local.parent.name == "pdf1"
+    assert local.parent.parent == gd._drive_cache_dir()
+
+
+def test_read_unknown_binary_saves_locally_without_base64(fake_service, monkeypatch):
+    _binary_file(fake_service, monkeypatch, "blob.bin", b"\xff\xfe\x00")
     out = json.loads(gd._handle_drive_read_file({"file_id": "bin"}))
-    assert out["encoding"] == "base64"
-    assert base64.b64decode(out["content_base64"]) == b"\xff\xfe\x00"
+    assert out["encoding"] == "binary"
+    assert "content_base64" not in out and "content" not in out
+    assert Path(out["local_path"]).read_bytes() == b"\xff\xfe\x00"
+    assert out["size_bytes"] == 3
+
+
+def test_read_document_extraction_failure_names_local_path(fake_service, monkeypatch):
+    _binary_file(fake_service, monkeypatch, "locked.pdf", b"%PDF-1.4 encrypted")
+
+    def boom(data, path):
+        raise gd.read_extract.ExtractionError("PDF is encrypted")
+
+    monkeypatch.setattr(gd.read_extract, "extract_document_bytes", boom)
+    out = json.loads(gd._handle_drive_read_file({"file_id": "enc"}))
+    assert "error" in out
+    assert "encrypted" in out["error"]
+    assert "locked.pdf" in out["error"]   # the saved copy is named so a shell user can look
+
+
+def test_read_long_document_truncates_and_points_at_local_copy(fake_service, monkeypatch):
+    _binary_file(fake_service, monkeypatch, "big.pdf", b"%PDF-1.4 x")
+    monkeypatch.setattr(gd, "_MAX_TEXT_CHARS", 50)
+    monkeypatch.setattr(gd.read_extract, "extract_document_bytes", lambda d, p: "x" * 120)
+    out = json.loads(gd._handle_drive_read_file({"file_id": "big"}))
+    assert out["truncated"] is True
+    assert len(out["content"]) == 50
+    assert out["local_path"] in out["note"]
+
+
+def test_read_binary_name_cannot_escape_cache_dir(fake_service, monkeypatch):
+    _binary_file(fake_service, monkeypatch, "../../../etc/evil.bin", b"\x00\x01")
+    out = json.loads(gd._handle_drive_read_file({"file_id": "esc"}))
+    local = Path(out["local_path"]).resolve()
+    assert gd._drive_cache_dir().resolve() in local.parents
+    assert local.name == "evil.bin"
 
 
 # --------------------------------------------------------------------------- #
@@ -602,3 +672,20 @@ def test_docs_create_uses_drive(fake_service):
     assert fake_service.files().calls["create"]["body"]["mimeType"] == (
         "application/vnd.google-apps.document"
     )
+
+
+def test_read_ascii_decodable_pdf_still_goes_through_extractor(fake_service, monkeypatch):
+    # A PDF header is plain ASCII; a small one can decode as UTF-8 end to end.
+    # The document type, not decodability, must decide the path.
+    _binary_file(fake_service, monkeypatch, "tiny.pdf", b"%PDF-1.4 1 0 obj << >> endobj")
+    monkeypatch.setattr(gd.read_extract, "extract_document_bytes", lambda d, p: "EXTRACTED")
+    out = json.loads(gd._handle_drive_read_file({"file_id": "tiny"}))
+    assert out["content"] == "EXTRACTED"
+    assert "local_path" in out
+
+
+def test_read_text_with_nul_byte_is_binary(fake_service, monkeypatch):
+    _binary_file(fake_service, monkeypatch, "dump.dat", b"abc\x00def")
+    out = json.loads(gd._handle_drive_read_file({"file_id": "nul"}))
+    assert out["encoding"] == "binary"
+    assert "content" not in out

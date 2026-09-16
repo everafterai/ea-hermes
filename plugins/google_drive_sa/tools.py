@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
+from pathlib import Path
 from typing import Any
 
+from hermes_constants import get_hermes_home
 from plugins.google_drive_sa import access, client
+from tools import read_extract
 from tools.registry import tool_error, tool_result
 
 # Google-native (Docs/Sheets/Slides) export defaults when the caller doesn't
@@ -24,6 +28,34 @@ _GOOGLE_EXPORT_DEFAULTS = {
 
 # Hard cap on returned text so a large file can't blow the context window.
 _MAX_TEXT_CHARS = 200_000
+
+# Binary downloads are materialized here (``<file_id>/<name>``) so read_file,
+# vision_analyze and video_frames can reach them. A base64 blob in the tool
+# result is useless to an RBAC builder (no shell to decode it) and unwanted by
+# an admin (who has a shell and wants a path) — so bytes never go inline.
+_CACHE_SUBDIR = ("cache", "drive")
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._ \-()\[\]&+,]+")
+
+
+def _drive_cache_dir() -> Path:
+    path = get_hermes_home().joinpath(*_CACHE_SUBDIR)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _safe_name(name: str) -> str:
+    """Basename only, odd characters collapsed — a Drive name is user input."""
+    base = Path(name.replace("\\", "/")).name
+    cleaned = _UNSAFE_NAME.sub("_", base).strip(" .")
+    return cleaned or "file"
+
+
+def _save_binary(file_id: str, name: str, data: bytes) -> Path:
+    target_dir = _drive_cache_dir() / _safe_name(file_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / _safe_name(name)
+    target.write_bytes(data)
+    return target
 
 _LIST_FIELDS = (
     "nextPageToken, files(id, name, mimeType, modifiedTime, size, parents, webViewLink, "
@@ -224,9 +256,12 @@ def _handle_drive_list_files(args: dict, **_: Any) -> str:
 DRIVE_READ_SCHEMA = {
     "name": "drive_read_file",
     "description": (
-        "Read/download a Drive file by ID. Google Docs/Sheets/Slides are "
-        "exported to text/CSV automatically; other files return their bytes "
-        "(UTF-8 text inline, or base64 if binary)."
+        "Read a Drive file by ID. Google Docs/Sheets/Slides are exported to "
+        "text/CSV automatically; UTF-8 files return inline. Binary files are "
+        "saved locally and `local_path` is returned — documents (PDF, DOCX, "
+        "XLSX, PPTX, …) are also extracted to text right here; use read_file "
+        "on `local_path` to page through a long one, vision_analyze for an "
+        "image, video_frames for a video."
     ),
     "parameters": {
         "type": "object",
@@ -273,32 +308,58 @@ def _handle_drive_read_file(args: dict, **_: Any) -> str:
         if isinstance(data, str):
             data = data.encode("utf-8")
 
+        name = meta.get("name") or file_id
+        # A document goes through the extractor even when its bytes happen to
+        # decode (a PDF header is ASCII); a NUL byte marks any other file as
+        # binary even though UTF-8 technically admits it.
+        is_document = read_extract.is_extractable_document(name)
+        if not is_document and b"\x00" not in data:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+            else:
+                truncated = len(text) > _MAX_TEXT_CHARS
+                return tool_result(
+                    {
+                        "success": True,
+                        "file_id": file_id,
+                        "name": name,
+                        "mime_type": effective_mime,
+                        "encoding": "text",
+                        "truncated": truncated,
+                        "content": text[:_MAX_TEXT_CHARS],
+                    }
+                )
+
+        local = _save_binary(file_id, name, data)
+        base = {
+            "success": True,
+            "file_id": file_id,
+            "name": name,
+            "mime_type": effective_mime,
+            "size_bytes": len(data),
+            "local_path": str(local),
+        }
+        if not is_document:
+            return tool_result({**base, "encoding": "binary"})
+
         try:
-            text = data.decode("utf-8")
-            truncated = len(text) > _MAX_TEXT_CHARS
-            return tool_result(
-                {
-                    "success": True,
-                    "file_id": file_id,
-                    "name": meta.get("name"),
-                    "mime_type": effective_mime,
-                    "encoding": "text",
-                    "truncated": truncated,
-                    "content": text[:_MAX_TEXT_CHARS],
-                }
+            text = read_extract.extract_document_bytes(data, str(local))
+        except read_extract.ExtractionError as exc:
+            return tool_error(
+                f"Saved to {local} but could not extract text — {exc}."
             )
-        except UnicodeDecodeError:
-            return tool_result(
-                {
-                    "success": True,
-                    "file_id": file_id,
-                    "name": meta.get("name"),
-                    "mime_type": effective_mime,
-                    "encoding": "base64",
-                    "size_bytes": len(data),
-                    "content_base64": base64.b64encode(data).decode("ascii"),
-                }
-            )
+        truncated = len(text) > _MAX_TEXT_CHARS
+        result = {
+            **base,
+            "encoding": "text",
+            "truncated": truncated,
+            "content": text[:_MAX_TEXT_CHARS],
+        }
+        if truncated:
+            result["note"] = f"Showing the first {_MAX_TEXT_CHARS:,} characters; read_file {local} for the rest."
+        return tool_result(result)
     except Exception as exc:  # noqa: BLE001
         return _drive_error(exc)
 

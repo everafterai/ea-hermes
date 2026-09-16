@@ -273,7 +273,17 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   because its `httplib2` transport isn't thread-safe and ACL fetches fan out
   over a thread pool — credentials are cached process-wide, only the service
   object is per-thread. Kill switch
-  `google_drive.access_check: false`. **Deployment:** default-on with no
+  `google_drive.access_check: false`. **Binary reads never return base64**
+  (2026-09-16): `drive_read_file` saves a non-text file to
+  `$HERMES_HOME/cache/drive/<file_id>/<name>` and returns `local_path` (for
+  `read_file` / `vision_analyze` / `video_frames`), and runs document formats
+  (PDF, DOCX, XLSX, PPTX, … — whatever `tools/read_extract.py` handles; PDF
+  needs the optional `anydoc` package, installed on the VM) through the
+  extractor right there, returning `encoding: "text"`. A base64 blob was
+  useless to the only people who could call the tool — RBAC builders have no
+  shell to decode it. Document type decides the path, not decodability (a PDF
+  header is ASCII), and a NUL byte marks any other file binary. Scanned PDFs
+  still need hosted OCR (`FIRECRAWL_API_KEY`). **Deployment:** default-on with no
   `google_drive:` config block, so before enabling on the VM: add the
   `users:read.email` Slack scope and reinstall the app → set
   `google_drive.everyone_groups` for any domain-wide-share groups → give
