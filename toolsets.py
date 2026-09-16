@@ -362,6 +362,15 @@ TOOLSETS = {
         "includes": [],
     },
 
+    # Separate from `jira` on purpose: Jira API tokens have no scopes, so the
+    # tool's path allowlist is the only boundary between "read a ticket" and
+    # "move a ticket". Granting reads must never imply writes.
+    "jira_write": {
+        "description": "JIRA Cloud writes (issue transitions, comments, field edits, create) — curated allowlist",
+        "tools": ["jira_api_write"],
+        "includes": [],
+    },
+
     # Separate from the MCP server's `mcp-webflow` toolset on purpose: the MCP
     # package has NO asset-creation tool, and publishing bytes to a public CDN
     # is a different privilege from reading collections, so it is granted on

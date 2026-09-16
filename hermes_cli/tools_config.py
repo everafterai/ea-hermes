@@ -121,6 +121,7 @@ CONFIGURABLE_TOOLSETS = [
     ("slack",           "💬 Slack (reactions)",          "react to Slack messages with emoji"),
     ("notion",          "🗒️  Notion",                   "read/write Notion pages & databases"),
     ("jira",            "🎫  JIRA",                    "read JIRA issues, statuses & JQL search"),
+    ("jira_write",      "🎫  JIRA write",              "transition, comment, edit & create JIRA issues"),
     ("webflow_assets",  "🖼️  Webflow assets",          "upload local files to the Webflow CDN"),
     ("slack_post",      "💬  Slack thread post",       "post a message into a specific Slack thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),

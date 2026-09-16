@@ -41,6 +41,7 @@ WIRING = [
     # ── Fork-only toolsets ────────────────────────────────────────────────
     ("notion_api", "tools/notion_api_tool.py", 'toolset="notion"', "own toolset"),
     ("jira_api", "tools/jira_api_tool.py", "_ALLOWED_METHODS", "read-only guard"),
+    ("jira_api_write", "tools/jira_api_tool.py", "_WRITE_ALLOWLIST", "curated write allowlist, own toolset"),
     ("slack_post_thread", "tools/slack_post_thread_tool.py", 'toolset="slack_post"', "non-floor toolset"),
     ("webflow_asset_upload", "tools/webflow_asset_tool.py", "is_protected_data_path", "credential-read guard"),
     ("ownership tool", "tools/ownership_tool.py", 'toolset="ownership"', "floor toolset"),
@@ -156,8 +157,8 @@ def test_fork_toolsets_are_registered():
     import toolsets
 
     all_toolsets = set(toolsets.get_all_toolsets())
-    for name in ("notion", "jira", "slack_post", "webflow_assets", "ownership",
-                 "slack", "video_frames"):
+    for name in ("notion", "jira", "jira_write", "slack_post", "webflow_assets",
+                 "ownership", "slack", "video_frames"):
         assert name in all_toolsets, (
             f"toolset '{name}' is not registered — RBAC cannot gate it, and any "
             f"role granting it becomes a no-op."

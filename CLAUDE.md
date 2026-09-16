@@ -160,6 +160,19 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   `roles:` grant; built for a reconciliation/cron worker that reads issue status without a
   shell. Design:
   [docs/superpowers/specs/2026-06-28-jira-issue-status-linkage-design.md](docs/superpowers/specs/2026-06-28-jira-issue-status-linkage-design.md).
+- **`jira_api_write` (`jira_write` toolset)** — same file. The mutating twin,
+  registered as its **own** toolset so granting `jira` never implies writes.
+  Jira API tokens carry no scopes, so the tool's **curated allowlist is the
+  boundary** (`_WRITE_ALLOWLIST`, exact `(method, path-regex)` pairs): `POST
+  …/issue/<KEY>/transitions`, `POST …/issue/<KEY>/comment`, `PUT …/issue/<KEY>`
+  (fields), `POST …/issue` (create). `<KEY>` is a project key + number only —
+  numeric ids, query strings, trailing segments (so `../` traversal) and every
+  other endpoint (DELETE, project/workflow/user admin, bulk, attachments) are
+  refused before any request is made. Reads stay on `jira_api`: the description
+  tells the model to list transitions / `editmeta` first and pass the id. Not in
+  any built-in role — granted to the config's `rd` role (2026-09-16). Same
+  creds and `check_fn` as the read tool. **Deployment:** must be listed in
+  `platform_toolsets.slack` (an explicit list shadows defaults). No design doc.
 - **`slack_post_thread` (`slack_post` toolset)** — [tools/slack_post_thread_tool.py](tools/slack_post_thread_tool.py).
   Posts to an explicit `chat_id`+`thread_ts` via `chat.postMessage` (takes them as args, no
   session contextvars → cron/worker safe). **Deliberately a SEPARATE, NON-FLOOR toolset** —
