@@ -236,6 +236,10 @@ class TestAttributeSessions:
         models = rows[0].models
         assert models[("gpt-5.4-mini", "openai")].cost_usd == pytest.approx(0.5)
         assert models[("gpt-4o", "openai")].cost_usd == pytest.approx(0.01)
+        # Aux rows are now folded into the root session
+        assert rows[0].cost_usd == pytest.approx(0.51)
+        assert rows[0].input_tokens == 1010
+        assert rows[0].api_calls == 2
 
 
 def _row(root_id, *, cost, job=None, channels=(), started_at=NOW - DAY, user="U1",
@@ -325,3 +329,21 @@ class TestAggregate:
     def test_unknown_view_raises(self):
         with pytest.raises(ValueError):
             aggregate([], by="nope", since=0, until=NOW)
+
+    def test_model_view_status_actual_when_all_rows_actual(self):
+        models = {("m", "p"): ModelUsage("m", "p", api_calls=1, input_tokens=10, cost_usd=0.1, all_actual=True)}
+        rep = aggregate([_row("a", cost=0.1, models=models)], by="model", since=0, until=NOW)
+        assert rep.rows[0].status == "actual"
+
+    def test_unknown_bucket_raises(self):
+        with pytest.raises(ValueError):
+            aggregate([], by="job", bucket="fortnight", since=0, until=NOW)
+
+    def test_job_and_model_views_share_one_total_with_aux_rows(self, db):
+        _seed(db, "s1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.5)
+        db.record_auxiliary_usage("s1", "vision", model="gpt-4o", billing_provider="openai",
+                                  input_tokens=10, output_tokens=5, estimated_cost_usd=0.01)
+        sessions = attribute_sessions(db, **WINDOW, job_resolver=lambda _j: None, target_resolver=lambda _j: [])
+        by_job = aggregate(sessions, by="job", since=0, until=NOW)
+        by_model = aggregate(sessions, by="model", since=0, until=NOW)
+        assert by_job.total.cost_usd == pytest.approx(by_model.total.cost_usd) == pytest.approx(0.51)

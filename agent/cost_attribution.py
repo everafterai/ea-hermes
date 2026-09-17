@@ -91,6 +91,7 @@ class ModelUsage:
     cache_write_tokens: int = 0
     cost_usd: float = 0.0
     priced: bool = True
+    all_actual: bool = True
 
 
 @dataclass
@@ -188,7 +189,7 @@ _MODEL_USAGE_SQL = """
 SELECT u.session_id, u.model, u.billing_provider,
        u.api_call_count, u.input_tokens, u.output_tokens,
        u.cache_read_tokens, u.cache_write_tokens,
-       u.estimated_cost_usd, u.actual_cost_usd, u.cost_status
+       u.estimated_cost_usd, u.actual_cost_usd, u.cost_status, u.task
   FROM session_model_usage u
  WHERE u.session_id IN ({placeholders})
 """
@@ -326,10 +327,32 @@ def attribute_sessions(
                 mu.output_tokens += int(urow["output_tokens"] or 0)
                 mu.cache_read_tokens += int(urow["cache_read_tokens"] or 0)
                 mu.cache_write_tokens += int(urow["cache_write_tokens"] or 0)
-                if urow["cost_status"] in PRICED_STATUSES or (urow["estimated_cost_usd"] or 0) > 0:
+                row_tokens = int(urow["input_tokens"] or 0) + int(urow["output_tokens"] or 0)
+                row_priced = (urow["cost_status"] in PRICED_STATUSES
+                              or (urow["estimated_cost_usd"] or 0) > 0)
+                if row_priced:
                     mu.cost_usd += _model_usage_cost(urow)
+                    if urow["cost_status"] != "actual":
+                        mu.all_actual = False
                 else:
                     mu.priced = False
+                if (urow["task"] or "") != "":
+                    # Auxiliary call (vision, compression, title_generation, ...):
+                    # record_auxiliary_usage keeps these OUT of the sessions summary
+                    # row, so fold them into the root here — every view then shares
+                    # one cost basis (main loop + aux), matching what the model view
+                    # sums from the same table.
+                    agg.api_calls += int(urow["api_call_count"] or 0)
+                    agg.input_tokens += int(urow["input_tokens"] or 0)
+                    agg.output_tokens += int(urow["output_tokens"] or 0)
+                    agg.cache_read_tokens += int(urow["cache_read_tokens"] or 0)
+                    agg.cache_write_tokens += int(urow["cache_write_tokens"] or 0)
+                    if row_priced:
+                        agg.cost_usd += _model_usage_cost(urow)
+                        if urow["cost_status"] != "actual":
+                            agg.all_actual = False
+                    else:
+                        agg.unpriced_tokens += row_tokens
 
     result = [r for r in roots.values() if r.sessions > 0]
     if platform:
@@ -420,11 +443,11 @@ def _session_contribution(s: AttributedSession) -> dict:
 
 def _model_contribution(m: ModelUsage) -> dict:
     tokens = m.input_tokens + m.output_tokens
-    return dict(cost_usd=m.cost_usd, sessions=0, api_calls=m.api_calls,
+    return dict(cost_usd=m.cost_usd, sessions=0, api_calls=m.api_calls,  # a session can span several models, so per-model session counts are meaningless
                 input_tokens=m.input_tokens, output_tokens=m.output_tokens,
                 cache_read_tokens=m.cache_read_tokens, cache_write_tokens=m.cache_write_tokens,
                 priced_tokens=tokens if m.priced else 0, unpriced_tokens=0 if m.priced else tokens,
-                all_actual=False)
+                all_actual=m.all_actual)
 
 
 def _keys_for(s: AttributedSession, by: str) -> List[Tuple[Dict[str, str], dict]]:
