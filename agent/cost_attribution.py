@@ -501,3 +501,123 @@ def aggregate(sessions: List[AttributedSession], *, by: str, bucket: str = "none
         ordered = ordered[:top]
     return Report(by=by, bucket=bucket, since=since, until=until, key_columns=key_columns,
                   rows=ordered, total=total, double_counted_usd=double_counted)
+
+
+@dataclass
+class RepriceResult:
+    usage_rows_priced: int = 0
+    sessions_updated: int = 0
+    sessions_priced_from_summary: int = 0
+    skipped_unknown: int = 0
+    added_usd: float = 0.0
+    dry_run: bool = False
+
+
+_UNPRICED_USAGE_SQL = """
+SELECT u.rowid AS rid, u.session_id, u.model, u.billing_provider, u.billing_base_url, u.task,
+       u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens, u.reasoning_tokens
+  FROM session_model_usage u JOIN sessions s ON s.id = u.session_id
+ WHERE s.started_at >= ? AND s.started_at < ?
+   AND (u.cost_status IS NULL OR u.cost_status = 'unknown')
+   AND COALESCE(u.actual_cost_usd, 0) = 0
+   AND COALESCE(u.estimated_cost_usd, 0) = 0
+   AND (u.input_tokens + u.output_tokens) > 0
+ ORDER BY u.session_id
+"""
+
+_UNPRICED_LEGACY_SESSIONS_SQL = """
+SELECT s.id, s.model, s.billing_provider, s.billing_base_url,
+       COALESCE(s.input_tokens, 0) AS input_tokens, COALESCE(s.output_tokens, 0) AS output_tokens,
+       COALESCE(s.cache_read_tokens, 0) AS cache_read_tokens, COALESCE(s.cache_write_tokens, 0) AS cache_write_tokens,
+       COALESCE(s.reasoning_tokens, 0) AS reasoning_tokens
+  FROM sessions s
+ WHERE s.started_at >= ? AND s.started_at < ?
+   AND (s.cost_status IS NULL OR s.cost_status = 'unknown')
+   AND COALESCE(s.actual_cost_usd, 0) = 0
+   AND (COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) > 0
+   AND NOT EXISTS (SELECT 1 FROM session_model_usage u WHERE u.session_id = s.id AND u.task = '')
+"""
+
+
+def _estimate(row) -> Optional[tuple]:
+    """(amount, source, pricing_version) for a usage/session row, or None when unpriced."""
+    from agent.usage_pricing import CanonicalUsage, estimate_usage_cost
+    model = row["model"]
+    if not model:
+        return None
+    usage = CanonicalUsage(
+        input_tokens=int(row["input_tokens"] or 0), output_tokens=int(row["output_tokens"] or 0),
+        cache_read_tokens=int(row["cache_read_tokens"] or 0), cache_write_tokens=int(row["cache_write_tokens"] or 0),
+        reasoning_tokens=int(row["reasoning_tokens"] or 0), request_count=1,
+    )
+    result = estimate_usage_cost(model, usage, provider=row["billing_provider"] or None,
+                                 base_url=row["billing_base_url"] or None)
+    if result.status not in PRICED_STATUSES or result.amount_usd is None:
+        return None
+    return float(result.amount_usd), result.source, result.pricing_version
+
+
+def reprice(db, *, since: float, until: float, dry_run: bool = False) -> RepriceResult:
+    """Price stored rows whose cost is unknown, using current overrides/catalog."""
+    result = RepriceResult(dry_run=dry_run)
+    with db._read_ctx() as conn:
+        usage_rows = [dict(r) for r in conn.execute(_UNPRICED_USAGE_SQL, (since, until))]
+        legacy_rows = [dict(r) for r in conn.execute(_UNPRICED_LEGACY_SESSIONS_SQL, (since, until))]
+
+    usage_updates: Dict[str, List[tuple]] = {}   # session_id -> [(rid, amount, source, version, task)]
+    for row in usage_rows:
+        est = _estimate(row)
+        if est is None:
+            result.skipped_unknown += 1
+            continue
+        amount, source, version = est
+        usage_updates.setdefault(row["session_id"], []).append((row["rid"], amount, source, version, row["task"]))
+        result.usage_rows_priced += 1
+        result.added_usd += amount
+
+    legacy_updates: List[tuple] = []             # (session_id, amount, source, version)
+    for row in legacy_rows:
+        est = _estimate(row)
+        if est is None:
+            result.skipped_unknown += 1
+            continue
+        amount, source, version = est
+        legacy_updates.append((row["id"], amount, source, version))
+        result.sessions_priced_from_summary += 1
+        result.added_usd += amount
+
+    result.sessions_updated = len({sid for sid, ups in usage_updates.items() if any(u[4] == "" for u in ups)}) \
+        + len(legacy_updates)
+    if dry_run:
+        return result
+
+    for session_id, updates in usage_updates.items():
+        def _do(conn, session_id=session_id, updates=updates):
+            for rid, amount, source, version, _task in updates:
+                conn.execute(
+                    "UPDATE session_model_usage SET estimated_cost_usd = ?, cost_status = 'estimated', "
+                    "cost_source = ? WHERE rowid = ?",
+                    (amount, source, rid),
+                )
+            main_loop = [u for u in updates if u[4] == ""]
+            if main_loop:
+                conn.execute(
+                    """UPDATE sessions
+                          SET estimated_cost_usd = (SELECT COALESCE(SUM(estimated_cost_usd), 0)
+                                                      FROM session_model_usage
+                                                     WHERE session_id = ? AND task = ''),
+                              cost_status = 'estimated', cost_source = ?, pricing_version = ?
+                        WHERE id = ?""",
+                    (session_id, main_loop[0][2], main_loop[0][3], session_id),
+                )
+        db._execute_write(_do)
+
+    for session_id, amount, source, version in legacy_updates:
+        def _do_legacy(conn, session_id=session_id, amount=amount, source=source, version=version):
+            conn.execute(
+                "UPDATE sessions SET estimated_cost_usd = ?, cost_status = 'estimated', "
+                "cost_source = ?, pricing_version = ? WHERE id = ?",
+                (amount, source, version, session_id),
+            )
+        db._execute_write(_do_legacy)
+    return result

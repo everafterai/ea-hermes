@@ -3,12 +3,13 @@ import time
 
 import pytest
 
+import hermes_cli.config as hermes_config
 from agent.cost_attribution import (
     AttributedSession, ChannelKey, ModelUsage,
     aggregate, attribute_sessions,
     channel_from_origin,
     cron_job_id_from_session_id,
-    is_thread_origin, period_label,
+    is_thread_origin, period_label, reprice,
 )
 from hermes_state import SessionDB
 
@@ -347,3 +348,65 @@ class TestAggregate:
         by_job = aggregate(sessions, by="job", since=0, until=NOW)
         by_model = aggregate(sessions, by="model", since=0, until=NOW)
         assert by_job.total.cost_usd == pytest.approx(by_model.total.cost_usd) == pytest.approx(0.51)
+
+
+@pytest.fixture()
+def priced_mini(monkeypatch):
+    cfg = {"pricing": {"overrides": {"gpt-5.4-mini": {"input": 1.0, "output": 2.0}}}}
+    monkeypatch.setattr(hermes_config, "read_raw_config", lambda: cfg)
+    monkeypatch.setattr(hermes_config, "read_raw_config_readonly", lambda: cfg)
+
+
+def _session_cost_row(db, session_id):
+    return db._conn.execute(
+        "SELECT estimated_cost_usd, cost_status, cost_source FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+
+
+class TestReprice:
+    def test_prices_unknown_rows_and_resums_session(self, db, priced_mini):
+        _seed(db, "u1", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=None, status="unknown", input_tokens=1_000_000, output_tokens=500_000)
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_priced == 1
+        assert result.sessions_updated == 1
+        assert result.added_usd == pytest.approx(2.0)
+        row = _session_cost_row(db, "u1")
+        assert row["estimated_cost_usd"] == pytest.approx(2.0)
+        assert row["cost_status"] == "estimated"
+        assert row["cost_source"] == "user_override"
+        rows = attribute_sessions(db, **WINDOW, job_resolver=lambda _j: None, target_resolver=lambda _j: [])
+        assert rows[0].status == "estimated" and rows[0].cost_usd == pytest.approx(2.0)
+
+    def test_leaves_priced_rows_alone(self, db, priced_mini):
+        _seed(db, "p1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.5, status="estimated")
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_priced == 0 and result.sessions_updated == 0
+        assert _session_cost_row(db, "p1")["estimated_cost_usd"] == pytest.approx(0.5)
+
+    def test_dry_run_writes_nothing(self, db, priced_mini):
+        _seed(db, "u1", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=None, status="unknown", input_tokens=1_000_000, output_tokens=0)
+        result = reprice(db, **WINDOW, dry_run=True)
+        assert result.dry_run and result.usage_rows_priced == 1 and result.added_usd == pytest.approx(1.0)
+        assert _session_cost_row(db, "u1")["cost_status"] == "unknown"
+
+    def test_model_without_pricing_is_skipped(self, db, priced_mini):
+        _seed(db, "u2", started_at=NOW - DAY, chat_id="C1", chat_type="channel", model="mystery-9",
+              cost=None, status="unknown")
+        result = reprice(db, **WINDOW)
+        assert result.skipped_unknown == 1 and result.usage_rows_priced == 0
+        assert _session_cost_row(db, "u2")["cost_status"] == "unknown"
+
+    def test_legacy_session_without_usage_rows(self, db, priced_mini):
+        _seed(db, "legacy", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=None, status="unknown", input_tokens=1_000_000, output_tokens=0)
+        db._conn.execute("DELETE FROM session_model_usage WHERE session_id = 'legacy'")
+        db._conn.commit()
+        result = reprice(db, **WINDOW)
+        assert result.sessions_priced_from_summary == 1
+        assert _session_cost_row(db, "legacy")["estimated_cost_usd"] == pytest.approx(1.0)
+
+    def test_window_respected(self, db, priced_mini):
+        _seed(db, "old", started_at=NOW - 60 * DAY, chat_id="C1", chat_type="channel", cost=None, status="unknown")
+        assert reprice(db, **WINDOW).usage_rows_priced == 0
