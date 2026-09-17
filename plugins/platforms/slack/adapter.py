@@ -3843,8 +3843,17 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception:
             pass
 
-    def _slack_allow_bots(self) -> str:
-        """Return normalized Slack bot-message policy."""
+    def _slack_allow_bots(self, channel_id: str = "") -> str:
+        """Return the bot-message policy in effect for *channel_id*.
+
+        A channel listed in ``slack.allow_bots_channels`` admits app/bot posts
+        as ``"all"`` regardless of the workspace-wide ``allow_bots`` — that is
+        how one automation feed (a HubSpot "meeting booked" alert) can wake the
+        agent without opening every channel to every app. Elsewhere the global
+        policy applies unchanged. Own-message echo suppression is not affected.
+        """
+        if channel_id and channel_id in self._slack_allow_bots_channels():
+            return "all"
         raw = self.config.extra.get("allow_bots", "")
         if not raw:
             raw = os.getenv("SLACK_ALLOW_BOTS", "none")
@@ -3853,6 +3862,25 @@ class SlackAdapter(BasePlatformAdapter):
             logger.warning("[Slack] Unknown allow_bots=%r; treating as 'none'", raw)
             return "none"
         return value
+
+    def _slack_allow_bots_channels(self) -> set:
+        """Channel IDs where app/bot-authored messages are admitted as ``all``.
+
+        Config under ``slack.allow_bots_channels`` (bridged into ``extra``) or
+        ``SLACK_ALLOW_BOTS_CHANNELS``; same shape as ``quiet_channels``. This
+        admits the message at the adapter only — under RBAC the channel still
+        needs a ``channel_roles`` entry for the app poster to be authorized
+        and equipped (see ``authz_mixin._is_user_authorized``).
+        """
+        raw = self.config.extra.get("allow_bots_channels")
+        if raw is None:
+            raw = os.getenv("SLACK_ALLOW_BOTS_CHANNELS", "")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        s = str(raw).strip() if raw is not None else ""
+        if s:
+            return {part.strip() for part in s.split(",") if part.strip()}
+        return set()
 
     def _event_declares_bot_sender(self, event: dict) -> bool:
         """Return True when the Slack event itself identifies a bot sender."""
@@ -6164,7 +6192,7 @@ class SlackAdapter(BasePlatformAdapter):
                 team_id=str(event.get("team") or event.get("team_id") or ""),
             )
         if sender_is_bot:
-            allow_bots = self._slack_allow_bots()
+            allow_bots = self._slack_allow_bots(channel_id)
             if allow_bots == "none":
                 return
             elif allow_bots == "mentions":
@@ -9947,6 +9975,11 @@ def _apply_yaml_config(yaml_cfg: dict, slack_cfg: dict) -> dict | None:
         ).lower()
     if "allow_bots" in slack_cfg and not os.getenv("SLACK_ALLOW_BOTS"):
         os.environ["SLACK_ALLOW_BOTS"] = str(slack_cfg["allow_bots"]).lower()
+    abc = slack_cfg.get("allow_bots_channels")
+    if abc is not None and not os.getenv("SLACK_ALLOW_BOTS_CHANNELS"):
+        if isinstance(abc, list):
+            abc = ",".join(str(v) for v in abc)
+        os.environ["SLACK_ALLOW_BOTS_CHANNELS"] = str(abc)
     frc = slack_cfg.get("free_response_channels")
     if frc is not None and not os.getenv("SLACK_FREE_RESPONSE_CHANNELS"):
         if isinstance(frc, list):

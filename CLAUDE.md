@@ -447,6 +447,38 @@ under `slack.rich_blocks` / `slack.markdown_blocks` it renders inside Block Kit)
 `strip_cron_wrapper` was retargeted to the new shape. Guarded in
 `tests/test_fork_feature_inventory.py`. No design doc.
 
+### Slack per-channel app admission — `slack.allow_bots_channels`
+
+Upstream's `slack.allow_bots` (`none` | `mentions` | `all`) is workspace-wide,
+so waking the agent on one automation feed (HubSpot's "New meeting booked!"
+post in a leads channel) meant opening every channel to every app. The fork
+adds **`slack.allow_bots_channels`** — a comma list / YAML list of channel
+IDs, env `SLACK_ALLOW_BOTS_CHANNELS`, same shape as `quiet_channels` — in
+which app/bot posts are admitted as `all` while the global policy stays
+`none` elsewhere. Two layers agree on the one list:
+
+- **Adapter** ([plugins/platforms/slack/adapter.py](plugins/platforms/slack/adapter.py)):
+  `_slack_allow_bots(channel_id)` returns `all` for a listed channel; the
+  inbound filter passes the event's channel. Bridged YAML→env in
+  `_apply_yaml_config` and into `extra` by [gateway/config.py](gateway/config.py).
+- **Gate** ([gateway/authz_mixin.py](gateway/authz_mixin.py)): the `#4466` bot
+  bypass also admits a Slack app post whose `chat_id` is listed (read off the
+  live adapter's `extra`, env fallback) — necessary because an app post has
+  `user=None` and would otherwise die at the no-user-id guard before RBAC
+  ever saw it. **And under RBAC the bypass no longer outranks roles**: an
+  admitted app poster is authorized only if `channel_roles` names its channel
+  (`policy.is_authorized(None, chat_id)`), which is also what equips it — a
+  grant-less poster resolves to zero toolsets. Previously `SLACK_ALLOW_BOTS=all`
+  authorized any app anywhere ahead of RBAC. Without RBAC the legacy
+  behaviour is unchanged.
+
+Wiring an app feed therefore takes four keys on the same channel:
+`allow_bots_channels` (admit), `free_response_channels` (wake without a
+mention), `quiet_channels` + `relevance_gate_purpose` (judge each post),
+`channel_roles` (authorize + equip, least privilege — anyone who can post
+there gets that role). Tests:
+[tests/gateway/test_slack_allow_bots_channels.py](tests/gateway/test_slack_allow_bots_channels.py).
+
 ### Slack quiet channels + `slack_react`
 
 For low-noise "hidden assistant" channels. Config under the top-level `slack:`

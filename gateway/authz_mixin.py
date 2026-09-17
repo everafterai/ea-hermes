@@ -124,6 +124,28 @@ class GatewayAuthorizationMixin:
         adapters = getattr(self, "adapters", None) or {}
         return adapters.get(platform)
 
+    def _slack_allow_bots_channels(self, source) -> set:
+        """Channel IDs where the Slack adapter admits app/bot posts.
+
+        Read off the live adapter's ``config.extra`` (``slack.allow_bots_channels``
+        is bridged there by ``gateway/config.py``) with the env var as fallback,
+        so the gate and the adapter's inbound filter agree on one list.
+        """
+        raw = None
+        try:
+            adapter = self._adapter_for_source(source)
+            if adapter is not None:
+                extra = getattr(getattr(adapter, "config", None), "extra", None) or {}
+                raw = extra.get("allow_bots_channels")
+        except Exception:
+            raw = None
+        if raw is None:
+            raw = os.getenv("SLACK_ALLOW_BOTS_CHANNELS", "")
+        if isinstance(raw, (list, tuple, set)):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        text = str(raw).strip() if raw is not None else ""
+        return {part.strip() for part in text.split(",") if part.strip()} if text else set()
+
     def _adapter_for_source(self, source: Optional[SessionSource]):
         """Resolve the live adapter for an inbound ``SessionSource``."""
         if source is None:
@@ -503,7 +525,28 @@ class GatewayAuthorizationMixin:
         }
         if getattr(source, "is_bot", False):
             allow_bots_var = platform_allow_bots_map.get(source.platform)
-            if allow_bots_var and _platform_gate_env(allow_bots_var, "none").lower().strip() in {"mentions", "all"}:
+            bot_admitted = bool(
+                allow_bots_var
+                and _platform_gate_env(allow_bots_var, "none").lower().strip() in {"mentions", "all"}
+            )
+            # Fork: a Slack channel listed in ``slack.allow_bots_channels``
+            # admits app posts without the workspace-wide switch (the adapter
+            # applies the same list to decide whether to process the event).
+            if not bot_admitted and source.platform == Platform.SLACK:
+                bot_admitted = source.chat_id in self._slack_allow_bots_channels(source)
+            if bot_admitted:
+                # Fork: RBAC is the sole authorization source when active. An
+                # admitted app poster (user_id=None) is authorized only through
+                # ``channel_roles`` — the legacy bypass must not outrank roles,
+                # and the no-user-id guard below must not reject it before the
+                # roles are consulted.
+                try:
+                    from gateway.tool_access import policy_for_source, _load_config_cached
+                    _bot_policy = policy_for_source(_load_config_cached(), source)
+                    if _bot_policy.enabled:
+                        return _bot_policy.is_authorized(user_id, getattr(source, "chat_id", None))
+                except Exception as _rbac_err:
+                    logger.debug("tool_access auth-gate error (bot sender): %s", _rbac_err)
                 return True
 
         if not user_id:

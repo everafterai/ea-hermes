@@ -1730,6 +1730,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
                 if "quiet_channels" in platform_cfg:
                     bridged["quiet_channels"] = platform_cfg["quiet_channels"]
+                if "allow_bots_channels" in platform_cfg:
+                    bridged["allow_bots_channels"] = platform_cfg["allow_bots_channels"]
                 if "mention_patterns" in platform_cfg:
                     bridged["mention_patterns"] = platform_cfg["mention_patterns"]
                 if "exclusive_bot_mentions" in platform_cfg:
