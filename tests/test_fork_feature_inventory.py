@@ -46,6 +46,12 @@ WIRING = [
     ("webflow_asset_upload", "tools/webflow_asset_tool.py", "is_protected_data_path", "credential-read guard"),
     ("ownership tool", "tools/ownership_tool.py", 'toolset="ownership"', "floor toolset"),
     ("pdf_pages", "tools/pdf_pages_tool.py", 'toolset="pdf_pages"', "own toolset, fixed argv"),
+    # ── Cost attribution ──────────────────────────────────────────────────
+    ("hermes costs", "agent/cost_attribution.py", "def attribute_sessions", "lineage query"),
+    ("hermes costs", "agent/cost_attribution.py", "def reprice", "reprice pass"),
+    ("hermes costs", "hermes_cli/subcommands/costs.py", "def build_costs_parser", "parser"),
+    ("hermes costs", "hermes_cli/main.py", "build_costs_parser(subparsers, cmd_costs=cmd_costs)", "registered in main"),
+    ("pricing overrides", "agent/usage_pricing.py", "pricing_override_for(model_name, route)", "override consulted first"),
     # ── Drive per-user access check ───────────────────────────────────────
     ("Drive access check", "plugins/google_drive_sa/access.py", "def require_access", "gate"),
     ("Drive access check", "plugins/google_drive_sa/access.py", "def filter_listing", "listing filter"),

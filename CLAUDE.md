@@ -447,6 +447,32 @@ under `slack.rich_blocks` / `slack.markdown_blocks` it renders inside Block Kit)
 `strip_cron_wrapper` was retargeted to the new shape. Guarded in
 `tests/test_fork_feature_inventory.py`. No design doc.
 
+### Cost attribution — `hermes costs` + `pricing.overrides`
+
+Upstream records tokens and cost per session (`sessions`, `session_model_usage`) but
+only reports by model/platform. The fork adds
+[agent/cost_attribution.py](agent/cost_attribution.py), a read-side query layer that
+walks every session to its `parent_session_id` root and derives two keys at query
+time — the **cron job** from the `cron_<job>_<ts>` root id, and the **channel** from
+`origin_json` (`parent_chat_id` else `chat_id`; DMs key as `dm:<user>`); a cron job
+delivering to a channel carries both, via `cron.scheduler._resolve_delivery_targets`.
+No schema change. `hermes costs --days 30 --by channel|job|both|model|user
+--bucket day|week|month [--json|--csv]`
+([hermes_cli/subcommands/costs.py](hermes_cli/subcommands/costs.py)). The `channel`
+view double-counts multi-target jobs on purpose (footer shows the overlap); `job` and
+`both` partition true spend. Every row carries a status (`actual`/`estimated`/
+`partial`/`unpriced`) plus `unpriced_tokens`, so a missing price is never a silent $0.
+**The VM's `gpt-5.4-mini` is not in upstream's pricing catalog**, so set per-million
+rates under a top-level `pricing.overrides:` block (`{input, output, cache_read,
+cache_write}`); `get_pricing_entry` consults it before the catalog (`cost_source =
+user_override`). `hermes costs --reprice [--dry-run]` prices stored rows whose
+`cost_status` is unknown; already-priced rows are never rewritten. The report opens
+the store `SessionDB(read_only=True)` (avoids writer-lock contention with the live
+gateway) and never migrates it; a store not write-opened since a past schema
+migration prints a hint naming `hermes costs --reprice --dry-run` (a write-open that
+migrates but changes no cost) and exits 1. Design:
+[docs/superpowers/specs/2026-09-17-cost-attribution-design.md](docs/superpowers/specs/2026-09-17-cost-attribution-design.md).
+
 ### Slack quiet channels + `slack_react`
 
 For low-noise "hidden assistant" channels. Config under the top-level `slack:`

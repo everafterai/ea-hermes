@@ -91,9 +91,13 @@ attribute to their root. The root supplies both keys:
   "what does this channel consume", not a partition. The `both` view keys
   each root once, on `(job, channel)`, where a multi-target job's channel
   column lists all its targets joined by `+`, so `both` *is* a partition.
-  Totals in the `job` and `both` views always reconcile with
-  `SessionDB.usage_totals`; the `channel` view carries a footer noting how
-  much was counted more than once, or nothing when it is zero.
+  Totals in the `job` and `both` views equal the sum of
+  `COALESCE(actual_cost_usd, estimated_cost_usd)` over every session row
+  (roots and descendants) whose root started in the window, plus the cost of
+  their auxiliary usage rows — a superset of `SessionDB.usage_totals`, which
+  ignores both child sessions and auxiliary usage rows. The `channel` view
+  carries a footer noting how much was counted more than once, or nothing
+  when it is zero.
 - **Unattributed** — a root with neither key (CLI sessions, sub-agents whose
   root was deleted) appears as one `(unattributed)` row so totals reconcile.
 
@@ -103,7 +107,8 @@ spawned from a channel session is that channel's cost.
 ## Cost and status
 
 Per row: `cost = COALESCE(actual_cost_usd, estimated_cost_usd)` summed over
-the root and all its descendants, the same precedence `usage_totals` uses.
+the root and all its descendants, plus their auxiliary usage rows, the same
+precedence `usage_totals` uses.
 Every row also carries:
 
 - `status` — `actual` when every contributing session has `cost_status =
@@ -145,9 +150,11 @@ pricing_version="user-override")`. Match is on the model name after
 `resolve_billing_route` normalisation, exact first, then the bare name with
 any `vendor/` prefix stripped. Rates are parsed with `Decimal` from the YAML
 value; a malformed entry logs once and is ignored (fail-open to the catalog,
-never a crash in the request path). The block is read through
-`hermes_cli.config.read_raw_config` and cached per process; the gateway
-picks up edits on restart, matching how every other fork block behaves.
+never a crash in the request path). The block is read through the read-only
+fast path `read_raw_config_readonly` (falling back to `read_raw_config` when
+unavailable), and the parsed entries are memoized on the raw `overrides`
+mapping, so an edited config.yaml is picked up automatically. Non-finite
+rates (NaN/Infinity) are rejected like any other malformed entry.
 
 New sessions are priced at write time as today. History is fixed by:
 
@@ -185,7 +192,11 @@ a leading period column and sorts by period then cost. `--json` emits
 
 Errors (missing DB, bad dates) print one line and exit 1. A store with no
 priced sessions still prints the table (all `unpriced`) plus a hint to set
-`pricing.overrides` and run `--reprice`.
+`pricing.overrides` and run `--reprice`. The report opens the store
+`SessionDB(read_only=True)` (avoids writer-lock contention with the live
+gateway) and never migrates it; a store not write-opened since a past schema
+migration prints a hint naming `hermes costs --reprice --dry-run` (a
+write-open that migrates but changes no cost) and exits 1.
 
 ## Files
 
@@ -224,7 +235,7 @@ Unit tests on a temp `SessionDB` (the autouse fixture already redirects
 - cron job delivering to a channel appears under `job`, `channel` and as
   one `(job, channel)` row under `both`; a job with two targets is
   double-counted in `channel` and the footer reports the amount; `job` and
-  `both` totals equal `usage_totals`.
+  `both` totals equal the direct SUM over all rows in the window.
 - status: all-actual, all-estimated, mixed → `partial` with the right
   `unpriced_tokens`, all-unknown → `unpriced`.
 - buckets: day/week/month boundaries in UTC; `--since/--until` inclusive.
