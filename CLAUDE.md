@@ -434,6 +434,19 @@ edit) escalate to `terminal`/host-shell. Design:
   `jobs.json`-edit path; this closes the toolset-driven escalation and makes the
   residual visible.
 
+### Cron delivery format — [cron/scheduler.py](cron/scheduler.py) `_deliver_result`
+
+Upstream wraps every delivered cron response in `Cronjob Response: <name>` /
+`(job_id: …)` / a dashed divider / the body / a "To stop or manage this job…"
+footer. In an automation-feed channel that is five lines of noise around each
+item, so the fork's wrapper is **`**<name>**`, a blank line, the response —
+nothing else**. The bold is standard markdown so each platform's outbound
+formatter renders it natively (the Slack lane converts it to mrkdwn `*name*`;
+under `slack.rich_blocks` / `slack.markdown_blocks` it renders inside Block Kit). The
+`cron.wrap_response: false` knob still yields the raw response. The Yuanbao
+`strip_cron_wrapper` was retargeted to the new shape. Guarded in
+`tests/test_fork_feature_inventory.py`. No design doc.
+
 ### Slack quiet channels + `slack_react`
 
 For low-noise "hidden assistant" channels. Config under the top-level `slack:`

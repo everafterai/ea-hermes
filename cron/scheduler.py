@@ -3180,9 +3180,19 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     from tools.send_message_tool import _send_to_platform
     from gateway.config import load_gateway_config, Platform
 
-    # Optionally wrap the content with a header/footer so the user knows this
-    # is a cron delivery.  Wrapping is on by default; set cron.wrap_response: false
-    # in config.yaml for clean output.
+    # Optionally prefix the content with the job's name so the user knows
+    # which automation posted.  Wrapping is on by default; set
+    # cron.wrap_response: false in config.yaml for the raw response.
+    #
+    # Fork format (replaces upstream's "Cronjob Response: <name> / (job_id: …)
+    # / ------------- / <body> / To stop or manage this job…" wrapper): a
+    # bold task name, a blank line, the response — nothing else.  The bold is
+    # standard markdown so each platform's outbound formatter renders it
+    # natively (the Slack lane turns ``**x**`` into mrkdwn ``*x*``, and under
+    # ``rich_blocks``/``markdown_blocks`` it renders as bold inside Block Kit).
+    # The job id and the "stop reminder" footer are gone on purpose: readers
+    # of an automation-feed channel never act on either, and every job is
+    # manageable by name from chat.
     wrap_response = True
     user_cfg = None
     try:
@@ -3193,14 +3203,7 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
 
     if wrap_response:
         task_name = job.get("name", job["id"])
-        job_id = job.get("id", "")
-        delivery_content = (
-            f"Cronjob Response: {task_name}\n"
-            f"(job_id: {job_id})\n"
-            f"-------------\n\n"
-            f"{content}\n\n"
-            f"To stop or manage this job, send me a new message (e.g. \"stop reminder {task_name}\")."
-        )
+        delivery_content = f"**{task_name}**\n\n{content}"
     else:
         delivery_content = content
 

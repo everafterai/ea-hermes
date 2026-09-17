@@ -444,16 +444,15 @@ This applies only to cron deliveries. `TELEGRAM_HOME_CHANNEL_THREAD_ID` (used el
 
 ### Response wrapping
 
-By default, delivered cron output is wrapped with a header and footer so the recipient knows it came from a scheduled task:
+By default, delivered cron output is prefixed with the job's name in bold so the recipient knows which automation posted:
 
 ```
-Cronjob Response: Morning feeds
--------------
+**Morning feeds**
 
 <agent output here>
-
-Note: The agent cannot see this message, and therefore cannot respond to it.
 ```
+
+The bold is standard markdown, so each platform renders it natively (Slack shows it as `*Morning feeds*` mrkdwn, or as bold inside Block Kit when `rich_blocks` / `markdown_blocks` is enabled under `slack:`).
 
 To deliver the raw agent output without the wrapper, set `cron.wrap_response` to `false`:
 

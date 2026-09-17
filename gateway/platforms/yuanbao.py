@@ -4760,23 +4760,17 @@ class MessageSender:
 
     @staticmethod
     def strip_cron_wrapper(content: str) -> str:
-        """Strip scheduler cron header/footer wrapper for cleaner Yuanbao output."""
-        if not content.startswith("Cronjob Response: "):
-            return content
+        """Strip the scheduler's cron wrapper for cleaner Yuanbao output.
 
-        divider = "\n-------------\n\n"
-        footer_prefix = '\n\nTo stop or manage this job, send me a new message (e.g. "stop reminder '
-        divider_pos = content.find(divider)
-        footer_pos = content.rfind(footer_prefix)
-        if divider_pos < 0 or footer_pos < 0 or footer_pos <= divider_pos:
+        The fork's wrapper (``cron/scheduler.py::_deliver_result``) is a
+        single bold task-name line, a blank line, then the response.
+        """
+        if not content.startswith("**"):
             return content
-
-        header = content[:divider_pos]
-        if "\n(job_id: " not in header:
+        header_end = content.find("**\n\n", 2)
+        if header_end < 0:
             return content
-
-        body_start = divider_pos + len(divider)
-        body = content[body_start:footer_pos].strip()
+        body = content[header_end + len("**\n\n"):].strip()
         return body or content
 
     # -- Cleanup on disconnect ---------------------------------------------

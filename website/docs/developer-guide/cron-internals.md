@@ -266,9 +266,7 @@ For **Telegram topics**, use `telegram:<chat_id>:<thread_id>` (e.g., `telegram:-
 
 ### Response Wrapping
 
-By default (`cron.wrap_response: true`), cron deliveries are wrapped with:
-- A header identifying the cron job name and task
-- A footer noting the agent cannot see the delivered message in conversation
+By default (`cron.wrap_response: true`), cron deliveries are prefixed with the job's name in markdown bold (`**<name>**`), a blank line, then the response — no job id and no footer. Each platform's outbound formatter renders the bold natively.
 
 The `[SILENT]` prefix in a cron response suppresses delivery entirely — useful for jobs that only need to write to files or perform side effects.
 

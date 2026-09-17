@@ -354,7 +354,7 @@ class TestDeliverResultWrapping:
         )
         return media_file.resolve()
 
-    def test_delivery_wraps_content_with_header_and_footer(self):
+    def test_delivery_wraps_content_with_bold_task_name(self):
         """Delivered content should include task name header and agent-invisible note."""
         from gateway.config import Platform
 
@@ -375,11 +375,14 @@ class TestDeliverResultWrapping:
 
         send_mock.assert_called_once()
         sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
-        assert "Cronjob Response: daily-report" in sent_content
-        assert "(job_id: test-job)" in sent_content
-        assert "-------------" in sent_content
-        assert "Here is today's summary." in sent_content
-        assert "To stop or manage this job" in sent_content
+        # Fork format: a bold task name, a blank line, the response — and
+        # nothing else. Markdown bold so each platform's outbound formatter
+        # renders it natively (Slack mrkdwn turns ``**x**`` into ``*x*``).
+        assert sent_content == "**daily-report**\n\nHere is today's summary."
+        assert "Cronjob Response" not in sent_content
+        assert "job_id" not in sent_content
+        assert "-------------" not in sent_content
+        assert "To stop or manage this job" not in sent_content
 
 
     def test_relay_fronted_home_uses_relay_config_and_live_adapter(self, monkeypatch, tmp_path):

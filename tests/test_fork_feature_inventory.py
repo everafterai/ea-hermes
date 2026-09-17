@@ -102,6 +102,7 @@ WIRING = [
     ("Channel models", "gateway/run.py", "def _apply_channel_model_override", "per-channel"),
     ("Skill models", "gateway/run.py", "_apply_skill_model_override", "per-skill"),
     ("Cron skill models", "cron/scheduler.py", "def _effective_job_model_fields", "job/skill precedence"),
+    ("Cron delivery format", "cron/scheduler.py", 'delivery_content = f"**{task_name}**\\n\\n{content}"', "bold-name wrapper, no job_id/footer"),
     ("Delegation models", "tools/delegate_tool.py", "_override_runtime_cache", "per-task override"),
     # ── Per-tool approval gate ────────────────────────────────────────────
     ("Approval gate", "tools/approval.py", "def tool_requires_approval", "require_for_tools glob"),

@@ -2754,8 +2754,8 @@ DEFAULT_CONFIG = {
             # Empty → the fire endpoint refuses all tokens (no unsigned decode).
             "nas_jwks_url": "",
         },
-        # Wrap delivered cron responses with a header (task name) and footer
-        # ("The agent cannot see this message").  Set to false for clean output.
+        # Prefix delivered cron responses with the job's name in bold
+        # ("**<name>**\n\n<response>").  Set to false for the raw response.
         "wrap_response": True,
         # Make cron deliveries CONTINUABLE: a user can reply to a cron brief
         # and the agent has it in context (no "what is Task #2?" amnesia).
