@@ -71,6 +71,11 @@ class TestWindow:
         with pytest.raises(ValueError):
             resolve_window(_args("--since", "yesterday"), now=NOW)
 
+    def test_until_without_since_counts_days_back_from_until(self):
+        since, until = resolve_window(_args("--days", "7", "--until", "2025-09-30"), now=NOW)
+        assert until == 1_759_276_800.0
+        assert since == until - 7 * DAY
+
 
 class TestFormatters:
     def _report(self, by="both"):
@@ -143,3 +148,40 @@ class TestRunCosts:
     def test_reprice_dry_run(self, db, capsys):
         assert run_costs(_args("--reprice", "--dry-run"), db) == 0
         assert "dry run" in capsys.readouterr().out.lower()
+
+
+class TestSchemaError:
+    @pytest.fixture()
+    def db(self, tmp_path):
+        session_db = SessionDB(db_path=tmp_path / "costs.db")
+        session_db.create_session(session_id="s1", source="slack", model="gpt-5.4-mini", chat_id="C1",
+                                  chat_type="channel", display_name="general")
+        session_db.update_token_counts("s1", input_tokens=10, output_tokens=5, model="gpt-5.4-mini",
+                                       billing_provider="openai", estimated_cost_usd=0.25,
+                                       cost_status="estimated", cost_source="official_docs_snapshot", api_call_count=1)
+        session_db.append_message("s1", role="user", content="hi")
+        yield session_db
+        session_db.close()
+
+    def test_stale_schema_prints_hint_and_exits_1(self, db, capsys, monkeypatch):
+        import sqlite3
+        from hermes_cli.subcommands import costs as costs_mod
+
+        def boom(*_a, **_k):
+            raise sqlite3.OperationalError("no such column: origin_json")
+
+        monkeypatch.setattr(costs_mod, "attribute_sessions", boom)
+        assert run_costs(_args(), db) == 1
+        out = capsys.readouterr().out
+        assert "out of date" in out and "--reprice --dry-run" in out and "origin_json" in out
+
+    def test_other_operational_errors_propagate(self, db, monkeypatch):
+        import sqlite3
+        from hermes_cli.subcommands import costs as costs_mod
+
+        def boom(*_a, **_k):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(costs_mod, "attribute_sessions", boom)
+        with pytest.raises(sqlite3.OperationalError):
+            run_costs(_args(), db)

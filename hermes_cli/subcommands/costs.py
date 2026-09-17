@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -20,6 +21,15 @@ from agent.usage_pricing import format_cost_label
 DAY = 86400.0
 _HINT = ("Hint: models missing from the pricing catalog show as unpriced. Add per-million rates under\n"
          "      pricing.overrides in config.yaml, then run `hermes costs --reprice` to price stored history.")
+_SCHEMA_HINT = ("Error: the session store's schema is out of date ({err}).\n"
+                "The report opens the store read-only and never migrates it. Open it once with a write\n"
+                "command to migrate — `hermes costs --reprice --dry-run` does that without changing any\n"
+                "cost — then run the report again.")
+
+
+def _is_schema_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and ("no such column" in msg or "no such table" in msg)
 
 
 def build_costs_parser(subparsers, *, cmd_costs: Callable) -> None:
@@ -170,8 +180,14 @@ def run_costs(args, db) -> int:
             print(f"Skipped {result.skipped_unknown} rows whose model still has no pricing entry.")
         return 0
 
-    sessions = attribute_sessions(db, since=since, until=until, platform=getattr(args, "platform", None))
-    report = aggregate(sessions, by=args.by, bucket=args.bucket, since=since, until=until, top=args.top)
+    try:
+        sessions = attribute_sessions(db, since=since, until=until, platform=getattr(args, "platform", None))
+        report = aggregate(sessions, by=args.by, bucket=args.bucket, since=since, until=until, top=args.top)
+    except sqlite3.OperationalError as exc:
+        if not _is_schema_error(exc):
+            raise
+        print(_SCHEMA_HINT.format(err=exc))
+        return 1
     if args.json:
         print(format_json(report))
         return 0
