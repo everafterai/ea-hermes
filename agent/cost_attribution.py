@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -337,3 +338,143 @@ def attribute_sessions(
                   if (r.source or "").lower() == wanted or any(c.platform.lower() == wanted for c in r.channels)]
     result.sort(key=lambda r: (r.started_at, r.root_id))
     return result
+
+
+VIEWS = ("channel", "job", "both", "model", "user")
+BUCKETS = ("none", "day", "week", "month")
+NONE_LABEL = "(none)"
+_KEY_COLUMNS = {
+    "channel": ["channel"], "job": ["job"], "both": ["job", "channel"],
+    "model": ["model", "provider"], "user": ["user"],
+}
+
+
+def period_label(started_at: float, bucket: str) -> Optional[str]:
+    if bucket == "none":
+        return None
+    dt = datetime.fromtimestamp(started_at, tz=timezone.utc)
+    if bucket == "day":
+        return dt.strftime("%Y-%m-%d")
+    if bucket == "week":
+        iso_year, iso_week, _ = dt.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    if bucket == "month":
+        return dt.strftime("%Y-%m")
+    raise ValueError(f"unknown bucket {bucket!r}; expected one of {BUCKETS}")
+
+
+@dataclass
+class ReportRow:
+    period: Optional[str]
+    keys: Dict[str, str]
+    cost_usd: float = 0.0
+    sessions: int = 0
+    api_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    priced_tokens: int = 0
+    unpriced_tokens: int = 0
+    all_actual: bool = True
+
+    @property
+    def status(self) -> str:
+        return status_for(priced_tokens=self.priced_tokens, unpriced_tokens=self.unpriced_tokens,
+                          all_actual=self.all_actual)
+
+    def add(self, *, cost_usd: float, sessions: int, api_calls: int, input_tokens: int,
+            output_tokens: int, cache_read_tokens: int, cache_write_tokens: int,
+            priced_tokens: int, unpriced_tokens: int, all_actual: bool) -> None:
+        self.cost_usd += cost_usd
+        self.sessions += sessions
+        self.api_calls += api_calls
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.cache_read_tokens += cache_read_tokens
+        self.cache_write_tokens += cache_write_tokens
+        self.priced_tokens += priced_tokens
+        self.unpriced_tokens += unpriced_tokens
+        if priced_tokens and not all_actual:
+            self.all_actual = False
+
+
+@dataclass
+class Report:
+    by: str
+    bucket: str
+    since: float
+    until: float
+    key_columns: List[str]
+    rows: List[ReportRow]
+    total: ReportRow
+    double_counted_usd: float = 0.0
+
+
+def _session_contribution(s: AttributedSession) -> dict:
+    return dict(cost_usd=s.cost_usd, sessions=s.sessions, api_calls=s.api_calls,
+                input_tokens=s.input_tokens, output_tokens=s.output_tokens,
+                cache_read_tokens=s.cache_read_tokens, cache_write_tokens=s.cache_write_tokens,
+                priced_tokens=s.priced_tokens, unpriced_tokens=s.unpriced_tokens, all_actual=s.all_actual)
+
+
+def _model_contribution(m: ModelUsage) -> dict:
+    tokens = m.input_tokens + m.output_tokens
+    return dict(cost_usd=m.cost_usd, sessions=0, api_calls=m.api_calls,
+                input_tokens=m.input_tokens, output_tokens=m.output_tokens,
+                cache_read_tokens=m.cache_read_tokens, cache_write_tokens=m.cache_write_tokens,
+                priced_tokens=tokens if m.priced else 0, unpriced_tokens=0 if m.priced else tokens,
+                all_actual=False)
+
+
+def _keys_for(s: AttributedSession, by: str) -> List[Tuple[Dict[str, str], dict]]:
+    """Return [(keys, contribution)] — several entries only for the channel view."""
+    job = s.job_name or NONE_LABEL
+    if by == "job":
+        return [({"job": job}, _session_contribution(s))]
+    if by == "user":
+        return [({"user": s.user_id or NONE_LABEL}, _session_contribution(s))]
+    if by == "both":
+        channel = "+".join(c.label for c in s.channels) or NONE_LABEL
+        return [({"job": job, "channel": channel}, _session_contribution(s))]
+    if by == "channel":
+        labels = [c.label for c in s.channels] or [NONE_LABEL]
+        return [({"channel": label}, _session_contribution(s)) for label in labels]
+    if by == "model":
+        return [({"model": m.model or NONE_LABEL, "provider": m.provider or NONE_LABEL}, _model_contribution(m))
+                for m in s.models.values()]
+    raise ValueError(f"unknown view {by!r}; expected one of {VIEWS}")
+
+
+def aggregate(sessions: List[AttributedSession], *, by: str, bucket: str = "none",
+              since: float, until: float, top: int = 50) -> Report:
+    if by not in VIEWS:
+        raise ValueError(f"unknown view {by!r}; expected one of {VIEWS}")
+    if bucket not in BUCKETS:
+        raise ValueError(f"unknown bucket {bucket!r}; expected one of {BUCKETS}")
+    key_columns = _KEY_COLUMNS[by]
+    rows: Dict[Tuple[Optional[str], Tuple[str, ...]], ReportRow] = {}
+    total = ReportRow(period=None, keys={})
+    double_counted = 0.0
+    for s in sessions:
+        period = period_label(s.started_at, bucket)
+        entries = _keys_for(s, by)
+        for keys, contribution in entries:
+            slot = (period, tuple(keys[c] for c in key_columns))
+            row = rows.get(slot)
+            if row is None:
+                row = rows[slot] = ReportRow(period=period, keys=keys)
+            row.add(**contribution)
+        if by == "model":
+            for _, contribution in entries:
+                total.add(**contribution)
+        else:
+            total.add(**_session_contribution(s))
+            if by == "channel" and len(entries) > 1:
+                double_counted += s.cost_usd * (len(entries) - 1)
+    ordered = sorted(rows.values(),
+                     key=lambda r: (r.period or "", -r.cost_usd, tuple(r.keys[c] for c in key_columns)))
+    if top and top > 0:
+        ordered = ordered[:top]
+    return Report(by=by, bucket=bucket, since=since, until=until, key_columns=key_columns,
+                  rows=ordered, total=total, double_counted_usd=double_counted)

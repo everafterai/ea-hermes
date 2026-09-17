@@ -4,11 +4,11 @@ import time
 import pytest
 
 from agent.cost_attribution import (
-    ChannelKey,
-    attribute_sessions,
+    AttributedSession, ChannelKey, ModelUsage,
+    aggregate, attribute_sessions,
     channel_from_origin,
     cron_job_id_from_session_id,
-    is_thread_origin,
+    is_thread_origin, period_label,
 )
 from hermes_state import SessionDB
 
@@ -236,3 +236,92 @@ class TestAttributeSessions:
         models = rows[0].models
         assert models[("gpt-5.4-mini", "openai")].cost_usd == pytest.approx(0.5)
         assert models[("gpt-4o", "openai")].cost_usd == pytest.approx(0.01)
+
+
+def _row(root_id, *, cost, job=None, channels=(), started_at=NOW - DAY, user="U1",
+         unpriced=0, all_actual=False, tokens=1000, models=None):
+    return AttributedSession(
+        root_id=root_id, source="slack", started_at=started_at, user_id=user,
+        job_id=job, job_name=(f"Job {job}" if job else None),
+        channels=[ChannelKey("slack", c, c) for c in channels],
+        sessions=1, api_calls=1, input_tokens=tokens, output_tokens=0,
+        cost_usd=cost, unpriced_tokens=unpriced, all_actual=all_actual,
+        models=models or {},
+    )
+
+
+class TestPeriodLabel:
+    def test_labels(self):
+        ts = 1_758_067_200.0  # 2025-09-17 00:00:00 UTC (a Wednesday)
+        assert period_label(ts, "day") == "2025-09-17"
+        assert period_label(ts, "week") == "2025-W38"
+        assert period_label(ts, "month") == "2025-09"
+        assert period_label(ts, "none") is None
+
+
+class TestAggregate:
+    def test_both_is_a_partition_and_multi_target_joins_channels(self):
+        rows = [
+            _row("a", cost=1.0, job="j1", channels=("C1", "C2")),
+            _row("b", cost=0.5, channels=("C1",)),
+            _row("c", cost=0.25),
+        ]
+        rep = aggregate(rows, by="both", since=0, until=NOW)
+        assert rep.key_columns == ["job", "channel"]
+        keyed = {(r.keys["job"], r.keys["channel"]): r.cost_usd for r in rep.rows}
+        assert keyed == {("Job j1", "slack:C1+slack:C2"): 1.0, ("(none)", "slack:C1"): 0.5,
+                         ("(none)", "(none)"): 0.25}
+        assert rep.total.cost_usd == pytest.approx(1.75)
+        assert rep.double_counted_usd == 0
+
+    def test_channel_view_double_counts_and_reports_it(self):
+        rows = [_row("a", cost=1.0, job="j1", channels=("C1", "C2")), _row("b", cost=0.5, channels=("C1",))]
+        rep = aggregate(rows, by="channel", since=0, until=NOW)
+        keyed = {r.keys["channel"]: r.cost_usd for r in rep.rows}
+        assert keyed == {"slack:C1": 1.5, "slack:C2": 1.0}
+        assert rep.total.cost_usd == pytest.approx(1.5)      # true spend, not the sum of rows
+        assert rep.double_counted_usd == pytest.approx(1.0)
+
+    def test_job_view_and_none_bucket(self):
+        rows = [_row("a", cost=1.0, job="j1"), _row("b", cost=2.0, job="j1"), _row("c", cost=0.5)]
+        rep = aggregate(rows, by="job", since=0, until=NOW)
+        assert [(r.keys["job"], r.cost_usd) for r in rep.rows] == [("Job j1", 3.0), ("(none)", 0.5)]
+        assert rep.rows[0].sessions == 2
+        assert all(r.period is None for r in rep.rows)
+
+    def test_day_bucket_splits_and_orders(self):
+        d1 = 1_758_067_200.0
+        rows = [_row("a", cost=1.0, job="j1", started_at=d1), _row("b", cost=2.0, job="j1", started_at=d1 + DAY)]
+        rep = aggregate(rows, by="job", bucket="day", since=0, until=NOW)
+        assert [(r.period, r.cost_usd) for r in rep.rows] == [("2025-09-17", 1.0), ("2025-09-18", 2.0)]
+
+    def test_status_merges_across_roots(self):
+        rows = [_row("a", cost=1.0, all_actual=True), _row("b", cost=0.0, unpriced=1000)]
+        rep = aggregate(rows, by="user", since=0, until=NOW)
+        assert rep.rows[0].keys["user"] == "U1"
+        assert rep.rows[0].status == "partial"
+        assert rep.rows[0].unpriced_tokens == 1000
+        assert rep.total.status == "partial"
+
+    def test_all_actual_status(self):
+        rep = aggregate([_row("a", cost=1.0, all_actual=True)], by="user", since=0, until=NOW)
+        assert rep.rows[0].status == "actual"
+
+    def test_model_view_reads_model_usage(self):
+        models = {("gpt-5.4-mini", "openai"): ModelUsage("gpt-5.4-mini", "openai", api_calls=2,
+                                                          input_tokens=100, cost_usd=0.4),
+                  ("gpt-4o", "openai"): ModelUsage("gpt-4o", "openai", api_calls=1, input_tokens=10, cost_usd=0.1)}
+        rep = aggregate([_row("a", cost=0.5, models=models)], by="model", since=0, until=NOW)
+        assert rep.key_columns == ["model", "provider"]
+        assert [(r.keys["model"], r.cost_usd) for r in rep.rows] == [("gpt-5.4-mini", 0.4), ("gpt-4o", 0.1)]
+        assert rep.rows[0].api_calls == 2
+
+    def test_top_limits_rows_but_not_total(self):
+        rows = [_row(f"r{i}", cost=float(i), channels=(f"C{i}",)) for i in range(1, 6)]
+        rep = aggregate(rows, by="channel", since=0, until=NOW, top=2)
+        assert [r.keys["channel"] for r in rep.rows] == ["slack:C5", "slack:C4"]
+        assert rep.total.cost_usd == pytest.approx(15.0)
+
+    def test_unknown_view_raises(self):
+        with pytest.raises(ValueError):
+            aggregate([], by="nope", since=0, until=NOW)
