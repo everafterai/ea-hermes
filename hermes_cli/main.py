@@ -12934,12 +12934,22 @@ def cmd_insights(args):
 
 def cmd_costs(args):
     """Fork: spend attributed to Slack channels and cron jobs (agent/cost_attribution.py)."""
+    import sqlite3
+
     db = None
     try:
         from hermes_state import SessionDB
-        from hermes_cli.subcommands.costs import run_costs
+        from hermes_cli.subcommands.costs import run_costs, store_error_message
 
-        db = SessionDB(read_only=not getattr(args, "reprice", False))
+        try:
+            db = SessionDB(read_only=not getattr(args, "reprice", False))
+        except sqlite3.OperationalError as e:
+            # Opening the store is where "no such file" and "locked" surface.
+            message = store_error_message(e)
+            if message is None:
+                raise
+            print(message)
+            return 1
         return run_costs(args, db)
     except Exception as e:
         print(f"Error generating cost report: {e}")
