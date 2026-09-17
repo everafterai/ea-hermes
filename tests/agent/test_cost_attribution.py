@@ -1,9 +1,11 @@
 import json
+import logging
 import time
 
 import pytest
 
 import hermes_cli.config as hermes_config
+from agent import cost_attribution
 from agent.cost_attribution import (
     AttributedSession, ChannelKey, ModelUsage,
     aggregate, attribute_sessions,
@@ -130,6 +132,7 @@ class TestAttributeSessions:
         assert len(rows) == 1
         r = rows[0]
         assert r.root_id == "s1"
+        assert r.session_id == "s1"
         assert r.job_id is None
         assert [c.label for c in r.channels] == ["slack:issues"]
         assert r.cost_usd == pytest.approx(0.5)
@@ -142,13 +145,17 @@ class TestAttributeSessions:
         _seed(db, "child", source="subagent", started_at=NOW - DAY + 10, parent="root", cost=0.25)
         _seed(db, "grandchild", source="subagent", started_at=NOW - DAY + 20, parent="child", cost=0.25)
         rows = attribute_sessions(db, **WINDOW, job_resolver=_jobs(), target_resolver=_targets_from_job)
-        assert len(rows) == 1
-        r = rows[0]
-        assert r.root_id == "root"
-        assert r.channels[0].chat_id == "C123"
-        assert r.sessions == 3
-        assert r.cost_usd == pytest.approx(1.0)
-        assert r.input_tokens == 3000
+        # One row per contributing session; the root supplies the keys.
+        assert [r.session_id for r in rows] == ["root", "child", "grandchild"]
+        assert all(r.root_id == "root" for r in rows)
+        assert all(r.channels[0].chat_id == "C123" for r in rows)
+        assert all(r.sessions == 1 for r in rows)
+        assert sum(r.cost_usd for r in rows) == pytest.approx(1.0)
+        assert sum(r.input_tokens for r in rows) == 3000
+        rep = aggregate(rows, by="channel", **WINDOW)
+        assert len(rep.rows) == 1
+        assert rep.rows[0].sessions == 3
+        assert rep.rows[0].cost_usd == pytest.approx(1.0)
 
     def test_orphan_child_is_unattributed(self, db):
         # parent_session_id has an FK to sessions(id); a genuinely dangling
@@ -196,11 +203,17 @@ class TestAttributeSessions:
               cost=None, status="unknown", input_tokens=700, output_tokens=300)
         _seed(db, "lonely", started_at=NOW - DAY, chat_id="C9", chat_type="channel",
               cost=None, status="unknown")
-        rows = {r.root_id: r for r in attribute_sessions(db, **WINDOW, job_resolver=_jobs(),
-                                                          target_resolver=_targets_from_job)}
-        assert rows["root"].status == "partial"
-        assert rows["root"].unpriced_tokens == 1000
+        sessions = attribute_sessions(db, **WINDOW, job_resolver=_jobs(), target_resolver=_targets_from_job)
+        rows = {r.session_id: r for r in sessions}
+        # Per contributing session each is whole; the mix shows up once they aggregate.
+        assert rows["root"].status == "estimated"
+        assert rows["child"].status == "unpriced" and rows["child"].unpriced_tokens == 1000
         assert rows["lonely"].status == "unpriced"
+        rep = aggregate(sessions, by="both", **WINDOW)
+        by_channel = {r.keys["channel"]: r for r in rep.rows}
+        assert by_channel["slack:issues"].status == "partial"
+        assert by_channel["slack:issues"].unpriced_tokens == 1000
+        assert by_channel["slack:C9"].status == "unpriced"
 
     def test_status_actual_only_when_every_priced_session_is_actual(self, db):
         _seed(db, "a", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.1, actual=0.12, status="actual")
@@ -210,11 +223,42 @@ class TestAttributeSessions:
         assert rows["a"].status == "actual" and rows["a"].cost_usd == pytest.approx(0.12)
         assert rows["b"].status == "estimated"
 
-    def test_window_filters_on_root_started_at(self, db):
-        _seed(db, "old", started_at=NOW - 40 * DAY, chat_id="C1", chat_type="channel", cost=1.0)
+    def test_window_filters_on_contributing_session(self, db):
+        _seed(db, "old", started_at=NOW - 40 * DAY, chat_id="C123", chat_type="channel",
+              origin=SLACK_ISSUES, cost=1.0)
         _seed(db, "new", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=1.0)
+        # A long-lived root ages out of the window; its recent child must not
+        # take the root's spend with it (and must keep the root's keys).
+        _seed(db, "recent_child", source="subagent", started_at=NOW - DAY, parent="old", cost=99.0)
+        rows = {r.session_id: r for r in attribute_sessions(db, **WINDOW, job_resolver=_jobs(),
+                                                            target_resolver=_targets_from_job)}
+        assert set(rows) == {"new", "recent_child"}
+        child = rows["recent_child"]
+        assert child.root_id == "old"
+        assert [c.label for c in child.channels] == ["slack:issues"]
+        assert child.cost_usd == pytest.approx(99.0)
+        assert child.started_at == pytest.approx(NOW - DAY)
+
+    def test_buckets_follow_each_session_not_the_root(self, db):
+        _seed(db, "root", started_at=NOW - 2 * DAY, chat_id="C123", chat_type="channel",
+              origin=SLACK_ISSUES, cost=0.5)
+        _seed(db, "child", source="subagent", started_at=NOW - DAY, parent="root", cost=0.25)
         rows = attribute_sessions(db, **WINDOW, job_resolver=_jobs(), target_resolver=_targets_from_job)
-        assert [r.root_id for r in rows] == ["new"]
+        rep = aggregate(rows, by="channel", bucket="day", **WINDOW)
+        assert [(r.period, r.cost_usd) for r in rep.rows] == [
+            (period_label(NOW - 2 * DAY, "day"), pytest.approx(0.5)),
+            (period_label(NOW - DAY, "day"), pytest.approx(0.25)),
+        ]
+
+    def test_deep_lineage_is_capped_and_warns(self, db, monkeypatch, caplog):
+        _seed(db, "d0", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.1)
+        for i in range(1, 6):
+            _seed(db, f"d{i}", source="subagent", started_at=NOW - DAY, parent=f"d{i - 1}", cost=0.1)
+        monkeypatch.setattr(cost_attribution, "_MAX_LINEAGE_DEPTH", 3)
+        with caplog.at_level(logging.WARNING, logger="agent.cost_attribution"):
+            rows = attribute_sessions(db, **WINDOW, job_resolver=_jobs(), target_resolver=_targets_from_job)
+        assert [r.session_id for r in rows] == ["d0", "d1", "d2", "d3"]
+        assert "depth" in caplog.text and "d0" in caplog.text
 
     def test_platform_filter_matches_root_source_or_channel(self, db):
         _seed(db, "cron_ab12_20260901_080000", source="cron", started_at=NOW - DAY, cost=2.0)
@@ -243,10 +287,50 @@ class TestAttributeSessions:
         assert rows[0].api_calls == 2
 
 
+class TestDefaultResolvers:
+    """The production resolvers, which every test above replaces with a fake."""
+
+    JOB = {"id": "ab12", "name": "X", "deliver": "slack:C123",
+           "origin": {"platform": "slack", "chat_id": "C123"}}
+
+    def test_job_resolver_finds_a_real_job(self, monkeypatch):
+        import cron.jobs
+
+        monkeypatch.setattr(cron.jobs, "load_jobs", lambda *a, **k: [self.JOB])
+        resolver = cost_attribution._default_job_resolver()
+        assert resolver("ab12")["name"] == "X"
+        assert resolver("nope") is None
+
+    def test_job_resolver_survives_a_broken_jobs_file(self, monkeypatch):
+        import cron.jobs
+
+        def boom(*_a, **_k):
+            raise RuntimeError("jobs.json is corrupt")
+
+        monkeypatch.setattr(cron.jobs, "load_jobs", boom)
+        assert cost_attribution._default_job_resolver()("ab12") is None
+
+    def test_target_resolver_returns_the_delivery_channel(self):
+        targets = cost_attribution._default_target_resolver(self.JOB)
+        assert [(t["platform"], t["chat_id"]) for t in targets] == [("slack", "C123")]
+        from_origin = cost_attribution._default_target_resolver(
+            {**self.JOB, "deliver": "origin"})
+        assert [(t["platform"], t["chat_id"]) for t in from_origin] == [("slack", "C123")]
+
+    def test_target_resolver_survives_a_raising_scheduler(self, monkeypatch):
+        import cron.scheduler
+
+        def boom(*_a, **_k):
+            raise RuntimeError("no gateway config")
+
+        monkeypatch.setattr(cron.scheduler, "_resolve_delivery_targets", boom)
+        assert cost_attribution._default_target_resolver(self.JOB) == []
+
+
 def _row(root_id, *, cost, job=None, channels=(), started_at=NOW - DAY, user="U1",
          unpriced=0, all_actual=False, tokens=1000, models=None):
     return AttributedSession(
-        root_id=root_id, source="slack", started_at=started_at, user_id=user,
+        session_id=root_id, root_id=root_id, source="slack", started_at=started_at, user_id=user,
         job_id=job, job_name=(f"Job {job}" if job else None),
         channels=[ChannelKey("slack", c, c) for c in channels],
         sessions=1, api_calls=1, input_tokens=tokens, output_tokens=0,
@@ -379,10 +463,67 @@ class TestReprice:
         assert rows[0].status == "estimated" and rows[0].cost_usd == pytest.approx(2.0)
 
     def test_leaves_priced_rows_alone(self, db, priced_mini):
-        _seed(db, "p1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.5, status="estimated")
+        # cost_source here is official_docs_snapshot (the catalog): priced from
+        # somewhere other than the override table, so never recomputed.
+        _seed(db, "p1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.5, status="estimated",
+              input_tokens=1_000_000, output_tokens=0)
         result = reprice(db, **WINDOW)
         assert result.usage_rows_priced == 0 and result.sessions_updated == 0
+        assert result.usage_rows_recomputed == 0
         assert _session_cost_row(db, "p1")["estimated_cost_usd"] == pytest.approx(0.5)
+
+    def _straddle(self, db):
+        """A session alive when pricing.overrides landed.
+
+        10M unpriced tokens accumulate first; the next call is priced under the
+        override and — because _record_model_usage UPSERTs with
+        cost_status = COALESCE(excluded.cost_status, cost_status) — flips the
+        whole row to 'estimated' carrying only that call's $0.001.
+        """
+        _seed(db, "straddle", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=None, status="unknown", input_tokens=10_000_000, output_tokens=0)
+        db.update_token_counts("straddle", input_tokens=1_000, output_tokens=0, model="gpt-5.4-mini",
+                               billing_provider="openai", estimated_cost_usd=0.001,
+                               cost_status="estimated", cost_source="user_override",
+                               pricing_version="user-override", api_call_count=1)
+
+    def test_straddled_override_row_is_recomputed_in_full(self, db, priced_mini):
+        self._straddle(db)
+        assert _session_cost_row(db, "straddle")["estimated_cost_usd"] == pytest.approx(0.001)
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_recomputed == 1
+        assert result.usage_rows_priced == 0
+        assert result.sessions_updated == 1
+        assert result.added_usd == pytest.approx(10.0)      # delta only: 10.001 - 0.001
+        row = _session_cost_row(db, "straddle")
+        assert row["estimated_cost_usd"] == pytest.approx(10.001)
+        assert row["cost_source"] == "user_override"
+
+    def test_recompute_is_idempotent(self, db, priced_mini):
+        self._straddle(db)
+        reprice(db, **WINDOW)
+        again = reprice(db, **WINDOW)
+        assert again.usage_rows_recomputed == 1
+        assert again.added_usd == pytest.approx(0.0)
+        assert _session_cost_row(db, "straddle")["estimated_cost_usd"] == pytest.approx(10.001)
+
+    def test_actual_session_summary_is_never_downgraded(self, db, priced_mini):
+        # Provider-reported actual on the summary, override-priced usage row:
+        # the usage row is repriced, the 'actual' summary is left alone.
+        _seed(db, "act", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              input_tokens=1_000_000, output_tokens=0, cost=0.2, actual=0.2, status="actual")
+        db._conn.execute("UPDATE session_model_usage SET cost_source = 'user_override', "
+                         "cost_status = 'estimated' WHERE session_id = 'act'")
+        db._conn.commit()
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_recomputed == 1
+        assert result.sessions_updated == 0
+        row = _session_cost_row(db, "act")
+        assert row["cost_status"] == "actual"
+        assert row["estimated_cost_usd"] == pytest.approx(0.2)
+        usage = db._conn.execute(
+            "SELECT estimated_cost_usd FROM session_model_usage WHERE session_id = 'act'").fetchone()
+        assert usage["estimated_cost_usd"] == pytest.approx(1.0)
 
     def test_dry_run_writes_nothing(self, db, priced_mini):
         _seed(db, "u1", started_at=NOW - DAY, chat_id="C1", chat_type="channel",

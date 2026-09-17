@@ -96,6 +96,7 @@ class ModelUsage:
 
 @dataclass
 class AttributedSession:
+    session_id: str
     root_id: str
     source: str
     started_at: float
@@ -155,6 +156,10 @@ def _default_target_resolver(job: dict) -> List[dict]:
         return []
 
 
+# Guard against a pathological (or cyclic-looking) parent chain walking forever.
+# 1000 is far above any real lineage; hitting it is logged, never silent.
+_MAX_LINEAGE_DEPTH = 1000
+
 _LINEAGE_SQL = """
 WITH RECURSIVE lineage(id, root_id, orphan, depth) AS (
     SELECT id, id,
@@ -165,9 +170,9 @@ WITH RECURSIVE lineage(id, root_id, orphan, depth) AS (
     UNION ALL
     SELECT s.id, l.root_id, l.orphan, l.depth + 1
       FROM sessions s JOIN lineage l ON s.parent_session_id = l.id
-     WHERE l.depth < 100
+     WHERE l.depth < {max_depth}
 )
-SELECT l.root_id, l.orphan,
+SELECT l.root_id, l.orphan, l.depth,
        s.id, s.source, s.user_id, s.chat_id, s.chat_type, s.origin_json, s.display_name,
        s.started_at, s.api_call_count,
        COALESCE(s.input_tokens, 0) AS input_tokens,
@@ -175,14 +180,14 @@ SELECT l.root_id, l.orphan,
        COALESCE(s.cache_read_tokens, 0) AS cache_read_tokens,
        COALESCE(s.cache_write_tokens, 0) AS cache_write_tokens,
        s.estimated_cost_usd, s.actual_cost_usd, s.cost_status,
-       r.source AS root_source, r.user_id AS root_user, r.started_at AS root_started_at,
+       r.source AS root_source, r.user_id AS root_user,
        r.chat_id AS root_chat_id, r.chat_type AS root_chat_type,
        r.origin_json AS root_origin_json, r.display_name AS root_display_name
   FROM lineage l
   JOIN sessions s ON s.id = l.id
   JOIN sessions r ON r.id = l.root_id
- WHERE r.started_at >= ? AND r.started_at < ?
- ORDER BY r.started_at, l.root_id, l.depth
+ WHERE s.started_at >= ? AND s.started_at < ?
+ ORDER BY s.started_at, s.id
 """
 
 _MODEL_USAGE_SQL = """
@@ -250,6 +255,55 @@ def _cron_channels(job: Optional[dict], target_resolver: TargetResolver,
     return channels
 
 
+@dataclass(frozen=True)
+class _RootKeys:
+    """The attribution keys a root lends to every session in its lineage."""
+    source: str
+    user_id: Optional[str]
+    job_id: Optional[str]
+    job_name: Optional[str]
+    channels: Tuple[ChannelKey, ...]
+
+
+def _root_keys(row, names: Dict[Tuple[str, str], str],
+               job_resolver: JobResolver, target_resolver: TargetResolver) -> _RootKeys:
+    root_id = row["root_id"]
+    job_id = None if row["orphan"] else cron_job_id_from_session_id(root_id)
+    job = job_resolver(job_id) if job_id else None
+    job_name = None
+    if job_id:
+        job_name = str(job.get("name") or job_id) if job else f"{job_id} (deleted)"
+    if row["orphan"]:
+        channels: List[ChannelKey] = []
+    elif job_id:
+        channels = _cron_channels(job, target_resolver, names)
+    else:
+        key = channel_from_origin(
+            source=row["root_source"], chat_id=row["root_chat_id"],
+            chat_type=row["root_chat_type"], user_id=row["root_user"],
+            origin_json=row["root_origin_json"], display_name=row["root_display_name"],
+        )
+        if key is not None:
+            key = ChannelKey(key.platform, key.chat_id,
+                             names.get((key.platform, key.chat_id), key.name))
+        channels = [key] if key else []
+    return _RootKeys(source=row["root_source"] or "", user_id=row["root_user"],
+                     job_id=job_id, job_name=job_name, channels=tuple(channels))
+
+
+def _set_busy_timeout(conn) -> None:
+    """Wait for the live gateway's writer instead of failing instantly.
+
+    ``SessionDB(read_only=True)`` opens with ``timeout=1.0`` and no
+    busy_timeout; a store that is not in WAL mode therefore raises "database
+    is locked" the moment the gateway writes. Harmless under WAL.
+    """
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+    except Exception:  # a pragma must never be the reason a report fails
+        logger.debug("cost_attribution: busy_timeout pragma failed", exc_info=True)
+
+
 def attribute_sessions(
     db,
     *,
@@ -259,46 +313,47 @@ def attribute_sessions(
     job_resolver: Optional[JobResolver] = None,
     target_resolver: Optional[TargetResolver] = None,
 ) -> List[AttributedSession]:
-    """One row per root session started in [since, until), with descendants rolled up."""
+    """One row per session that ran in [since, until), keyed on its root.
+
+    Each contributing session is windowed and bucketed on its **own**
+    ``started_at``; the root supplies the keys (job, channel, user, platform).
+    A months-old Slack channel root therefore still reports this week's spend,
+    and long-lived roots do not smear their descendants' cost onto the day
+    they started.
+    """
     job_resolver = job_resolver or _default_job_resolver()
     target_resolver = target_resolver or _default_target_resolver
 
-    roots: Dict[str, AttributedSession] = {}
+    attributed: Dict[str, AttributedSession] = {}
+    root_keys: Dict[str, _RootKeys] = {}
+    deepest = (-1, "")
     with db._read_ctx() as conn:
+        _set_busy_timeout(conn)
         names = _channel_name_index(conn)
-        rows = conn.execute(_LINEAGE_SQL, (since, until)).fetchall()
+        rows = conn.execute(_LINEAGE_SQL.format(max_depth=_MAX_LINEAGE_DEPTH),
+                            (since, until)).fetchall()
         for row in rows:
             root_id = row["root_id"]
-            agg = roots.get(root_id)
-            if agg is None:
-                job_id = None if row["orphan"] else cron_job_id_from_session_id(root_id)
-                job = job_resolver(job_id) if job_id else None
-                job_name = None
-                if job_id:
-                    job_name = str(job.get("name") or job_id) if job else f"{job_id} (deleted)"
-                if row["orphan"]:
-                    channels: List[ChannelKey] = []
-                elif job_id:
-                    channels = _cron_channels(job, target_resolver, names)
-                else:
-                    key = channel_from_origin(
-                        source=row["root_source"], chat_id=row["root_chat_id"],
-                        chat_type=row["root_chat_type"], user_id=row["root_user"],
-                        origin_json=row["root_origin_json"], display_name=row["root_display_name"],
-                    )
-                    if key is not None:
-                        key = ChannelKey(key.platform, key.chat_id,
-                                         names.get((key.platform, key.chat_id), key.name))
-                    channels = [key] if key else []
-                agg = AttributedSession(
-                    root_id=root_id, source=row["root_source"] or "", started_at=float(row["root_started_at"]),
-                    user_id=row["root_user"], job_id=job_id, job_name=job_name, channels=channels,
-                )
-                roots[root_id] = agg
+            keys = root_keys.get(root_id)
+            if keys is None:
+                keys = root_keys[root_id] = _root_keys(row, names, job_resolver, target_resolver)
+            depth = int(row["depth"] or 0)
+            if depth > deepest[0]:
+                deepest = (depth, root_id)
+            agg = AttributedSession(
+                session_id=row["id"], root_id=root_id, source=keys.source,
+                started_at=float(row["started_at"]), user_id=keys.user_id,
+                job_id=keys.job_id, job_name=keys.job_name, channels=list(keys.channels),
+            )
+            attributed[row["id"]] = agg
 
             tokens = int(row["input_tokens"]) + int(row["output_tokens"])
             if tokens == 0 and not row["api_call_count"]:
-                continue  # bare gateway row, nothing consumed
+                # Bare gateway row: nothing consumed in the main loop. The row
+                # still exists to receive this session's auxiliary usage below,
+                # but it is not counted as a session and is dropped if nothing
+                # lands on it.
+                continue
             agg.sessions += 1
             agg.api_calls += int(row["api_call_count"] or 0)
             agg.input_tokens += int(row["input_tokens"])
@@ -313,13 +368,21 @@ def attribute_sessions(
             else:
                 agg.unpriced_tokens += tokens
 
-        session_ids = [row["id"] for row in rows]
-        root_of = {row["id"]: row["root_id"] for row in rows}
+        if deepest[0] >= _MAX_LINEAGE_DEPTH - 1:
+            logger.warning(
+                "cost_attribution: session lineage under root %s reached the depth cap "
+                "(%d); descendants below it are not attributed",
+                deepest[1], _MAX_LINEAGE_DEPTH,
+            )
+
+        session_ids = list(attributed)
         for chunk_start in range(0, len(session_ids), 500):
             chunk = session_ids[chunk_start:chunk_start + 500]
             sql = _MODEL_USAGE_SQL.format(placeholders=",".join("?" * len(chunk)))
             for urow in conn.execute(sql, chunk):
-                agg = roots[root_of[urow["session_id"]]]
+                # A session's usage rows belong to that session's row only —
+                # never to the root's — or the root would count them twice.
+                agg = attributed[urow["session_id"]]
                 key = (urow["model"] or "", urow["billing_provider"] or "")
                 mu = agg.models.setdefault(key, ModelUsage(model=key[0], provider=key[1]))
                 mu.api_calls += int(urow["api_call_count"] or 0)
@@ -339,9 +402,9 @@ def attribute_sessions(
                 if (urow["task"] or "") != "":
                     # Auxiliary call (vision, compression, title_generation, ...):
                     # record_auxiliary_usage keeps these OUT of the sessions summary
-                    # row, so fold them into the root here — every view then shares
-                    # one cost basis (main loop + aux), matching what the model view
-                    # sums from the same table.
+                    # row, so fold them into their own session here — every view then
+                    # shares one cost basis (main loop + aux), matching what the model
+                    # view sums from the same table.
                     agg.api_calls += int(urow["api_call_count"] or 0)
                     agg.input_tokens += int(urow["input_tokens"] or 0)
                     agg.output_tokens += int(urow["output_tokens"] or 0)
@@ -354,12 +417,13 @@ def attribute_sessions(
                     else:
                         agg.unpriced_tokens += row_tokens
 
-    result = [r for r in roots.values() if r.sessions > 0]
+    # A bare row with no usage rows of its own consumed nothing: drop it.
+    result = [r for r in attributed.values() if r.sessions > 0 or r.models]
     if platform:
         wanted = platform.strip().lower()
         result = [r for r in result
                   if (r.source or "").lower() == wanted or any(c.platform.lower() == wanted for c in r.channels)]
-    result.sort(key=lambda r: (r.started_at, r.root_id))
+    result.sort(key=lambda r: (r.started_at, r.session_id))
     return result
 
 
@@ -432,6 +496,7 @@ class Report:
     rows: List[ReportRow]
     total: ReportRow
     double_counted_usd: float = 0.0
+    rows_omitted: int = 0   # rows `top` cut; TOTAL still covers them
 
 
 def _session_contribution(s: AttributedSession) -> dict:
@@ -497,15 +562,19 @@ def aggregate(sessions: List[AttributedSession], *, by: str, bucket: str = "none
                 double_counted += s.cost_usd * (len(entries) - 1)
     ordered = sorted(rows.values(),
                      key=lambda r: (r.period or "", -r.cost_usd, tuple(r.keys[c] for c in key_columns)))
+    rows_omitted = 0
     if top and top > 0:
+        rows_omitted = max(0, len(ordered) - top)
         ordered = ordered[:top]
     return Report(by=by, bucket=bucket, since=since, until=until, key_columns=key_columns,
-                  rows=ordered, total=total, double_counted_usd=double_counted)
+                  rows=ordered, total=total, double_counted_usd=double_counted,
+                  rows_omitted=rows_omitted)
 
 
 @dataclass
 class RepriceResult:
     usage_rows_priced: int = 0
+    usage_rows_recomputed: int = 0
     sessions_updated: int = 0
     sessions_priced_from_summary: int = 0
     skipped_unknown: int = 0
@@ -513,27 +582,44 @@ class RepriceResult:
     dry_run: bool = False
 
 
+# Two kinds of row are eligible:
+#   1. never priced (status unknown/null and no cost stored), and
+#   2. priced from the operator's own pricing.overrides (cost_source =
+#      'user_override'), whose price is fully determined by that table, so
+#      recomputing it from the stored tokens is exact and idempotent.
+# (2) exists because session_model_usage rows are UPSERT-accumulated with
+# cost_status = COALESCE(excluded.cost_status, cost_status): a session that was
+# alive when the overrides landed keeps all its earlier unpriced tokens on the
+# row but flips to 'estimated' carrying only the first priced call's cost.
+# Without the recompute those rows are mis-priced forever. Rows priced from
+# provider data or the catalog are never touched.
 _UNPRICED_USAGE_SQL = """
 SELECT u.rowid AS rid, u.session_id, u.model, u.billing_provider, u.billing_base_url, u.task,
-       u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens, u.reasoning_tokens
+       u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens, u.reasoning_tokens,
+       u.estimated_cost_usd, u.actual_cost_usd, u.cost_status, u.cost_source,
+       s.cost_status AS session_cost_status
   FROM session_model_usage u JOIN sessions s ON s.id = u.session_id
  WHERE s.started_at >= ? AND s.started_at < ?
-   AND (u.cost_status IS NULL OR u.cost_status = 'unknown')
-   AND COALESCE(u.actual_cost_usd, 0) = 0
-   AND COALESCE(u.estimated_cost_usd, 0) = 0
+   AND ( ( (u.cost_status IS NULL OR u.cost_status = 'unknown')
+           AND COALESCE(u.actual_cost_usd, 0) = 0
+           AND COALESCE(u.estimated_cost_usd, 0) = 0 )
+         OR (u.cost_source = 'user_override' AND COALESCE(u.cost_status, '') != 'actual') )
    AND (u.input_tokens + u.output_tokens) > 0
  ORDER BY u.session_id
 """
 
 _UNPRICED_LEGACY_SESSIONS_SQL = """
-SELECT s.id, s.model, s.billing_provider, s.billing_base_url,
+SELECT s.id, s.model, s.billing_provider, s.billing_base_url, s.cost_source,
+       COALESCE(s.estimated_cost_usd, 0) AS estimated_cost_usd,
        COALESCE(s.input_tokens, 0) AS input_tokens, COALESCE(s.output_tokens, 0) AS output_tokens,
        COALESCE(s.cache_read_tokens, 0) AS cache_read_tokens, COALESCE(s.cache_write_tokens, 0) AS cache_write_tokens,
        COALESCE(s.reasoning_tokens, 0) AS reasoning_tokens
   FROM sessions s
  WHERE s.started_at >= ? AND s.started_at < ?
-   AND (s.cost_status IS NULL OR s.cost_status = 'unknown')
-   AND COALESCE(s.actual_cost_usd, 0) = 0
+   AND COALESCE(s.cost_status, '') != 'actual'
+   AND ( ( (s.cost_status IS NULL OR s.cost_status = 'unknown')
+           AND COALESCE(s.actual_cost_usd, 0) = 0 )
+         OR s.cost_source = 'user_override' )
    AND (COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) > 0
    AND NOT EXISTS (SELECT 1 FROM session_model_usage u WHERE u.session_id = s.id AND u.task = '')
 """
@@ -558,13 +644,20 @@ def _estimate(row) -> Optional[tuple]:
 
 
 def reprice(db, *, since: float, until: float, dry_run: bool = False) -> RepriceResult:
-    """Price stored rows whose cost is unknown, using current overrides/catalog."""
+    """Price stored rows whose cost is unknown, and recompute override-priced rows.
+
+    Uses the current ``pricing.overrides`` / catalog. Rows priced from provider
+    data or the catalog are never touched — only unpriced rows and rows whose
+    ``cost_source`` is ``user_override`` (see ``_UNPRICED_USAGE_SQL``).
+    """
     result = RepriceResult(dry_run=dry_run)
     with db._read_ctx() as conn:
+        _set_busy_timeout(conn)
         usage_rows = [dict(r) for r in conn.execute(_UNPRICED_USAGE_SQL, (since, until))]
         legacy_rows = [dict(r) for r in conn.execute(_UNPRICED_LEGACY_SESSIONS_SQL, (since, until))]
 
     usage_updates: Dict[str, List[tuple]] = {}   # session_id -> [(rid, amount, source, version, task)]
+    actual_sessions = {row["session_id"] for row in usage_rows if row["session_cost_status"] == "actual"}
     for row in usage_rows:
         est = _estimate(row)
         if est is None:
@@ -572,8 +665,12 @@ def reprice(db, *, since: float, until: float, dry_run: bool = False) -> Reprice
             continue
         amount, source, version = est
         usage_updates.setdefault(row["session_id"], []).append((row["rid"], amount, source, version, row["task"]))
-        result.usage_rows_priced += 1
-        result.added_usd += amount
+        if row["cost_source"] == "user_override":
+            result.usage_rows_recomputed += 1
+        else:
+            result.usage_rows_priced += 1
+        # Only the delta: a recomputed row already contributes its old cost.
+        result.added_usd += amount - _model_usage_cost(row)
 
     legacy_updates: List[tuple] = []             # (session_id, amount, source, version)
     for row in legacy_rows:
@@ -584,9 +681,13 @@ def reprice(db, *, since: float, until: float, dry_run: bool = False) -> Reprice
         amount, source, version = est
         legacy_updates.append((row["id"], amount, source, version))
         result.sessions_priced_from_summary += 1
-        result.added_usd += amount
+        result.added_usd += amount - float(row["estimated_cost_usd"] or 0.0)
 
-    result.sessions_updated = len({sid for sid, ups in usage_updates.items() if any(u[4] == "" for u in ups)}) \
+    # A session whose summary is provider-'actual' keeps that summary: its usage
+    # rows are still priced, but rewriting the row would downgrade real money to
+    # an estimate.
+    result.sessions_updated = len({sid for sid, ups in usage_updates.items()
+                                   if sid not in actual_sessions and any(u[4] == "" for u in ups)}) \
         + len(legacy_updates)
     if dry_run:
         return result
@@ -600,7 +701,7 @@ def reprice(db, *, since: float, until: float, dry_run: bool = False) -> Reprice
                     (amount, source, rid),
                 )
             main_loop = [u for u in updates if u[4] == ""]
-            if main_loop:
+            if main_loop and session_id not in actual_sessions:
                 conn.execute(
                     """UPDATE sessions
                           SET estimated_cost_usd = (SELECT COALESCE(SUM(estimated_cost_usd), 0)
