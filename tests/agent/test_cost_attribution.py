@@ -410,3 +410,28 @@ class TestReprice:
     def test_window_respected(self, db, priced_mini):
         _seed(db, "old", started_at=NOW - 60 * DAY, chat_id="C1", chat_type="channel", cost=None, status="unknown")
         assert reprice(db, **WINDOW).usage_rows_priced == 0
+
+    def test_aux_rows_are_priced_but_never_enter_the_summary_row(self, db, priced_mini):
+        # Main loop: 1M in / 0 out → $1.00 under the override. Aux vision call on the
+        # same model, unpriced (estimated_cost_usd=None): 500k in / 0 out → $0.50.
+        _seed(db, "mixed", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=None, status="unknown", input_tokens=1_000_000, output_tokens=0)
+        db.record_auxiliary_usage("mixed", "vision", model="gpt-5.4-mini", billing_provider="openai",
+                                  input_tokens=500_000, output_tokens=0, estimated_cost_usd=None)
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_priced == 2
+        assert result.sessions_updated == 1
+        assert result.added_usd == pytest.approx(1.5)
+        # Summary row re-summed from task='' rows only — the aux $0.50 must not leak in.
+        row = _session_cost_row(db, "mixed")
+        assert row["estimated_cost_usd"] == pytest.approx(1.0)
+        assert row["cost_status"] == "estimated"
+        aux = db._conn.execute(
+            "SELECT estimated_cost_usd, cost_status FROM session_model_usage WHERE session_id = 'mixed' AND task = 'vision'"
+        ).fetchone()
+        assert aux["estimated_cost_usd"] == pytest.approx(0.5)
+        assert aux["cost_status"] == "estimated"
+        # The attribution rollup (Task 3 ruling: aux rows fold into the root) sees both.
+        rows = attribute_sessions(db, **WINDOW, job_resolver=lambda _j: None, target_resolver=lambda _j: [])
+        assert rows[0].cost_usd == pytest.approx(1.5)
+        assert rows[0].status == "estimated"
