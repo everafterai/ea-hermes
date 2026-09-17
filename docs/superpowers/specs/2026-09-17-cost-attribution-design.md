@@ -41,9 +41,12 @@ undercounted by everything it delegated.
 
 ## Non-goals
 
-- **Per-turn accuracy.** Cost is attributed to the day the session
-  *started* (`started_at`). Cron runs are one session each so they bucket
-  cleanly; a long-lived Slack channel session smears across its lifetime.
+- **Per-turn accuracy.** Cost is attributed to the day a session *started*
+  (`started_at`): each contributing session is windowed and bucketed on its
+  **own** `started_at`, and the root supplies only the keys. Cron runs are one
+  session each so they bucket cleanly; a single long-lived Slack channel
+  session still smears its own turns across its lifetime, though its
+  sub-agent, compression and branch children each land on their own day.
   Accepted for v1 (decision 2026-09-17). A per-API-call ledger is the
   follow-up if trend curves for long-lived channels turn out to matter.
 - **A dashboard page, a scheduled Slack post, a sheet export.** The CLI
@@ -68,8 +71,15 @@ Query-time derivation ships on all existing history the day it lands.
 ## Attribution model
 
 Every session resolves to a **root** by walking `parent_session_id` to the top
-(recursive CTE). Sub-agents, compression children and branch sessions all
-attribute to their root. The root supplies both keys:
+(recursive CTE, capped at `_MAX_LINEAGE_DEPTH` = 1000 with a logged warning if
+a lineage ever reaches it). Sub-agents, compression children and branch
+sessions all attribute to their root. The query returns **one row per
+contributing session**, windowed and bucketed on that session's own
+`started_at`; the root supplies the keys. This matters because
+`session_reset.mode` defaults to `none` and `publish_compression_child` keeps
+`parent_session_id`, so a Slack channel's root is permanent and quickly months
+old — windowing on the root would make this month's spend vanish from a
+30-day report. The root supplies both keys:
 
 - **Job** — the root's `id` matches `^cron_(?P<job>.+)_\d{8}_\d{6}$`.
   Job ids are `uuid4().hex[:12]` (`cron/jobs.py`), but the pattern anchors
@@ -93,7 +103,7 @@ attribute to their root. The root supplies both keys:
   column lists all its targets joined by `+`, so `both` *is* a partition.
   Totals in the `job` and `both` views equal the sum of
   `COALESCE(actual_cost_usd, estimated_cost_usd)` over every session row
-  (roots and descendants) whose root started in the window, plus the cost of
+  (roots and descendants) that started in the window, plus the cost of
   their auxiliary usage rows — a superset of `SessionDB.usage_totals`, which
   ignores both child sessions and auxiliary usage rows. The `channel` view
   carries a footer noting how much was counted more than once, or nothing
@@ -101,20 +111,24 @@ attribute to their root. The root supplies both keys:
 - **Unattributed** — a root with neither key (CLI sessions, sub-agents whose
   root was deleted) appears as one `(unattributed)` row so totals reconcile.
 
-Roots only: child sessions are never keyed on their own, so a sub-agent
-spawned from a channel session is that channel's cost.
+Roots key, children don't: a child session is never keyed on its own, so a
+sub-agent spawned from a channel session is that channel's cost — but it is
+its own row, counted on the day it ran.
 
 ## Cost and status
 
-Per row: `cost = COALESCE(actual_cost_usd, estimated_cost_usd)` summed over
-the root and all its descendants, plus their auxiliary usage rows, the same
-precedence `usage_totals` uses.
-Every row also carries:
+Per contributing session: `cost = COALESCE(actual_cost_usd,
+estimated_cost_usd)` plus that session's own auxiliary usage rows (a session's
+usage rows attach to that session only, never to its root), the same
+precedence `usage_totals` uses. `aggregate` then sums those rows per key and
+period, so a root's lineage adds up exactly once.
+Every report row also carries:
 
 - `status` — `actual` when every contributing session has `cost_status =
   actual`; `estimated` when all are priced (actual or estimated); `partial`
   when some contributing session has `cost_status = unknown` (or a null
-  cost); `unpriced` when none is priced.
+  cost); `unpriced` when none is priced. A single session's row is whole, so
+  `partial` first appears at the aggregate.
 - `unpriced_tokens` — input+output tokens of the unknown-status sessions, so
   "$0.00" is never silently a missing price.
 - tokens (input, output, cache read, cache write), sessions, API calls.
@@ -124,7 +138,11 @@ Monday.
 
 `--by model` and `--by user` are included because they are free once the
 query layer exists: `model` reads `session_model_usage` grouped by
-`(model, billing_provider)`, `user` groups roots by `user_id`.
+`(model, billing_provider)`, `user` groups roots by `user_id`. A session spans
+several models, so the model view has no session count to give: it renders
+`-` in the table, `null` in JSON and an empty CSV cell rather than a
+misleading `0`. A legacy session with no usage rows therefore counts in the
+session views but not in the model view.
 
 ## Pricing override
 
@@ -163,11 +181,26 @@ New sessions are priced at write time as today. History is fixed by:
 and whose model now resolves to a pricing entry (override or catalog),
 recompute `estimated_cost_usd` via `estimate_usage_cost` from the stored
 tokens, set `cost_status="estimated"` and `cost_source` to the entry's
-source, then re-sum the parent `sessions` row from its usage rows. Rows
-already priced are never touched — a later rate change does not rewrite
-history; `--reprice --force` is deliberately not offered in v1. Runs in one
-transaction per session; prints how many rows it priced and the total it
-added. `--dry-run` prints the same without writing.
+source, then re-sum the parent `sessions` row from its usage rows. With no
+`--days/--since/--until` it covers the **whole store** (a repair pass should
+not silently stop at 30 days).
+
+Rows already priced **from provider data or the catalog** are never touched —
+a later rate change does not rewrite history; `--reprice --force` is
+deliberately not offered in v1. Rows whose `cost_source` is `user_override`
+**are** recomputed, at any status other than `actual`: their price is fully
+determined by the override table, so recomputing from the stored tokens is
+exact and idempotent. That is what repairs a *straddled* session — one alive
+when `pricing.overrides` landed. `session_model_usage` rows are
+UPSERT-accumulated per route with
+`cost_status = COALESCE(excluded.cost_status, cost_status)`, so the first
+priced call after the override flips the whole row to `estimated` while
+carrying only that one call's cost, and the unpriced-row query would skip it
+forever. `added_usd` counts only the delta (new − old), and a session whose
+summary is already `cost_status = 'actual'` keeps that summary (its usage
+rows are still priced). Runs in one transaction per session; prints how many
+rows it priced, how many it recomputed, and the total it added. `--dry-run`
+prints the same without writing.
 
 ## CLI
 
@@ -190,13 +223,18 @@ a leading period column and sorts by period then cost. `--json` emits
 `{"window": {...}, "by": ..., "bucket": ..., "rows": [...], "total": {...},
 "double_counted_usd": ...}`; `--csv` emits the rows with a header.
 
-Errors (missing DB, bad dates) print one line and exit 1. A store with no
-priced sessions still prints the table (all `unpriced`) plus a hint to set
-`pricing.overrides` and run `--reprice`. The report opens the store
+Errors (missing DB, bad dates, a locked store) print one line and exit 1: a
+missing store names its path and `--profile`, a locked one says the gateway is
+writing and to retry. A store with no priced sessions still prints the table
+(all `unpriced`) plus a hint to set `pricing.overrides` and run `--reprice`.
+When `--top` cuts rows, the table says how many are hidden and JSON carries
+`rows_omitted`; TOTAL always covers every row. The report opens the store
 `SessionDB(read_only=True)` (avoids writer-lock contention with the live
 gateway) and never migrates it; a store not write-opened since a past schema
 migration prints a hint naming `hermes costs --reprice --dry-run` (a
-write-open that migrates but changes no cost) and exits 1.
+write-open that migrates but changes no cost) and exits 1. Read connections
+set `PRAGMA busy_timeout=5000` so a non-WAL store waits for the gateway's
+writer instead of failing instantly.
 
 ## Files
 
@@ -252,8 +290,22 @@ suite.
 
 1. Deploy the code (`main` → VM fast-forward → gateway restart, per the
    usual procedure).
-2. Add `pricing.overrides` for `gpt-5.4-mini` (and any other model in use)
-   to the VM's `config.yaml`; rates from OpenAI's pricing page at the time.
-3. Run `hermes costs --reprice --dry-run`, check the count, then
-   `hermes costs --reprice`.
-4. `hermes costs --days 30 --by both` is the first real report.
+2. Check the VM's SQLite is ≥ 3.51.3 / 3.50.7 / 3.44.6 (`hermes doctor`) so
+   the store stays in WAL; otherwise reports contend with the gateway's
+   writes.
+3. **Stop the gateway**, then add `pricing.overrides` for `gpt-5.4-mini` (and
+   any other model in use) to the VM's `config.yaml`; rates from OpenAI's
+   pricing page at the time.
+4. Run `hermes costs --reprice --dry-run` (no window: the whole store), check
+   the count, then `hermes costs --reprice`.
+5. **Start the gateway** again.
+
+   Steps 3–5 are ordered on purpose. A session that is alive when the
+   overrides land straddles the change: its usage row keeps the earlier
+   unpriced tokens but flips to `estimated` carrying only the first priced
+   call's cost, so it is under-priced until repaired. `--reprice` does repair
+   it (it recomputes `user_override` rows), but it writes an absolute cost
+   computed from a snapshot of the tokens — a call landing on the same row
+   between that read and the write is overwritten. Stopping the gateway
+   first removes both the straddle and the race.
+6. `hermes costs --days 30 --by both` is the first real report.

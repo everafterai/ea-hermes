@@ -456,17 +456,30 @@ walks every session to its `parent_session_id` root and derives two keys at quer
 time — the **cron job** from the `cron_<job>_<ts>` root id, and the **channel** from
 `origin_json` (`parent_chat_id` else `chat_id`; DMs key as `dm:<user>`); a cron job
 delivering to a channel carries both, via `cron.scheduler._resolve_delivery_targets`.
-No schema change. `hermes costs --days 30 --by channel|job|both|model|user
---bucket day|week|month [--json|--csv]`
+No schema change. **Each contributing session is windowed and bucketed on its own
+`started_at`; the root supplies only the keys** — a Slack channel's root is permanent
+(`session_reset.mode: none`) and soon months old, so windowing on it would make
+recent spend vanish from a 30-day report. `hermes costs --days 30 --by
+channel|job|both|model|user --bucket day|week|month [--json|--csv]`
 ([hermes_cli/subcommands/costs.py](hermes_cli/subcommands/costs.py)). The `channel`
 view double-counts multi-target jobs on purpose (footer shows the overlap); `job` and
 `both` partition true spend. Every row carries a status (`actual`/`estimated`/
 `partial`/`unpriced`) plus `unpriced_tokens`, so a missing price is never a silent $0.
+`--by model` reads the `session_model_usage` rows, so a legacy session with no usage
+rows counts in the session views but not in the model view (and that view shows no
+session count at all — one session spans several models).
 **The VM's `gpt-5.4-mini` is not in upstream's pricing catalog**, so set per-million
 rates under a top-level `pricing.overrides:` block (`{input, output, cache_read,
 cache_write}`); `get_pricing_entry` consults it before the catalog (`cost_source =
-user_override`). `hermes costs --reprice [--dry-run]` prices stored rows whose
-`cost_status` is unknown; already-priced rows are never rewritten. The report opens
+user_override`). `hermes costs --reprice [--dry-run]` (no window = the whole store)
+prices stored rows whose `cost_status` is unknown **and recomputes rows whose
+`cost_source` is `user_override`** — their price comes wholly from that table, so the
+recompute is exact, idempotent, and repairs a session that straddled the config
+change; rows priced from provider data or the catalog are never rewritten.
+**Deploy the rates as: stop the gateway → add `pricing.overrides` → `hermes costs
+--reprice` → start the gateway**, or a session that is live across the change stays
+under-priced (its usage row flips to `estimated` carrying only the first priced
+call's cost while keeping all the earlier unpriced tokens). The report opens
 the store `SessionDB(read_only=True)` (avoids writer-lock contention with the live
 gateway) and never migrates it; a store not write-opened since a past schema
 migration prints a hint naming `hermes costs --reprice --dry-run` (a write-open that

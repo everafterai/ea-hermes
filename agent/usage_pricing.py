@@ -1367,7 +1367,13 @@ def get_pricing_entry(
     api_key: Optional[str] = None,
 ) -> Optional[PricingEntry]:
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
-    override = pricing_override_for(model_name, route)   # fork: operator-stated rates win
+    # Fork: operator-stated rates win — ahead of the subscription/OpenRouter/
+    # endpoint/catalog lookups below. Note this does NOT re-price a
+    # subscription route's usage: estimate_usage_cost returns `included`
+    # before it ever calls this function, so for those routes the override is
+    # visible only to direct get_pricing_entry callers (hermes_cli/
+    # model_cost_guard.py, the Langfuse plugin).
+    override = pricing_override_for(model_name, route)
     if override is not None:
         return override
     if route.billing_mode == "subscription_included":
