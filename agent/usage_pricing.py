@@ -1268,6 +1268,9 @@ _OVERRIDE_RATE_KEYS = {
 }
 
 
+_OVERRIDES_MEMO: Optional[tuple] = None
+
+
 def _load_pricing_overrides() -> Dict[str, PricingEntry]:
     """Parse ``pricing.overrides`` from config.yaml into PricingEntry values.
 
@@ -1275,16 +1278,32 @@ def _load_pricing_overrides() -> Dict[str, PricingEntry]:
     model an operator runs (the VM's ``gpt-5.4-mini`` is absent), so an
     operator can state USD-per-million rates directly. Malformed entries are
     skipped (logged once per process) — never an exception in the request path.
+
+    Reads via ``read_raw_config_readonly`` when available (no per-call
+    deepcopy of the whole config — this runs several times per agent turn),
+    falling back to ``read_raw_config`` otherwise. The returned dict is the
+    shared in-process cache and must never be mutated. Parsed entries are
+    memoized in-module, keyed on ``repr()`` of the raw ``overrides`` mapping,
+    so ``PricingEntry``/``Decimal`` objects aren't rebuilt on every lookup; an
+    edited config.yaml produces a different raw mapping and thus a different
+    key, so freshness is unaffected.
     """
+    global _OVERRIDES_MEMO
     try:
-        from hermes_cli.config import read_raw_config
-        block = read_raw_config().get("pricing") or {}
+        from hermes_cli import config as _hermes_config
+        reader = getattr(_hermes_config, "read_raw_config_readonly", None) or _hermes_config.read_raw_config
+        block = reader().get("pricing") or {}
     except Exception:
         logger.debug("pricing overrides unavailable", exc_info=True)
         return {}
     raw = block.get("overrides") if isinstance(block, dict) else None
     if not isinstance(raw, dict):
         return {}
+
+    memo_key = repr(raw)
+    if _OVERRIDES_MEMO is not None and _OVERRIDES_MEMO[0] == memo_key:
+        return _OVERRIDES_MEMO[1]
+
     entries: Dict[str, PricingEntry] = {}
     for model, rates in raw.items():
         if not isinstance(rates, dict) or "input" not in rates or "output" not in rates:
@@ -1298,7 +1317,7 @@ def _load_pricing_overrides() -> Dict[str, PricingEntry]:
                 ok = False
                 break
             dec = _to_decimal(value)
-            if dec is None or dec < 0:
+            if dec is None or not dec.is_finite() or dec < 0:
                 ok = False
                 break
             fields[attr] = dec
@@ -1308,6 +1327,7 @@ def _load_pricing_overrides() -> Dict[str, PricingEntry]:
         entries[str(model).strip().lower()] = PricingEntry(
             source="user_override", pricing_version="user-override", **fields
         )
+    _OVERRIDES_MEMO = (memo_key, entries)
     return entries
 
 
@@ -1326,7 +1346,7 @@ def pricing_override_for(model_name: str, route: BillingRoute) -> Optional[Prici
     if not overrides:
         return None
     candidates = []
-    for name in (model_name, route.model):
+    for name in (route.model, model_name):
         if not name:
             continue
         lowered = name.strip().lower()

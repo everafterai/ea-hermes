@@ -15,6 +15,7 @@ def overrides(monkeypatch):
         state["pricing"]["overrides"] = mapping
 
     monkeypatch.setattr(hermes_config, "read_raw_config", lambda: state)
+    monkeypatch.setattr(hermes_config, "read_raw_config_readonly", lambda: state)
     return set_overrides
 
 
@@ -57,3 +58,18 @@ def test_estimate_uses_override(overrides):
     assert result.status == "estimated"
     assert result.source == "user_override"
     assert result.amount_usd == Decimal("2.0")
+
+
+def test_non_finite_rates_are_ignored(overrides):
+    overrides({"gpt-5.4-mini": {"input": float("nan"), "output": 1},
+               "gpt-5.4": {"input": float("inf"), "output": 1},
+               "gpt-5.5": {"input": "Infinity", "output": 1}})
+    for model in ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"):
+        assert get_pricing_entry(model, provider="openai", base_url="https://api.openai.com/v1") is None
+
+
+def test_parsed_overrides_are_memoized(overrides):
+    overrides({"gpt-5.4-mini": {"input": 1, "output": 2}})
+    first = get_pricing_entry("gpt-5.4-mini", provider="openai")
+    second = get_pricing_entry("gpt-5.4-mini", provider="openai")
+    assert first is second
