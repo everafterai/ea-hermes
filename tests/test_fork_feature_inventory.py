@@ -54,6 +54,8 @@ WIRING = [
     ("hermes costs", "hermes_cli/subcommands/costs.py", "def build_costs_parser", "parser"),
     ("hermes costs", "hermes_cli/main.py", "build_costs_parser(subparsers, cmd_costs=cmd_costs)", "registered in main"),
     ("pricing overrides", "agent/usage_pricing.py", "pricing_override_for(model_name, route)", "override consulted first"),
+    ("relevance gate accounting", "gateway/run.py", "def _relevance_gate_accounting_token", "classifier usage booked to the channel session"),
+    ("relevance gate accounting", "gateway/run.py", 'task="relevance_gate"', "aux task tag"),
     # ── Drive per-user access check ───────────────────────────────────────
     ("Drive access check", "plugins/google_drive_sa/access.py", "def require_access", "gate"),
     ("Drive access check", "plugins/google_drive_sa/access.py", "def filter_listing", "listing filter"),

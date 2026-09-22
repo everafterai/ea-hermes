@@ -581,6 +581,12 @@ block in `~/.hermes/config.yaml`:
   `channel_prompts[chat_id]` → a generic default. **Fail-open**: classifier
   error → the agent runs (never silently drops a real message). Only active on
   Slack quiet channels; inert elsewhere.
+  The classifier runs before any agent turn, where auxiliary usage is normally
+  discarded, so `_handle_message` publishes an aux accounting context bound to
+  the channel's session around the gate (`_relevance_gate_accounting_token`);
+  its tokens land in `session_model_usage` under task `relevance_gate` and
+  `hermes costs` attributes them to the channel. Before this (2026-09-22) they
+  were invisible — part of an ~8% gap against the OpenAI bill.
 
 ### Per-channel / per-task model overrides
 

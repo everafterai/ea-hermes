@@ -4142,6 +4142,7 @@ async def _classify_relevance(purpose: str, message_text: str, thread_context: s
     )
     user = f"Recent thread context:\n{thread_context}\n\nLatest message:\n{message_text}"
     resp = await async_call_llm(
+        task="relevance_gate",  # fork: books the classifier's usage under this task
         model=model or "",
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -17994,6 +17995,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_loop_command(event)
         return "Agent is running — use /loop status / pause / stop mid-run, or /stop before setting a new loop."
 
+    def _relevance_gate_accounting_token(self, session_key: str):
+        """Publish aux accounting for the relevance gate, bound to the channel session.
+
+        Returns the ContextVar token to pass to ``reset_accounting_context``, or
+        ``None`` when nothing was published (no store, no persisted entry for the
+        key yet — a channel's very first message). Uses the sync ``SessionDB``
+        underneath ``AsyncSessionDB``: the recorder calls
+        ``record_auxiliary_usage`` synchronously, and the async wrapper would
+        hand back an un-awaited coroutine.
+        """
+        try:
+            from agent.aux_accounting import set_accounting_context
+            store = getattr(self, "session_store", None)
+            entry = store.lookup_by_session_key(session_key) if store is not None and session_key else None
+            session_id = getattr(entry, "session_id", None) if entry is not None else None
+            db = getattr(self, "_session_db", None)
+            db = getattr(db, "_db", db)
+            if db is None or not session_id:
+                return None
+            return set_accounting_context(db, session_id)
+        except Exception:
+            logger.debug("relevance gate accounting unavailable", exc_info=True)
+            return None
+
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
         """
         Handle an incoming message from any platform.
@@ -19494,6 +19519,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # unauthorized senders are handled first; skips silently when irrelevant.
         # @mention/DM bypass + fail-open are inside the gate.
         if not is_internal:
+            # Fork: publish an accounting context bound to the channel's session so
+            # the classifier's tokens land in session_model_usage (task
+            # "relevance_gate") and `hermes costs` attributes them to the channel.
+            # Aux usage is recorded only inside such a context, and no agent turn
+            # exists yet at this point — without this the calls were invisible.
+            _acct_token = self._relevance_gate_accounting_token(_quick_key)
             try:
                 if await _relevance_gate_should_skip(
                     event,
@@ -19508,6 +19539,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     return None
             except Exception as _gate_exc:  # never let the gate break dispatch
                 logger.warning("relevance gate raised — proceeding: %s", _gate_exc)
+            finally:
+                if _acct_token is not None:
+                    from agent.aux_accounting import reset_accounting_context
+                    reset_accounting_context(_acct_token)
         # ── External-drain new-turn gate (Phase 2) ────────────────────
         # When NAS has engaged an external drain (.drain_request.json present,
         # observed by _drain_control_watcher), refuse to START a new turn so

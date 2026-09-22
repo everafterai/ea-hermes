@@ -192,3 +192,53 @@ def test_no_skip_no_call_for_dm_even_if_not_directly_addressed():
     ev = _event(directly=False, chat_type="dm")
     res = _run(_relevance_gate_should_skip(ev, _QUIET_CFG, None, classify=classify))
     assert res is False and called["n"] == 0
+
+
+def test_classify_tags_the_call_as_relevance_gate(monkeypatch):
+    # The task name is what the auxiliary client books usage under
+    # (session_model_usage.task), so `hermes costs` can see classifier spend.
+    seen = {}
+    async def fake(**kw):
+        seen.update(kw)
+        return _FakeResp("act")
+    monkeypatch.setattr("agent.auxiliary_client.async_call_llm", fake)
+    _run(gr._classify_relevance("p", "msg", "", None))
+    assert seen.get("task") == "relevance_gate"
+
+
+def test_gate_accounting_books_classifier_usage_to_the_channel_session(tmp_path):
+    # Aux usage is only recorded inside a published accounting context, and the
+    # gate runs before any agent turn — so the gateway must publish one bound to
+    # the channel's session (sync SessionDB, not the AsyncSessionDB wrapper,
+    # whose methods come back as un-awaited coroutines).
+    from types import SimpleNamespace
+    from hermes_state import SessionDB, AsyncSessionDB
+    from agent.aux_accounting import get_accounting_context, record_aux_usage, reset_accounting_context
+
+    db = SessionDB(db_path=tmp_path / "gate.db")
+    try:
+        db.create_session(session_id="chan-1", source="slack", chat_id="C1", chat_type="channel")
+        store = SimpleNamespace(
+            lookup_by_session_key=lambda key: SimpleNamespace(session_id="chan-1") if key == "slack:C1" else None
+        )
+        runner = SimpleNamespace(session_store=store, _session_db=AsyncSessionDB(db))
+
+        token = gr.GatewayRunner._relevance_gate_accounting_token(runner, "slack:C1")
+        assert token is not None
+        assert get_accounting_context() == (db, "chan-1")
+        usage = SimpleNamespace(prompt_tokens=1200, completion_tokens=1, total_tokens=1201)
+        record_aux_usage(SimpleNamespace(model="gpt-5.6-luna", usage=usage), "relevance_gate", provider="openai")
+        reset_accounting_context(token)
+        assert get_accounting_context() is None
+
+        row = db._conn.execute(
+            "SELECT task, model, input_tokens FROM session_model_usage WHERE session_id = 'chan-1'"
+        ).fetchone()
+        assert row is not None
+        assert (row[0], row[1], row[2]) == ("relevance_gate", "gpt-5.6-luna", 1200)
+
+        # Unknown key (first message ever in a channel): no context, no crash.
+        assert gr.GatewayRunner._relevance_gate_accounting_token(runner, "slack:none") is None
+        assert get_accounting_context() is None
+    finally:
+        db.close()
