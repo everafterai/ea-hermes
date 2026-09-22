@@ -1260,6 +1260,106 @@ def _pricing_entry_from_metadata(
     )
 
 
+_OVERRIDE_RATE_KEYS = {
+    "input": "input_cost_per_million",
+    "output": "output_cost_per_million",
+    "cache_read": "cache_read_cost_per_million",
+    "cache_write": "cache_write_cost_per_million",
+}
+
+
+_OVERRIDES_MEMO: Optional[tuple] = None
+
+
+def _load_pricing_overrides() -> Dict[str, PricingEntry]:
+    """Parse ``pricing.overrides`` from config.yaml into PricingEntry values.
+
+    Fork addition: the catalog below is a snapshot and cannot know every
+    model an operator runs (the VM's ``gpt-5.4-mini`` is absent), so an
+    operator can state USD-per-million rates directly. Malformed entries are
+    skipped (logged once per process) — never an exception in the request path.
+
+    Reads via ``read_raw_config_readonly`` when available (no per-call
+    deepcopy of the whole config — this runs several times per agent turn),
+    falling back to ``read_raw_config`` otherwise. The returned dict is the
+    shared in-process cache and must never be mutated. Parsed entries are
+    memoized in-module, keyed on ``repr()`` of the raw ``overrides`` mapping,
+    so ``PricingEntry``/``Decimal`` objects aren't rebuilt on every lookup; an
+    edited config.yaml produces a different raw mapping and thus a different
+    key, so freshness is unaffected.
+    """
+    global _OVERRIDES_MEMO
+    try:
+        from hermes_cli import config as _hermes_config
+        reader = getattr(_hermes_config, "read_raw_config_readonly", None) or _hermes_config.read_raw_config
+        block = reader().get("pricing") or {}
+    except Exception:
+        logger.debug("pricing overrides unavailable", exc_info=True)
+        return {}
+    raw = block.get("overrides") if isinstance(block, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+
+    memo_key = repr(raw)
+    if _OVERRIDES_MEMO is not None and _OVERRIDES_MEMO[0] == memo_key:
+        return _OVERRIDES_MEMO[1]
+
+    entries: Dict[str, PricingEntry] = {}
+    for model, rates in raw.items():
+        if not isinstance(rates, dict) or "input" not in rates or "output" not in rates:
+            _warn_bad_override(model)
+            continue
+        fields: Dict[str, Decimal] = {}
+        ok = True
+        for key, attr in _OVERRIDE_RATE_KEYS.items():
+            value = rates.get(key, 0)
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                ok = False
+                break
+            dec = _to_decimal(value)
+            if dec is None or not dec.is_finite() or dec < 0:
+                ok = False
+                break
+            fields[attr] = dec
+        if not ok:
+            _warn_bad_override(model)
+            continue
+        entries[str(model).strip().lower()] = PricingEntry(
+            source="user_override", pricing_version="user-override", **fields
+        )
+    _OVERRIDES_MEMO = (memo_key, entries)
+    return entries
+
+
+_BAD_OVERRIDES_WARNED: set = set()
+
+
+def _warn_bad_override(model: Any) -> None:
+    key = str(model)
+    if key not in _BAD_OVERRIDES_WARNED:
+        _BAD_OVERRIDES_WARNED.add(key)
+        logger.warning("pricing.overrides[%r] ignored: expected {input, output[, cache_read, cache_write]} numbers", key)
+
+
+def pricing_override_for(model_name: str, route: BillingRoute) -> Optional[PricingEntry]:
+    overrides = _load_pricing_overrides()
+    if not overrides:
+        return None
+    candidates = []
+    for name in (route.model, model_name):
+        if not name:
+            continue
+        lowered = name.strip().lower()
+        candidates.append(lowered)
+        if "/" in lowered:
+            candidates.append(lowered.split("/", 1)[1])
+    for candidate in candidates:
+        entry = overrides.get(candidate)
+        if entry is not None:
+            return entry
+    return None
+
+
 def get_pricing_entry(
     model_name: str,
     provider: Optional[str] = None,
@@ -1267,6 +1367,15 @@ def get_pricing_entry(
     api_key: Optional[str] = None,
 ) -> Optional[PricingEntry]:
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
+    # Fork: operator-stated rates win — ahead of the subscription/OpenRouter/
+    # endpoint/catalog lookups below. Note this does NOT re-price a
+    # subscription route's usage: estimate_usage_cost returns `included`
+    # before it ever calls this function, so for those routes the override is
+    # visible only to direct get_pricing_entry callers (hermes_cli/
+    # model_cost_guard.py, the Langfuse plugin).
+    override = pricing_override_for(model_name, route)
+    if override is not None:
+        return override
     if route.billing_mode == "subscription_included":
         return PricingEntry(
             input_cost_per_million=_ZERO,
