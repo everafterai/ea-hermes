@@ -620,16 +620,13 @@ SELECT u.rowid AS rid, u.session_id, u.model, u.billing_provider, u.billing_base
        s.cost_status AS session_cost_status
   FROM session_model_usage u JOIN sessions s ON s.id = u.session_id
  WHERE s.started_at >= ? AND s.started_at < ?
-   AND ( ( (u.cost_status IS NULL OR u.cost_status = 'unknown')
-           AND COALESCE(u.actual_cost_usd, 0) = 0
-           AND COALESCE(u.estimated_cost_usd, 0) = 0 )
-         OR (u.cost_source = 'user_override' AND COALESCE(u.cost_status, '') != 'actual') )
+   AND COALESCE(u.cost_status, '') != 'actual'
    AND (u.input_tokens + u.output_tokens) > 0
  ORDER BY u.session_id
 """
 
 _UNPRICED_LEGACY_SESSIONS_SQL = """
-SELECT s.id, s.model, s.billing_provider, s.billing_base_url, s.cost_source,
+SELECT s.id, s.model, s.billing_provider, s.billing_base_url, s.cost_source, s.cost_status,
        COALESCE(s.estimated_cost_usd, 0) AS estimated_cost_usd,
        COALESCE(s.input_tokens, 0) AS input_tokens, COALESCE(s.output_tokens, 0) AS output_tokens,
        COALESCE(s.cache_read_tokens, 0) AS cache_read_tokens, COALESCE(s.cache_write_tokens, 0) AS cache_write_tokens,
@@ -637,12 +634,14 @@ SELECT s.id, s.model, s.billing_provider, s.billing_base_url, s.cost_source,
   FROM sessions s
  WHERE s.started_at >= ? AND s.started_at < ?
    AND COALESCE(s.cost_status, '') != 'actual'
-   AND ( ( (s.cost_status IS NULL OR s.cost_status = 'unknown')
-           AND COALESCE(s.actual_cost_usd, 0) = 0 )
-         OR s.cost_source = 'user_override' )
    AND (COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0)) > 0
    AND NOT EXISTS (SELECT 1 FROM session_model_usage u WHERE u.session_id = s.id AND u.task = '')
 """
+
+
+def _row_is_priced(row) -> bool:
+    """A usage/session row that already carries a price (any source but 'actual', which SQL excludes)."""
+    return row["cost_status"] in PRICED_STATUSES or float(row["estimated_cost_usd"] or 0.0) > 0
 
 
 def _estimate(row) -> Optional[tuple]:
@@ -664,11 +663,19 @@ def _estimate(row) -> Optional[tuple]:
 
 
 def reprice(db, *, since: float, until: float, dry_run: bool = False) -> RepriceResult:
-    """Price stored rows whose cost is unknown, and recompute override-priced rows.
+    """Price unpriced rows, and recompute every row of a model that has an override.
 
-    Uses the current ``pricing.overrides`` / catalog. Rows priced from provider
-    data or the catalog are never touched — only unpriced rows and rows whose
-    ``cost_source`` is ``user_override`` (see ``_UNPRICED_USAGE_SQL``).
+    Uses the current ``pricing.overrides`` / catalog. Three classes of row:
+
+    * unpriced (``cost_status`` NULL/unknown) — priced if any entry now exists;
+    * previously priced, model covered by ``pricing.overrides`` — recomputed
+      from the stored tokens, whatever the old ``cost_source`` was. An override
+      is the operator's statement of the rate, and it governs the model's whole
+      history: the built-in catalog is a snapshot that goes stale (the VM's
+      gpt-5.6-terra entry was 25% above OpenAI's bill after a price cut);
+    * provider-reported ``actual`` rows — never touched (excluded in SQL).
+
+    Previously priced rows of a model with no override are left alone.
     """
     result = RepriceResult(dry_run=dry_run)
     with db._read_ctx() as conn:
@@ -679,13 +686,17 @@ def reprice(db, *, since: float, until: float, dry_run: bool = False) -> Reprice
     usage_updates: Dict[str, List[tuple]] = {}   # session_id -> [(rid, amount, source, version, task)]
     actual_sessions = {row["session_id"] for row in usage_rows if row["session_cost_status"] == "actual"}
     for row in usage_rows:
+        previously_priced = _row_is_priced(row)
         est = _estimate(row)
         if est is None:
-            result.skipped_unknown += 1
+            if not previously_priced:
+                result.skipped_unknown += 1
             continue
         amount, source, version = est
+        if previously_priced and source != "user_override":
+            continue  # catalog- or provider-priced, and no override states otherwise
         usage_updates.setdefault(row["session_id"], []).append((row["rid"], amount, source, version, row["task"]))
-        if row["cost_source"] == "user_override":
+        if previously_priced:
             result.usage_rows_recomputed += 1
         else:
             result.usage_rows_priced += 1
@@ -694,11 +705,15 @@ def reprice(db, *, since: float, until: float, dry_run: bool = False) -> Reprice
 
     legacy_updates: List[tuple] = []             # (session_id, amount, source, version)
     for row in legacy_rows:
+        previously_priced = _row_is_priced(row)
         est = _estimate(row)
         if est is None:
-            result.skipped_unknown += 1
+            if not previously_priced:
+                result.skipped_unknown += 1
             continue
         amount, source, version = est
+        if previously_priced and source != "user_override":
+            continue
         legacy_updates.append((row["id"], amount, source, version))
         result.sessions_priced_from_summary += 1
         result.added_usd += amount - float(row["estimated_cost_usd"] or 0.0)

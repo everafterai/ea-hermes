@@ -480,15 +480,39 @@ class TestReprice:
         rows = attribute_sessions(db, **WINDOW, job_resolver=lambda _j: None, target_resolver=lambda _j: [])
         assert rows[0].status == "estimated" and rows[0].cost_usd == pytest.approx(2.0)
 
-    def test_leaves_priced_rows_alone(self, db, priced_mini):
-        # cost_source here is official_docs_snapshot (the catalog): priced from
-        # somewhere other than the override table, so never recomputed.
-        _seed(db, "p1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", cost=0.5, status="estimated",
-              input_tokens=1_000_000, output_tokens=0)
+    def test_leaves_priced_rows_of_models_without_an_override_alone(self, db, priced_mini):
+        # gpt-4o is catalog-priced and has no override: nothing states a better
+        # rate for it, so its stored estimate stands.
+        _seed(db, "p1", started_at=NOW - DAY, chat_id="C1", chat_type="channel", model="gpt-4o",
+              cost=0.5, status="estimated", input_tokens=1_000_000, output_tokens=0)
         result = reprice(db, **WINDOW)
         assert result.usage_rows_priced == 0 and result.sessions_updated == 0
-        assert result.usage_rows_recomputed == 0
+        assert result.usage_rows_recomputed == 0 and result.skipped_unknown == 0
         assert _session_cost_row(db, "p1")["estimated_cost_usd"] == pytest.approx(0.5)
+
+    def test_catalog_priced_rows_of_an_overridden_model_are_recomputed(self, db, priced_mini):
+        # Stored at a stale catalog rate ($0.50 for 1M input); the operator has
+        # since stated $1.00/M for gpt-5.4-mini, which governs the model's whole
+        # history — the VM's gpt-5.6-terra snapshot was 25% above OpenAI's bill.
+        _seed(db, "stale", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=0.5, status="estimated", input_tokens=1_000_000, output_tokens=0)
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_recomputed == 1 and result.usage_rows_priced == 0
+        assert result.sessions_updated == 1
+        assert result.added_usd == pytest.approx(0.5)       # delta: 1.0 - 0.5
+        row = _session_cost_row(db, "stale")
+        assert row["estimated_cost_usd"] == pytest.approx(1.0)
+        assert row["cost_source"] == "user_override"
+        assert reprice(db, **WINDOW).added_usd == pytest.approx(0.0)
+
+    def test_provider_actual_rows_are_never_recomputed(self, db, priced_mini):
+        _seed(db, "real", started_at=NOW - DAY, chat_id="C1", chat_type="channel",
+              cost=0.5, actual=0.42, status="actual", input_tokens=1_000_000, output_tokens=0)
+        result = reprice(db, **WINDOW)
+        assert result.usage_rows_recomputed == 0 and result.usage_rows_priced == 0
+        row = _session_cost_row(db, "real")
+        assert row["cost_status"] == "actual"
+        assert db._conn.execute("SELECT actual_cost_usd FROM session_model_usage WHERE session_id='real'").fetchone()[0] == pytest.approx(0.42)
 
     def _straddle(self, db):
         """A session alive when pricing.overrides landed.

@@ -185,22 +185,7 @@ source, then re-sum the parent `sessions` row from its usage rows. With no
 `--days/--since/--until` it covers the **whole store** (a repair pass should
 not silently stop at 30 days).
 
-Rows already priced **from provider data or the catalog** are never touched —
-a later rate change does not rewrite history; `--reprice --force` is
-deliberately not offered in v1. Rows whose `cost_source` is `user_override`
-**are** recomputed, at any status other than `actual`: their price is fully
-determined by the override table, so recomputing from the stored tokens is
-exact and idempotent. That is what repairs a *straddled* session — one alive
-when `pricing.overrides` landed. `session_model_usage` rows are
-UPSERT-accumulated per route with
-`cost_status = COALESCE(excluded.cost_status, cost_status)`, so the first
-priced call after the override flips the whole row to `estimated` while
-carrying only that one call's cost, and the unpriced-row query would skip it
-forever. `added_usd` counts only the delta (new − old), and a session whose
-summary is already `cost_status = 'actual'` keeps that summary (its usage
-rows are still priced). Runs in one transaction per session; prints how many
-rows it priced, how many it recomputed, and the total it added. `--dry-run`
-prints the same without writing.
+Rows previously priced are recomputed only when the model now has an entry under `pricing.overrides` — an override is the operator's statement of the rate and governs that model's whole history, whatever the old `cost_source` (the built-in catalog is a snapshot and goes stale: its gpt-5.6-terra entry was 25% above OpenAI's bill after a price cut). Provider-reported `actual` rows are never touched; previously priced rows of a model with no override are left alone. `--reprice --force` is deliberately not offered in v1: recomputation from stored tokens is exact and idempotent, so a rate edit followed by `--reprice` restates that model's history and a second run adds $0. That is also what repairs a *straddled* session — one alive when `pricing.overrides` landed: `session_model_usage` rows are UPSERT-accumulated per route with `cost_status = COALESCE(excluded.cost_status, cost_status)`, so the first priced call after the override flips the whole row to `estimated` while carrying only that one call's cost. `added_usd` counts only the delta (new − old), and a session whose summary is already `cost_status = 'actual'` keeps that summary (its usage rows are still priced). Runs in one transaction per session; prints how many rows it priced, how many it recomputed, and the total it added. `--dry-run` prints the same without writing.
 
 ## CLI
 

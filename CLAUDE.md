@@ -503,10 +503,14 @@ session count at all — one session spans several models).
 rates under a top-level `pricing.overrides:` block (`{input, output, cache_read,
 cache_write}`); `get_pricing_entry` consults it before the catalog (`cost_source =
 user_override`). `hermes costs --reprice [--dry-run]` (no window = the whole store)
-prices stored rows whose `cost_status` is unknown **and recomputes rows whose
-`cost_source` is `user_override`** — their price comes wholly from that table, so the
-recompute is exact, idempotent, and repairs a session that straddled the config
-change; rows priced from provider data or the catalog are never rewritten.
+prices stored rows whose `cost_status` is unknown **and recomputes every non-`actual`
+row of a model that has an override, whatever its old `cost_source`** — an override is
+the operator's statement of the rate and governs that model's whole history (the
+built-in catalog is a snapshot that goes stale: its gpt-5.6-terra entry sat 25% above
+OpenAI's bill after a price cut), so the recompute is exact, idempotent, and repairs
+both stale catalog rows and a session that straddled the config change. Provider-
+reported `actual` rows are never rewritten. Give each override `cache_write` too where
+the model bills it (OpenAI gpt-5.6: 1.25× input) — it defaults to 0.
 **Deploy the rates as: stop the gateway → add `pricing.overrides` → `hermes costs
 --reprice` → start the gateway**, or a session that is live across the change stays
 under-priced (its usage row flips to `estimated` carrying only the first priced
