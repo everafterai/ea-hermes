@@ -255,6 +255,26 @@ def _cron_channels(job: Optional[dict], target_resolver: TargetResolver,
     return channels
 
 
+def _memoize_targets(target_resolver: TargetResolver) -> TargetResolver:
+    """Resolve each cron job's delivery targets once per report.
+
+    Every cron *run* is its own root, so a report over a busy store visits
+    thousands of cron roots for a dozen jobs — and
+    ``cron.scheduler._resolve_delivery_targets`` costs up to a second per
+    call (it consults the gateway config and profile listing). Keyed on the
+    job id; jobs without an id fall back to object identity.
+    """
+    cache: Dict[Any, List[dict]] = {}
+
+    def resolve(job: dict) -> List[dict]:
+        key = str(job.get("id")) if isinstance(job, dict) and job.get("id") else id(job)
+        if key not in cache:
+            cache[key] = target_resolver(job)
+        return cache[key]
+
+    return resolve
+
+
 @dataclass(frozen=True)
 class _RootKeys:
     """The attribution keys a root lends to every session in its lineage."""
@@ -322,7 +342,7 @@ def attribute_sessions(
     they started.
     """
     job_resolver = job_resolver or _default_job_resolver()
-    target_resolver = target_resolver or _default_target_resolver
+    target_resolver = _memoize_targets(target_resolver or _default_target_resolver)
 
     attributed: Dict[str, AttributedSession] = {}
     root_keys: Dict[str, _RootKeys] = {}

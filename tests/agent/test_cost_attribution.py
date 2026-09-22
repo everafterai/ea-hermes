@@ -287,6 +287,24 @@ class TestAttributeSessions:
         assert rows[0].api_calls == 2
 
 
+    def test_delivery_targets_are_resolved_once_per_job_not_per_run(self, db):
+        # Every cron run is its own root; on the VM that is thousands of roots for
+        # a dozen jobs, and each target resolution costs up to a second.
+        for stamp in ("20260901_080000", "20260902_080000", "20260903_080000"):
+            _seed(db, f"cron_ab12_{stamp}", source="cron", started_at=NOW - DAY, cost=1.0)
+        job = {"id": "ab12", "name": "Digest", "_targets": [{"platform": "slack", "chat_id": "C123"}]}
+        calls = []
+
+        def counting_targets(j):
+            calls.append(j["id"])
+            return _targets_from_job(j)
+
+        rows = attribute_sessions(db, **WINDOW, job_resolver=_jobs(job), target_resolver=counting_targets)
+        assert len(rows) == 3
+        assert all(r.channels and r.channels[0].chat_id == "C123" for r in rows)
+        assert calls == ["ab12"]
+
+
 class TestDefaultResolvers:
     """The production resolvers, which every test above replaces with a fake."""
 
