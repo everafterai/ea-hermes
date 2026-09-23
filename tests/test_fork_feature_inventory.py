@@ -93,6 +93,13 @@ WIRING = [
     ("Cron ceiling", "cron/scheduler.py", "enabled_toolsets=_cron_enabled_toolsets_with_ceiling(job, _cfg)", "wired at AIAgent build"),
     ("Cron create gate", "tools/cronjob_tools.py", "_rbac_creation_error", "create/update gate"),
     ("Cron unattended ack", "tools/cronjob_tools.py", "_unattended_ack_error", "ack gate"),
+    ("Cron capability preflight", "cron/capability_preflight.py", "def evaluate_job_capabilities", "effective-vs-required evaluation"),
+    ("Cron capability preflight", "tools/cronjob_tools.py", "_capability_preflight(", "create/update rejects unmet requirements"),
+    ("Cron capability preflight", "cron/scheduler.py", '("capabilities", lambda: _preflight_check_capabilities(job, cfg))', "runtime blocked_config check"),
+    ("Cron capability preflight", "tools/ownership_tool.py", "_cron_capabilities_after_transfer", "transfer re-evaluates under new owner"),
+    ("Cron failure visibility", "cron/scheduler.py", "def _agent_reported_failure", "[FAILED] marker fails the run"),
+    ("Cron failure visibility", "cron/scheduler.py", "def _alert_owner_of_undelivered_failure", "local-only failures DM the owner"),
+    ("slack_post_thread root post", "tools/slack_post_thread_tool.py", "def _get_permalink", "root posts + permalink receipt"),
     ("Cron approval context", "cron/tool_approval_context.py", "def set_cron_tool_context", "owner grant export"),
     # ── Quiet channels / silent completion ────────────────────────────────
     ("Quiet channels", "gateway/run.py", "def _is_quiet_channel", "resolver"),

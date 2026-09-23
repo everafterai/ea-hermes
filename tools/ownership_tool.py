@@ -279,12 +279,48 @@ def _do_transfer(args: dict, key: str, actor: ao.Identity, record: dict) -> str:
             f"{new_owner.display_name}. — via Hermes automation ownership"
         ),
     )
-    return tool_result({
+    result = {
         "ok": True,
         "key": key,
         "owner": updated["owner"]["display_name"],
         "message": f"{key} now belongs to {new_owner.display_name}.",
-    })
+    }
+    capabilities = _cron_capabilities_after_transfer(key, new_owner.display_name)
+    if capabilities:
+        result["capabilities"] = capabilities
+    return tool_result(result)
+
+
+def _cron_capabilities_after_transfer(key: str, owner_name: str) -> dict:
+    """For a ``cron:`` item, re-evaluate the job's toolsets under the NEW
+    owner's role (the runtime ceiling follows the owner). A narrower role can
+    silently strip what the job needs, and a wider one does not widen the
+    job's stored ``enabled_toolsets`` — both are worth saying at transfer
+    time. Best-effort: {} on any error or for non-cron keys."""
+    if not key.startswith("cron:"):
+        return {}
+    try:
+        from cron.capability_preflight import evaluate_job_capabilities
+        from cron.jobs import get_job
+        from cron.rbac_ceiling import cron_owner_grant
+        from hermes_cli.config import load_config
+
+        job = get_job(key.split(":", 1)[1])
+        if not job or job.get("no_agent"):
+            return {}
+        report = evaluate_job_capabilities(
+            job, load_config() or {}, cron_owner_grant(job),
+            include_enabled=True, check_availability=False,
+        )
+        out: dict = {"effective_toolsets": report.effective or "all default toolsets"}
+        if report.problems:
+            out["warning"] = (
+                f"Under {owner_name}'s role this job cannot use what it needs: "
+                + "; ".join(report.problems)
+            )
+        return out
+    except Exception:
+        return {}
 
 
 def _do_collab(action: str, args: dict, key: str, actor: ao.Identity, record: dict) -> str:

@@ -174,8 +174,10 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   creds and `check_fn` as the read tool. **Deployment:** must be listed in
   `platform_toolsets.slack` (an explicit list shadows defaults). No design doc.
 - **`slack_post_thread` (`slack_post` toolset)** — [tools/slack_post_thread_tool.py](tools/slack_post_thread_tool.py).
-  Posts to an explicit `chat_id`+`thread_ts` via `chat.postMessage` (takes them as args, no
-  session contextvars → cron/worker safe). **Deliberately a SEPARATE, NON-FLOOR toolset** —
+  Posts to an explicit `chat_id` (+ optional `thread_ts`; omit it for a new root
+  message) via `chat.postMessage` (takes them as args, no session contextvars →
+  cron/worker safe), and returns `message_ts` + a best-effort `permalink`
+  (`chat.getPermalink`) so a worker can cite the post as a receipt. **Deliberately a SEPARATE, NON-FLOOR toolset** —
   unlike the floor `slack` toolset (`slack_react`+`turn_end`), `slack_post` must be granted
   to a role, so a valid-role user does NOT get arbitrary thread-posting for free. It is how
   a cron/delegated sub-agent posts to Slack, since cron hard-disables the `messaging`
@@ -433,6 +435,49 @@ edit) escalate to `terminal`/host-shell. Design:
   with a shell** — RBAC + the `file`-toolset grant remain the real boundary for the
   `jobs.json`-edit path; this closes the toolset-driven escalation and makes the
   residual visible.
+
+### Cron capability preflight + local-job failure alerts — [cron/capability_preflight.py](cron/capability_preflight.py)
+
+Every step between a job's `enabled_toolsets` and what its agent receives is
+silent: enabled MCP servers are merged in, `messaging`/`clarify` (usually
+`cronjob`) are stripped, the owner's role caps the rest. The Ready-for-Staging
+auto-merger (2026-09-16) was created as `[jira, messaging, file]` by a creator
+whose role had no write access, ran `ok` every 5 min for a week, and never
+merged or reported anything. Design:
+[docs/superpowers/specs/2026-09-23-cron-capability-preflight-design.md](docs/superpowers/specs/2026-09-23-cron-capability-preflight-design.md).
+
+- **One evaluation, four surfaces.** `evaluate_job_capabilities` computes the
+  effective toolsets (same resolver + ceiling as the scheduler) and checks the
+  *required* ones: the job's new `required_toolsets` field, `requires_toolsets`
+  in the `automation.yaml` of the job's `workdir` (scaffolded by `hermes own
+  init`), and — at create/update only — every explicitly listed
+  `enabled_toolsets` name. A requirement fails when it is unknown, stripped in
+  cron (hint: `messaging` → `slack_post`), outside the owner's role, not in the
+  job's list, or (create/update only) exposes no usable tool on this host.
+  MCP names fold `mcp-<server>` onto the bare server name.
+- **`cronjob` create/update REJECTS** an unmet requirement (the error tells
+  the agent to report who must grant it, never to drop it). Update evaluates
+  against the job's *owner*, and only enforces when it touches
+  toolsets/requirements/workdir/acks — an unrelated edit of a legacy job gets
+  `capabilities.warnings` instead. Results echo `capabilities.effective_toolsets`
+  and `blocked_unattended_tools` (approval-gated tools reachable but not acked,
+  which the headless approval gate will block — the existing ack check only saw
+  explicitly listed toolsets, not merged-in MCP servers).
+- **Runtime:** a 4th check in the scheduler's pre-dispatch preflight
+  (`_preflight_check_capabilities`) blocks a run as `blocked_config`
+  (alert-once, no LLM spend) when a *declared* requirement stops resolving —
+  demotion, transfer to a narrower role, config change. Jobs that declare
+  nothing are never blocked, so existing jobs are unaffected.
+- **`ownership transfer`** of a `cron:` item returns `capabilities` evaluated
+  under the new owner, with a `warning` for what their role strips.
+- **`[FAILED]` marker:** a cron response starting with `[FAILED]` marks the run
+  failed (`failure_streak`, incident, failure alert). The cron system hint
+  tells agents to use it when a required action was missing/refused/blocked.
+- **Local-only jobs DM their owner:** a failure alert for a job with no
+  delivery target (`deliver: local`, or an origin that no longer resolves) is
+  sent to the owner (ownership registry `cron:<id>`) as a DM, once per incident
+  signature (the incident is then `alerted`; a new error text alerts again).
+  `blocked_config`/drift alerts keep their own alert-once markers.
 
 ### Cron delivery format — [cron/scheduler.py](cron/scheduler.py) `_deliver_result`
 

@@ -259,6 +259,15 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
     # happened, naming the script. No new message text is needed.
     provider_reachable = not job.get("no_agent")
 
+    # The agent's own [FAILED] report: its prose, not a provider fault — pass
+    # it through before the substring heuristics below (a reason mentioning
+    # "401" or "timed out" must not be relabelled a provider failure).
+    if text.startswith("Agent reported failure:"):
+        reason = text[len("Agent reported failure:"):].strip()
+        if len(reason) > 600:
+            reason = reason[:600].rstrip() + "…"
+        return f"⚠️ Cron '{job_name}' reported a failure: {reason}"
+
     # Script execution happens outside the LLM/provider path (also for
     # agent-backed jobs that run a context script). Check the script runner's
     # explicit error contract ("Script timed out after {n}s: {path}") before
@@ -448,6 +457,52 @@ def _mark_incident_alerted(incident_id: Optional[str]) -> None:
         set_incident_state(incident_id, "alerted")
     except Exception as exc:
         logger.debug("Failed marking incident %s alerted: %s", incident_id, exc)
+
+
+def _alert_owner_of_undelivered_failure(
+    job: dict,
+    content: str,
+    incident_id: Optional[str] = None,
+    *,
+    already_deduped: bool = False,
+) -> None:
+    """DM a local-only job's owner the failure alert it would otherwise drop.
+
+    ``deliver: local`` (or an origin that no longer resolves) sends a failure
+    alert nowhere, so a broken job fails silently until someone reads
+    ``cronjob list``. When the job has no delivery target, route the alert to
+    its owner (automation-ownership registry, ``cron:<id>``) as a DM instead.
+    Alert-once: each distinct error signature (incident) DMs once, then the
+    incident is marked ``alerted``; ``already_deduped`` callers (blocked_config
+    / drift, which carry their own alert-once markers) skip that check.
+    Best-effort — never raises into the run.
+    """
+    try:
+        if not (content or "").strip():
+            return
+        if _resolve_delivery_targets(job):
+            return  # the alert already went to a real target
+        if incident_id and not already_deduped:
+            from cron.incidents import get_incident
+
+            incident = get_incident(incident_id)
+            if incident and incident.get("state") in ("alerted", "closed"):
+                return
+        from agent import automation_ownership as ao
+
+        record = ao.get_record(ao.artifact_key("cron", str(job.get("id") or "")))
+        owner = (record or {}).get("owner") or {}
+        user_id, platform = owner.get("user_id"), owner.get("platform")
+        if not user_id or not platform:
+            return
+        message = (
+            f"{content.strip()}\n\n_You own this local-only cron job "
+            f"(`{job.get('id')}`), so its failure alerts come to you._"
+        )
+        if ao._send_dm(str(platform), str(user_id), message) and incident_id:
+            _mark_incident_alerted(incident_id)
+    except Exception as exc:
+        logger.debug("Owner failure DM for job %s failed: %s", job.get("id"), exc)
 
 
 class CronPromptInjectionBlocked(Exception):
@@ -710,6 +765,26 @@ SILENT_MARKER = "[SILENT]"
 # The actual matcher is shared with the webhook lane —
 # gateway.response_filters.is_autonomous_silence_response — so the two
 # autonomous lanes cannot drift apart.
+
+
+# Agent-declared failure. A cron agent that could not complete a required
+# action (a tool missing, refused, blocked, or erroring) otherwise ends its turn
+# normally and the run records ``ok`` — the Ready-for-Staging auto-merger
+# logged "Required notifications … not performed" on every run for a week while
+# `last_status` stayed ``ok``. A response that STARTS with this marker makes
+# the run a failure: failure_streak, incident, and the failure alert (to the
+# delivery target, or the owner's DM for a local-only job).
+FAILED_MARKER = "[FAILED]"
+
+
+def _agent_reported_failure(text: str) -> Optional[str]:
+    """Return the failure reason when a cron response starts with ``[FAILED]``
+    (case-insensitive, leading whitespace ignored), else None. Only a leading
+    marker counts — a report that merely mentions the token is real content."""
+    stripped = (text or "").lstrip()
+    if stripped[: len(FAILED_MARKER)].upper() != FAILED_MARKER:
+        return None
+    return stripped[len(FAILED_MARKER):].strip() or "the agent reported a failure"
 
 
 def _is_cron_silence_response(text: str) -> bool:
@@ -4798,7 +4873,11 @@ def _build_job_prompt(
         "SILENT: If there is genuinely nothing new to report, respond "
         "with exactly \"[SILENT]\" (nothing else) to suppress delivery. "
         "Never combine [SILENT] with content — either report your "
-        "findings normally, or say [SILENT] and nothing more.]\n\n"
+        "findings normally, or say [SILENT] and nothing more. "
+        "FAILED: If a required action could not be done because a tool was "
+        "missing, refused, blocked, or errored, start your final response "
+        "with \"[FAILED]\" and say what failed — this marks the run failed "
+        "and alerts the job's owner.]\n\n"
     )
     prompt = cron_hint + prompt
     if skills is None:
@@ -5458,6 +5537,38 @@ def _preflight_check_skills(job: dict) -> Optional[str]:
     return None
 
 
+def _preflight_check_capabilities(job: dict, cfg: dict) -> Optional[str]:
+    """Block the run when a DECLARED required toolset no longer resolves.
+
+    Declared = the job's ``required_toolsets`` plus its automation bundle's
+    ``requires_toolsets`` (cron/capability_preflight.py). A job that declares
+    nothing is never blocked here — pre-existing jobs run exactly as before.
+    Catches drift after creation: the owner was demoted, the job was
+    transferred to a narrower role, or config now strips a toolset. Only
+    config-deterministic checks run (no MCP-connectivity probe), so a
+    transient disconnect cannot block a run.
+    """
+    if job.get("no_agent"):
+        return None
+    from cron.capability_preflight import (
+        declared_required_toolsets,
+        evaluate_job_capabilities,
+        format_problems,
+    )
+
+    if not declared_required_toolsets(job):
+        return None
+    from cron.rbac_ceiling import cron_owner_grant
+
+    report = evaluate_job_capabilities(
+        job, cfg, cron_owner_grant(job),
+        include_enabled=False, check_availability=False,
+    )
+    if report.ok:
+        return None
+    return f"required toolsets unavailable to this job: {format_problems(report)}"
+
+
 def _preflight_job_config(job: dict, cfg: dict) -> Optional[str]:
     """Pre-dispatch configuration validation (T1-26).
 
@@ -5478,6 +5589,7 @@ def _preflight_job_config(job: dict, cfg: dict) -> Optional[str]:
         ("provider_key", lambda: _preflight_check_provider_key(job, cfg)),
         ("skills", lambda: _preflight_check_skills(job)),
         ("delivery", lambda: _preflight_check_delivery(job)),
+        ("capabilities", lambda: _preflight_check_capabilities(job, cfg)),
     ):
         try:
             reason = check()
@@ -6952,6 +7064,12 @@ def run_job(
             "duration_ms": _audit_duration_ms,
             "error": None,
         })
+        _reported_failure = _agent_reported_failure(final_response)
+        if _reported_failure is not None:
+            logger.warning(
+                "Job '%s': agent reported failure: %s", job_name, _reported_failure[:300]
+            )
+            return False, output, final_response, f"Agent reported failure: {_reported_failure}"
         return True, output, final_response, None
 
     except Exception as e:
@@ -7665,6 +7783,17 @@ def _run_one_job_body(
                         raise
                     delivery_error = str(de)
                     logger.error("Delivery failed for job %s: %s", job["id"], de)
+            if (
+                should_deliver
+                and not success
+                and not _fire_claim_ownership_lost()
+            ):
+                _alert_owner_of_undelivered_failure(
+                    job,
+                    deliver_content,
+                    failure_incident_id,
+                    already_deduped=blocked_config or drift_skip,
+                )
         except _FireClaimLostDuringSideEffect:
             side_effect_ownership_lost = True
         finally:
@@ -7840,6 +7969,12 @@ def _run_one_job_body(
                     delivery_outcome = "delivered"
                 if delivery_outcome in ("delivered", "not_configured"):
                     _mark_incident_alerted(failure_incident_id)
+                else:
+                    _alert_owner_of_undelivered_failure(
+                        job,
+                        _summarize_cron_failure_for_delivery(job, _err_text),
+                        failure_incident_id,
+                    )
         try:
             if not _consume_interrupted_flag(job["id"], execution_token):
                 mark_kwargs = {}
