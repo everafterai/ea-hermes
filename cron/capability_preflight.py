@@ -10,24 +10,25 @@ every run discovering it cannot do its job (the Ready-for-Staging auto-merger,
 2026-09-16: 17 events, 0 merges, 17 undelivered blocker notices, every run
 ``ok``).
 
-This module evaluates that pipeline up front so the three surfaces agree:
+This module evaluates that pipeline up front so the surfaces agree:
 
 * ``cronjob`` create/update (tools/cronjob_tools.py) REJECTS a job whose
-  required toolsets would be unavailable at run time, and echoes the
-  effective toolsets so the agent can't mis-describe what the job gets.
+  needed toolsets would be unavailable at run time, and echoes the effective
+  toolsets so the agent can't mis-describe what the job gets.
 * The scheduler's pre-dispatch preflight (cron/scheduler.py) blocks a run —
-  alert-once, no LLM spend — when a DECLARED requirement stopped resolving
-  (owner demoted, job transferred to a narrower role, config edited).
-* ``ownership transfer`` of a ``cron:`` item reports what the new owner's
-  role would strip.
+  alert-once, no LLM spend — when a needed toolset stopped resolving (owner
+  demoted, job transferred to a narrower role, config edited) or a script
+  imports a module the gateway's Python lacks.
+* ``ownership transfer`` of a ``cron:`` item refuses (unless confirmed) when
+  the new owner's role would strip what the job needs.
 
-"Required" means: the job's ``required_toolsets`` field, plus
-``requires_toolsets`` in the ``automation.yaml`` of the job's ``workdir``
-(an automation bundle), plus — at create/update time only — every toolset the
-job names explicitly in ``enabled_toolsets`` (naming a toolset the job can
-never receive is always a mistake). The runtime check deliberately uses only
-the declared requirements so pre-existing jobs that list a stripped toolset
-keep running exactly as before.
+"Needed" means the job's ``required_toolsets`` field, ``requires_toolsets`` in
+the ``automation.yaml`` of the job's ``workdir`` (an automation bundle), and
+every toolset the job names explicitly in ``enabled_toolsets`` — naming a
+toolset the job can never receive is always a misconfiguration. (Measured on
+the VM 2026-09-23: that rule flagged exactly the two broken jobs.) Cron agents
+never receive ``terminal``/``code_execution`` (fork policy): deterministic
+steps live in the job's pre-run ``script`` / ``post_script``.
 
 Everything here fails open: an internal error yields an empty problem list,
 never a blocked job.
@@ -57,6 +58,15 @@ CRON_STRIPPED_HINTS = {
     "cronjob": (
         "cron agents may not manage cron jobs unless "
         "`cron.allow_agent_scheduling: true` is set"
+    ),
+    "terminal": (
+        "unattended agents never get a shell — put deterministic steps in the "
+        "job's pre-run `script` (collect) or `post_script` (apply the agent's "
+        "plan file); a super admin attaches those"
+    ),
+    "code_execution": (
+        "unattended agents never get a shell — put deterministic steps in the "
+        "job's pre-run `script` or `post_script`; a super admin attaches those"
     ),
 }
 
@@ -294,6 +304,76 @@ def grant_for_identity(identity, chat_id: Optional[str]) -> Optional[FrozenSet[s
             return None
         return policy.grant_for(str(identity.user_id), chat_id or None)
     except Exception:
+        return None
+
+
+def _module_imports_outside_try(source: str) -> List[str]:
+    """Top-level module names a Python source imports unconditionally.
+
+    Imports inside a ``try`` body are skipped — that is how scripts declare an
+    optional dependency with a fallback — as are relative imports and
+    ``__future__``."""
+    import ast
+
+    tree = ast.parse(source)
+    names: List[str] = []
+
+    def visit(node, in_try: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            child_in_try = in_try or isinstance(child, ast.Try) or (
+                hasattr(ast, "TryStar") and isinstance(child, ast.TryStar)
+            )
+            if not in_try and isinstance(child, ast.Import):
+                names.extend(alias.name.split(".")[0] for alias in child.names)
+            elif not in_try and isinstance(child, ast.ImportFrom):
+                if child.level == 0 and child.module:
+                    names.append(child.module.split(".")[0])
+            visit(child, child_in_try)
+
+    visit(tree, False)
+    return [n for n in dict.fromkeys(names) if n != "__future__"]
+
+
+def script_import_problems(script: Optional[str]) -> Optional[str]:
+    """Describe modules a cron job's Python script imports that the GATEWAY's
+    interpreter cannot find, or None.
+
+    Cron scripts run under ``sys.executable`` — the gateway's venv — which is
+    not necessarily the Python the author tested with (the VM's ``hermes``
+    CLI and a bare ``python3`` both resolve elsewhere). Sibling modules in the
+    script's own directory count as present. Fails open (None) on anything it
+    cannot evaluate: a missing file, a shell script, a syntax error."""
+    if not script:
+        return None
+    try:
+        import importlib.util
+        import sys
+
+        from hermes_constants import get_hermes_home
+
+        scripts_dir = (get_hermes_home() / "scripts").resolve()
+        raw = Path(str(script)).expanduser()
+        path = raw.resolve() if raw.is_absolute() else (scripts_dir / raw).resolve()
+        if path.suffix.lower() in {".sh", ".bash"} or not path.is_file():
+            return None
+        missing = []
+        for name in _module_imports_outside_try(path.read_text(encoding="utf-8")):
+            if (path.parent / f"{name}.py").exists() or (path.parent / name).is_dir():
+                continue
+            if name in sys.builtin_module_names:
+                continue
+            if importlib.util.find_spec(name) is None:
+                missing.append(name)
+        if not missing:
+            return None
+        return (
+            f"script '{path.name}' imports {', '.join(missing)}, which the "
+            f"gateway's Python ({sys.executable}) cannot find — install into "
+            f"that interpreter, e.g. `uv pip install --python {sys.executable} "
+            f"{' '.join(missing)}` (the package name may differ from the module)"
+        )
+    except Exception as err:
+        logger.debug("script import check failed for %s: %s", script, err)
         return None
 
 

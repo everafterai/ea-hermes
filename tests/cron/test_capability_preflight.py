@@ -16,7 +16,7 @@ import cron.scheduler as sched
 import tools.cronjob_tools as cj
 
 _KNOWN = {"jira", "jira_write", "file", "slack_post", "messaging", "clarify",
-          "cronjob", "web", "github_rw"}
+          "cronjob", "web", "github_rw", "terminal", "code_execution"}
 
 
 @pytest.fixture(autouse=True)
@@ -109,10 +109,16 @@ def test_automation_manifest_requirements(tmp_path):
 
 # --- scheduler runtime preflight ------------------------------------------------
 
-def test_runtime_check_ignores_jobs_without_declared_requirements():
-    # A legacy job listing a stripped toolset keeps running as before.
+def test_runtime_check_ignores_jobs_that_name_nothing():
+    assert sched._preflight_check_capabilities({"id": "j1"}, {}) is None
+
+
+def test_runtime_check_flags_explicitly_listed_stripped_toolset():
+    # Naming a toolset the job can never receive is a misconfiguration: the
+    # auto-merger listed messaging and never posted a single blocker notice.
     job = {"id": "j1", "enabled_toolsets": ["jira", "messaging"]}
-    assert sched._preflight_check_capabilities(job, {}) is None
+    reason = sched._preflight_check_capabilities(job, {})
+    assert reason and "messaging" in reason
 
 
 def test_runtime_check_blocks_when_declared_requirement_lost(monkeypatch):
@@ -237,3 +243,155 @@ def test_owner_dm_skipped_without_owner(monkeypatch, owned_local_job):
     job, rec = owned_local_job
     sched._alert_owner_of_undelivered_failure({**job, "id": "other"}, "⚠️ boom", None)
     assert rec.dms == []
+
+
+# --- no shell in cron agents ----------------------------------------------------
+
+def test_cron_strips_shell_toolsets_by_default():
+    disabled = sched._resolve_cron_disabled_toolsets({})
+    assert "terminal" in disabled and "code_execution" in disabled
+    opted_in = sched._resolve_cron_disabled_toolsets({"cron": {"allow_agent_shell": True}})
+    assert "terminal" not in opted_in and "code_execution" not in opted_in
+
+
+def test_listed_terminal_is_flagged_with_script_hint():
+    report = _eval({"enabled_toolsets": ["terminal", "file"]})
+    assert report.missing == ["terminal"]
+    assert "post_script" in report.problems[0]
+
+
+# --- script import preflight ----------------------------------------------------
+
+@pytest.fixture
+def scripts_dir():
+    from hermes_constants import get_hermes_home
+    d = get_hermes_home() / "scripts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def test_script_import_problems_names_missing_module(scripts_dir):
+    (scripts_dir / "collector.py").write_text(
+        "import json\nfrom definitely_missing_mod_xyz import thing\n"
+        "try:\n    import optional_missing_mod_xyz\nexcept ImportError:\n    pass\n"
+        "from sibling_helper import x\n",
+        encoding="utf-8",
+    )
+    (scripts_dir / "sibling_helper.py").write_text("x = 1\n", encoding="utf-8")
+    msg = cp.script_import_problems("collector.py")
+    assert msg and "definitely_missing_mod_xyz" in msg
+    assert "optional_missing_mod_xyz" not in msg   # try-guarded = optional
+    assert "sibling_helper" not in msg             # local module
+    assert "uv pip install --python" in msg
+
+
+def test_script_import_problems_clean_and_non_python(scripts_dir):
+    (scripts_dir / "ok.py").write_text("import json, os\n", encoding="utf-8")
+    (scripts_dir / "w.sh").write_text("import nothing\n", encoding="utf-8")
+    assert cp.script_import_problems("ok.py") is None
+    assert cp.script_import_problems("w.sh") is None
+    assert cp.script_import_problems("absent.py") is None
+    assert cp.script_import_problems(None) is None
+
+
+def test_run_job_blocks_before_script_runs_on_missing_import(scripts_dir):
+    marker = scripts_dir / "ran.txt"
+    (scripts_dir / "bad.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('x')\n"
+        "import definitely_missing_mod_xyz\n",
+        encoding="utf-8",
+    )
+    ok, doc, final, err = sched.run_job(
+        {"id": "imp1", "name": "imp", "prompt": "p", "script": "bad.py",
+         "schedule": {"kind": "interval", "minutes": 5}}
+    )
+    assert ok is False and final == ""
+    assert sched.BLOCKED_CONFIG_MARKER in err and "definitely_missing_mod_xyz" in err
+    assert not marker.exists()   # the script never executed
+
+
+def test_create_rejects_script_with_missing_import(monkeypatch, scripts_dir):
+    monkeypatch.setattr(cj, "_creator_grant", lambda: None)
+    (scripts_dir / "bad2.py").write_text("import definitely_missing_mod_xyz\n", encoding="utf-8")
+    out = json.loads(cj.cronjob(action="create", schedule="every 5m", prompt="p",
+                                script="bad2.py"))
+    assert out.get("success") is False and "definitely_missing_mod_xyz" in out["error"]
+
+
+# --- post_script ----------------------------------------------------------------
+
+def test_post_script_receives_response_and_workdir(scripts_dir, tmp_path):
+    (scripts_dir / "apply.py").write_text(
+        "import os, pathlib\n"
+        "resp = pathlib.Path(os.environ['HERMES_CRON_RESPONSE_FILE']).read_text()\n"
+        "print(f\"applied {resp} for {os.environ['HERMES_CRON_JOB_ID']} in {pathlib.Path.cwd().name}\")\n",
+        encoding="utf-8",
+    )
+    ok, out = sched._run_job_post_script(
+        {"id": "pj", "post_script": "apply.py", "workdir": str(tmp_path)}, "PLAN-1"
+    )
+    assert ok and out == f"applied PLAN-1 for pj in {tmp_path.name}"
+
+
+def test_post_script_failure_reports_error(scripts_dir):
+    (scripts_dir / "boom.py").write_text("import sys\nsys.exit('bad plan')\n", encoding="utf-8")
+    ok, out = sched._run_job_post_script({"id": "pj", "post_script": "boom.py"}, "x")
+    assert not ok and "bad plan" in out
+
+
+def test_merge_post_script_output():
+    assert sched._merge_post_script_output("report", "") == "report"
+    assert sched._merge_post_script_output("report", "wrote 2 rows") == "report\n\nwrote 2 rows"
+    assert sched._merge_post_script_output("[SILENT]", "wrote 2 rows") == "wrote 2 rows"
+    assert sched._merge_post_script_output("[SILENT]", "") == "[SILENT]"
+
+
+def test_create_rejects_post_script_on_no_agent_job(monkeypatch, scripts_dir):
+    monkeypatch.setattr(cj, "_creator_grant", lambda: None)
+    (scripts_dir / "s.py").write_text("print(1)\n", encoding="utf-8")
+    out = json.loads(cj.cronjob(action="create", schedule="every 5m", script="s.py",
+                                no_agent=True, post_script="s.py"))
+    assert out.get("success") is False and "no_agent" in out["error"]
+
+
+def test_create_stores_post_script(monkeypatch, scripts_dir):
+    monkeypatch.setattr(cj, "_creator_grant", lambda: None)
+    (scripts_dir / "apply2.py").write_text("print(1)\n", encoding="utf-8")
+    out = json.loads(cj.cronjob(action="create", schedule="every 5m", prompt="p",
+                                enabled_toolsets=["file"], post_script="apply2.py"))
+    assert out["success"] is True, out
+    assert out["job"]["post_script"] == "apply2.py"
+
+
+def test_post_script_needs_shell_granted_creator(monkeypatch):
+    from agent.automation_ownership import Identity
+
+    class _Policy:
+        enabled = True
+        def allowed_toolsets(self, u, requested, c=None):
+            return frozenset(requested)
+        def can_use_tool(self, u, toolset, c=None):
+            return toolset not in {"terminal", "code_execution"}
+
+    monkeypatch.setattr("gateway.session_context.get_session_env", lambda *a, **k: "")
+    monkeypatch.setattr("agent.automation_ownership.current_identity",
+                        lambda: Identity("slack", "U1", "Bob"))
+    monkeypatch.setattr("gateway.tool_access.policy_for_platform", lambda name: _Policy())
+    err = cj._rbac_creation_error(enabled_toolsets=["file"], has_script=True, is_no_agent=False)
+    assert err and "terminal" in err
+
+
+# --- ownership transfer ---------------------------------------------------------
+
+def test_transfer_capability_loss_reported(monkeypatch):
+    import tools.ownership_tool as ot
+    from agent.automation_ownership import Identity
+
+    monkeypatch.setattr("cron.jobs.get_job", lambda jid: {
+        "id": jid, "enabled_toolsets": ["file", "google_sheets"], "origin": {}})
+    monkeypatch.setattr("cron.capability_preflight.grant_for_identity",
+                        lambda ident, chat: frozenset({"file"}))
+    monkeypatch.setattr("toolsets.validate_toolset", lambda name: True)
+    loss = ot._cron_capability_loss("cron:abc", Identity("slack", "U2", "Pazit"))
+    assert "google_sheets" in loss
+    assert ot._cron_capability_loss("skill:x", Identity("slack", "U2", "Pazit")) == ""

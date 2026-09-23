@@ -446,12 +446,24 @@ whose role had no write access, ran `ok` every 5 min for a week, and never
 merged or reported anything. Design:
 [docs/superpowers/specs/2026-09-23-cron-capability-preflight-design.md](docs/superpowers/specs/2026-09-23-cron-capability-preflight-design.md).
 
+- **Cron agents never get a shell (fork policy — `terminal` is super-admin
+  only).** `_resolve_cron_disabled_toolsets` strips `terminal` and
+  `code_execution` from every cron run unless `cron.allow_agent_shell: true`.
+  Deterministic work goes in scripts a super admin attaches (the create gate
+  requires a `terminal`/`code_execution` role for either): the pre-run
+  `script` collects, and the new **`post_script`** applies — it runs after
+  each successful agent run with the agent's final response in the file named
+  by `$HERMES_CRON_RESPONSE_FILE` (cwd = `workdir`), its stdout is appended to
+  the delivery (a `[SILENT]` agent + empty stdout stays silent), and a
+  non-zero exit fails the run. The pattern: agent writes a plan/summary with
+  the `file` tools → `post_script` validates and applies it. `hermes cron
+  create/edit --post-script`.
 - **One evaluation, four surfaces.** `evaluate_job_capabilities` computes the
   effective toolsets (same resolver + ceiling as the scheduler) and checks the
-  *required* ones: the job's new `required_toolsets` field, `requires_toolsets`
+  *needed* ones: the job's new `required_toolsets` field, `requires_toolsets`
   in the `automation.yaml` of the job's `workdir` (scaffolded by `hermes own
-  init`), and — at create/update only — every explicitly listed
-  `enabled_toolsets` name. A requirement fails when it is unknown, stripped in
+  init`), and every explicitly listed `enabled_toolsets` name (measured on the
+  VM: flagged only the genuinely broken jobs). A requirement fails when it is unknown, stripped in
   cron (hint: `messaging` → `slack_post`), outside the owner's role, not in the
   job's list, or (create/update only) exposes no usable tool on this host.
   MCP names fold `mcp-<server>` onto the bare server name.
@@ -465,11 +477,21 @@ merged or reported anything. Design:
   explicitly listed toolsets, not merged-in MCP servers).
 - **Runtime:** a 4th check in the scheduler's pre-dispatch preflight
   (`_preflight_check_capabilities`) blocks a run as `blocked_config`
-  (alert-once, no LLM spend) when a *declared* requirement stops resolving —
-  demotion, transfer to a narrower role, config change. Jobs that declare
-  nothing are never blocked, so existing jobs are unaffected.
-- **`ownership transfer`** of a `cron:` item returns `capabilities` evaluated
-  under the new owner, with a `warning` for what their role strips.
+  (alert-once, no LLM spend) when a needed toolset stops resolving —
+  demotion, transfer to a narrower role, config change.
+- **Script imports are checked against the gateway's Python.** Cron scripts
+  run under `sys.executable` (the service's `.venv`), not the Python the
+  author tested with — on the VM `hermes`/`python3` resolve elsewhere, so a
+  collector worked in testing and died on `ImportError` in cron (MRR,
+  2026-09-18..23). `script_import_problems` AST-parses `script`/`post_script`
+  (skipping `try`-guarded and sibling imports) and `find_spec`s each module:
+  `cronjob` create/update rejects, and `run_job` blocks BEFORE any script
+  executes (`_blocked_config_result`, alert-once) with the exact `uv pip
+  install --python <gateway python>` fix.
+- **`ownership transfer`** of a `cron:` item is REFUSED when the new owner's
+  role would strip what the job needs, unless `confirm_capability_loss=true`
+  (the 2026-09-14 MRR transfer silently removed `terminal`); the result also
+  echoes `capabilities` under the new owner.
 - **`[FAILED]` marker:** a cron response starting with `[FAILED]` marks the run
   failed (`failure_streak`, incident, failure alert). The cron system hint
   tells agents to use it when a required action was missing/refused/blocked.

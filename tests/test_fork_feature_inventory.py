@@ -99,6 +99,12 @@ WIRING = [
     ("Cron capability preflight", "tools/ownership_tool.py", "_cron_capabilities_after_transfer", "transfer re-evaluates under new owner"),
     ("Cron failure visibility", "cron/scheduler.py", "def _agent_reported_failure", "[FAILED] marker fails the run"),
     ("Cron failure visibility", "cron/scheduler.py", "def _alert_owner_of_undelivered_failure", "local-only failures DM the owner"),
+    ("Cron no-shell policy", "cron/scheduler.py", 'disabled += ["terminal", "code_execution"]', "cron agents never get a shell"),
+    ("Cron post_script", "cron/scheduler.py", "def _run_job_post_script", "deterministic apply step"),
+    ("Cron post_script", "tools/cronjob_tools.py", '"post_script": {', "schema field"),
+    ("Cron script imports", "cron/capability_preflight.py", "def script_import_problems", "gateway-interpreter import check"),
+    ("Cron script imports", "cron/scheduler.py", "_import_reason = _preflight_check_script_imports(job)", "checked before any script runs"),
+    ("Cron transfer gate", "tools/ownership_tool.py", "confirm_capability_loss", "transfer refused on capability loss"),
     ("slack_post_thread root post", "tools/slack_post_thread_tool.py", "def _get_permalink", "root posts + permalink receipt"),
     ("Cron approval context", "cron/tool_approval_context.py", "def set_cron_tool_context", "owner grant export"),
     # ── Quiet channels / silent completion ────────────────────────────────

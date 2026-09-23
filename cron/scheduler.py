@@ -541,6 +541,13 @@ def _resolve_cron_disabled_toolsets(cfg: dict) -> list[str]:
         disabled = ["messaging", "clarify"]
     else:
         disabled = ["cronjob", "messaging", "clarify"]
+    # Fork policy: an unattended agent never gets a shell. Deterministic
+    # steps belong in the job's pre-run ``script`` / ``post_script``, which
+    # only a shell-granted (super-admin) role can attach and which run
+    # without an LLM choosing the command. ``cron.allow_agent_shell: true``
+    # restores the upstream behaviour.
+    if not cron_cfg.get("allow_agent_shell"):
+        disabled += ["terminal", "code_execution"]
     agent_cfg = (cfg or {}).get("agent") or {}
     from agent.skill_utils import parse_config_string_list
 
@@ -4429,6 +4436,7 @@ def _run_job_script(
     script_path: str,
     workdir: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None,
+    extra_env: Optional[dict] = None,
 ) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
@@ -4559,6 +4567,8 @@ def _run_job_script(
             }
         env = build_subprocess_env()
         env.update(env_overlay)
+        if extra_env:
+            env.update(extra_env)
         # Use the job's workdir as the subprocess cwd when configured,
         # otherwise default to the scripts-dir parent (back-compat).
         # NEVER mutate the Python process cwd — that would leak into
@@ -4694,6 +4704,56 @@ def _run_job_script_with_claim_heartbeat(
         # Event.wait() wakes immediately.  Keep completion bounded if the
         # heartbeat is already waiting on another process's jobs-file lock.
         heartbeat_thread.join(timeout=1.0)
+
+
+def _run_job_post_script(
+    job: dict,
+    final_response: str,
+    cancel_event: Optional[_CancelEventLike] = None,
+) -> tuple[bool, str]:
+    """Run a job's ``post_script`` after a successful agent run.
+
+    The deterministic half of an "agent decides, code acts" automation: the
+    agent writes its decision (a plan file, a summary JSON) with the ``file``
+    tools, and this script — same containment, interpreter and env rules as
+    the pre-run ``script`` — validates and applies it. It replaces the agent
+    shelling out to a writer, which cron no longer allows (the agent has no
+    ``terminal``). The agent's final response is handed over as a file named
+    by ``HERMES_CRON_RESPONSE_FILE`` (plus ``HERMES_CRON_JOB_ID``); cwd is the
+    job's ``workdir`` when set.
+    """
+    import tempfile
+
+    job_id = str(job.get("id") or "")
+    fd, response_path = tempfile.mkstemp(prefix=f"cron-{job_id}-", suffix=".response.txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(final_response or "")
+        return _run_job_script(
+            str(job.get("post_script")),
+            workdir=job.get("workdir") or None,
+            cancel_event=cancel_event,
+            extra_env={
+                "HERMES_CRON_RESPONSE_FILE": response_path,
+                "HERMES_CRON_JOB_ID": job_id,
+            },
+        )
+    finally:
+        try:
+            os.unlink(response_path)
+        except OSError:
+            pass
+
+
+def _merge_post_script_output(final_response: str, post_output: str) -> str:
+    """Delivery text after a successful post_script: its stdout is appended to
+    the agent's response; a silent agent turn delivers the stdout alone; empty
+    stdout leaves the response (and its silence) untouched."""
+    if not post_output:
+        return final_response
+    if _is_cron_silence_response(final_response or "") or not (final_response or "").strip():
+        return post_output
+    return f"{final_response}\n\n{post_output}"
 
 
 def _parse_wake_gate(script_output: str) -> bool:
@@ -5556,17 +5616,58 @@ def _preflight_check_capabilities(job: dict, cfg: dict) -> Optional[str]:
         format_problems,
     )
 
-    if not declared_required_toolsets(job):
+    if not declared_required_toolsets(job) and not job.get("enabled_toolsets"):
         return None
     from cron.rbac_ceiling import cron_owner_grant
 
     report = evaluate_job_capabilities(
         job, cfg, cron_owner_grant(job),
-        include_enabled=False, check_availability=False,
+        include_enabled=True, check_availability=False,
     )
     if report.ok:
         return None
-    return f"required toolsets unavailable to this job: {format_problems(report)}"
+    return f"toolsets this job needs are unavailable to it: {format_problems(report)}"
+
+
+def _preflight_check_script_imports(job: dict) -> Optional[str]:
+    """Block the run when a job's Python script imports a module the
+    gateway's interpreter cannot find — scripts run under ``sys.executable``,
+    which is not necessarily the Python the author tested with."""
+    from cron.capability_preflight import script_import_problems
+
+    problems = [
+        p for field in ("script", "post_script")
+        for p in [script_import_problems(job.get(field))] if p
+    ]
+    return "; ".join(problems) or None
+
+
+def _blocked_config_result(job_id: str, job_name: str, reason: str):
+    """``run_job`` result for a run refused by pre-dispatch validation:
+    alert once (dedup via the job's ``preflight_alerted`` bit), then stay
+    silent on later ticks until the configuration validates again."""
+    logger.warning(
+        "Job '%s' (ID: %s): BLOCKED by pre-dispatch config validation — %s",
+        job_name, job_id, reason,
+    )
+    already_alerted = False
+    try:
+        from cron.jobs import mark_preflight_alerted
+        already_alerted = mark_preflight_alerted(job_id)
+    except Exception:
+        logger.debug("Job '%s': could not persist preflight alert marker",
+                     job_id, exc_info=True)
+    marker = BLOCKED_CONFIG_SILENT_MARKER if already_alerted else BLOCKED_CONFIG_MARKER
+    doc = (
+        f"# Cron Job: {job_name}\n\n"
+        f"**Job ID:** {job_id}\n"
+        f"**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"**Status:** BLOCKED (configuration)\n\n"
+        "Pre-dispatch validation found a configuration problem; no script "
+        "or agent was run.\n\n"
+        f"**Reason:** {reason}\n"
+    )
+    return False, doc, "", f"{marker} {reason}"
 
 
 def _preflight_job_config(job: dict, cfg: dict) -> Optional[str]:
@@ -5756,6 +5857,31 @@ def run_job(
     """
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+
+    # Script-import preflight: must run BEFORE any script executes. A pre-run
+    # script that dies on ImportError otherwise hands its traceback to the
+    # agent as context, the agent describes it in prose, and the run records
+    # ``ok`` (the MRR automation, 2026-09-18..23: every run "ok", nothing
+    # processed, because the gateway's venv lacked google/pypdf).
+    _import_reason = None
+    try:
+        from hermes_cli.config import load_config as _load_cfg_for_pf
+
+        if _cron_preflight_enabled(_load_cfg_for_pf() or {}):
+            _import_reason = _preflight_check_script_imports(job)
+    except Exception:
+        logger.debug("Job '%s': script-import preflight errored — failing open",
+                     job_id, exc_info=True)
+    if _import_reason:
+        return _blocked_config_result(job_id, job_name, _import_reason)
+    if job.get("no_agent") and job.get("preflight_alerted"):
+        # no_agent jobs never reach the config preflight that normally
+        # clears the alert-once marker, so clear it here once imports pass.
+        try:
+            from cron.jobs import clear_preflight_alerted
+            clear_preflight_alerted(job_id)
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
@@ -7070,6 +7196,17 @@ def run_job(
                 "Job '%s': agent reported failure: %s", job_name, _reported_failure[:300]
             )
             return False, output, final_response, f"Agent reported failure: {_reported_failure}"
+        if job.get("post_script"):
+            # Runs on every successful agent run — a [SILENT] turn may still
+            # have queued work (plan files) for the script to apply. Its
+            # stdout is appended to the delivery; a silent agent + empty
+            # stdout stays silent. Non-zero exit fails the run.
+            _post_ok, _post_out = _run_job_post_script(job, final_response, cancel_event)
+            output += f"\n## Post-run script\n\n{_post_out or '(no output)'}\n"
+            if not _post_ok:
+                logger.warning("Job '%s': post_script failed: %s", job_name, _post_out[:300])
+                return False, output, final_response, f"Post-run script failed: {_post_out}"
+            final_response = _merge_post_script_output(final_response, _post_out)
         return True, output, final_response, None
 
     except Exception as e:
