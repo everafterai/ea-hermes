@@ -283,7 +283,16 @@ cron/delegation runs that never loaded it (the same pattern), so they work headl
   when Drive returned one — the tool takes no `page_token` input, so a raw
   token can't be used to page and would only leak "more matches exist" for
   files filtered out of the response, an existence oracle over content the
-  requester can't see. `fetch_acl` treats an empty inline `permissions: []`
+  requester can't see. **`google_drive.folder_access`** (2026-09-24) is the
+  operator grant for files whose ACL the SA cannot read: a shared-drive folder
+  shared with the SA as a non-member *viewer* returns an empty permission list,
+  so the check denied everyone (Pazit on an order form, Shai on a sheet).
+  Adding the SA as a drive member would fix visibility but expose the whole
+  drive, so instead `{folder_id: {name, readers: [emails], writers: [emails]}}`
+  grants listed people access to everything under that folder, found by
+  walking `parents` (cached, no API call when unconfigured); additive only.
+  An unreadable ACL now denies with "can't read its sharing settings" (audit
+  `reason=acl_unreadable`) instead of blaming the user. `fetch_acl` treats an empty inline `permissions: []`
   the same as absent and falls back to `permissions.list` — an SA-visible
   file always has at least the SA's own entry, so `[]` can never be the real
   ACL. The Drive/Sheets/Docs `googleapiclient` service is built **per-thread**

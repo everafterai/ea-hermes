@@ -59,6 +59,7 @@ WIRING = [
     # ── Drive per-user access check ───────────────────────────────────────
     ("Drive access check", "plugins/google_drive_sa/access.py", "def require_access", "gate"),
     ("Drive access check", "plugins/google_drive_sa/access.py", "def filter_listing", "listing filter"),
+    ("Drive folder_access", "plugins/google_drive_sa/access.py", "def folder_grant", "operator folder grants for unreadable ACLs"),
     ("Drive access check", "plugins/google_drive_sa/tools.py", "access.require_access(file_id, access.READER)", "read gated"),
     ("Drive access check", "plugins/google_drive_sa/tools.py", "access.filter_listing(", "list gated"),
     ("Drive access check", "plugins/google_drive_sa/sheets_tools.py", "access.require_access(sid, access.WRITER)", "sheet writes gated"),
